@@ -93,7 +93,13 @@ public static class ExperimentLog
     {
         var directory = Path.Combine(root, DataDirectoryName);
         Directory.CreateDirectory(directory);
-        var fileName = $"{data.Id}-{data.StartedAt:yyyyMMdd-HHmmss}.json";
+        var fileName = $"{data.Id}-{data.StartedAt:yyyyMMdd-HHmmss-fff}.json";
+        var index = 1;
+        while (File.Exists(Path.Combine(directory, fileName)))
+        {
+            fileName = $"{data.Id}-{data.StartedAt:yyyyMMdd-HHmmss-fff}-{index++}.json";
+        }
+
         var relativePath = $"{DataDirectoryName}/{fileName}";
         File.WriteAllText(
             Path.Combine(directory, fileName),

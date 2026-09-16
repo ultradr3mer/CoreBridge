@@ -200,6 +200,24 @@ pro Konfiguration änderbar:
       bleiben für T09/T10 bestehen) — kalt 88,5 s (inkl. Download), warm 58,2 s;
       Rohdaten in `EXPERIMENT_LOG.md`. Vorläufige Lesart für FRAGE 2: warm liegt
       KNAPP unter der 60-s-Faustregel → Pool-/Persistenz-Frage bleibt Phase-D-Thema
-- [ ] T04–T09: bewusst noch nicht implementiert/gelaufen — erst nach ausdrücklicher
-      Freigabe (T04/T05 benutzen die vorhandenen cbx-VMs, legen keine neuen an)
+- [x] T04–T10 über `dotnet test` gelaufen (17.09.2026) — Kernergebnisse, Details in
+      `EXPERIMENT_LOG.md`:
+      - T04: `exec` auf core26 läuft über `/bin/sh`; stdout/stderr getrennt,
+        Exit-Code wird 1:1 weitergereicht (42 bestätigt); Roundtrip ~130 ms;
+        Default-User `ubuntu`, Kernel 7.0
+      - T05: `transfer` Host→VM ok; VM→Host liefert den Inhalt korrekt, kommt aber
+        mit Exit-Code 2 zurück (sftp-Chmod-Fehler auf Windows) — Sync darf nie nur
+        auf den Exit-Code vertrauen
+      - T06: cloud-init `write_files` funktioniert auf core26; Marker schon nach
+        ~250 ms sichtbar (kaum Async-Verzögerung nach launch)
+      - T07: VM bekommt IPv4 vom Hyper-V-Default-Switch, Gateway 172.30.80.1, DNS
+        (systemd-resolved) ok; ICMP/ping blockiert (kein cap_net_raw auf Core),
+        TCP nach draußen funktioniert (nc-Check), curl/wget fehlen im Core-Image
+      - T08: natives SSH in die VM funktioniert — Key über cloud-init
+        (`ssh_authorized_keys`), Erfolg nach ~10 s als `ubuntu@<ip>`
+      - T09: stop ~4,0 s, start ~48,6 s, delete ~3,9 s — ein Neustart kostet fast
+        so viel wie ein frischer Warm-Launch (58 s) → wichtig für FRAGE 2
+      - T10: Cleanup löscht gezielt alle cbx-VMs (kein purge); gelöschte VMs bleiben
+        mit state `Deleted` in `list` sichtbar — Existenzchecks müssen den State
+        prüfen. Offen: ob ein Launch den Namen einer Papierkorb-VM übernehmen kann
 - [ ] Phase D: alle weiteren Schritte

@@ -622,3 +622,868 @@ Roh-Ausgabe:
 [2K[0A[0E[2K[0A[0ECreating cbx-t03-b  /- [2K[0A[0E[2K[0A[0EConfiguring cbx-t03-b  /-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/- [2K[0A[0E[2K[0A[0EStarting cbx-t03-b  /-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\| [2K[0A[0E[2K[0A[0EWaiting for initialization to complete  / [2K[0A[0ELaunched: cbx-t03-b
 [2K[0A[0E
 ```
+
+## T04 — `exec` — /bin/sh Verfügbarkeit — 2026-09-17 00:57:59
+
+- Kommando: `multipass exec cbx-t03-a -- /bin/sh -c 'echo shell-ok'`
+- Binary: `C:\Program Files\Multipass\bin\multipass.exe`
+- Exit-Code: 0
+- Dauer: 121 ms
+- Rohdaten: `experiment-data/T04-20260917-005759.json`
+- Beobachtung: Dauer: 121 ms
+
+Roh-Ausgabe:
+
+```
+shell-ok
+```
+
+## T04 — `exec` — stdout/stderr getrennt — 2026-09-17 00:57:59
+
+- Kommando: `multipass exec cbx-t03-a -- /bin/sh -c echo corebridge-t04-stdout; echo corebridge-t04-stderr 1>&2`
+- Binary: `C:\Program Files\Multipass\bin\multipass.exe`
+- Exit-Code: 0
+- Dauer: 131 ms
+- Rohdaten: `experiment-data/T04-20260917-005759.json`
+- Beobachtung: Dauer: 131 ms
+
+Roh-Ausgabe:
+
+```
+corebridge-t04-stdout
+
+StdErr:
+corebridge-t04-stderr
+```
+
+## T04 — `exec` — Exit-Code-Weitergabe — 2026-09-17 00:58:00
+
+- Kommando: `multipass exec cbx-t03-a -- /bin/sh -c exit 42`
+- Binary: `C:\Program Files\Multipass\bin\multipass.exe`
+- Exit-Code: 42
+- Dauer: 134 ms
+- Rohdaten: `experiment-data/T04-20260917-005800.json`
+- Beobachtung: Dauer: 134 ms
+
+Roh-Ausgabe:
+
+```
+
+```
+
+## T04 — `exec` — Umgebung (Kernel, Default-User) — 2026-09-17 00:58:00
+
+- Kommando: `multipass exec cbx-t03-a -- /bin/sh -c uname -a; id -un 2>/dev/null || echo user-unbekannt`
+- Binary: `C:\Program Files\Multipass\bin\multipass.exe`
+- Exit-Code: 0
+- Dauer: 129 ms
+- Rohdaten: `experiment-data/T04-20260917-005800.json`
+- Beobachtung: Dauer: 129 ms
+
+Roh-Ausgabe:
+
+```
+Linux cbx-t03-a 7.0.0-31-generic #31-Ubuntu SMP PREEMPT_DYNAMIC Sat Aug  1 04:26:38 UTC 2026 x86_64 GNU/Linux
+ubuntu
+```
+
+## T05 — `transfer` — Host → VM — 2026-09-17 00:58:11
+
+- Kommando: `multipass transfer C:\Users\Clara\AppData\Local\Temp\cbx-t05-303f4bb7dae84a549fa3413cf2ee4ef8\payload.txt cbx-t03-b:/tmp/cbx-t05-payload.txt`
+- Binary: `C:\Program Files\Multipass\bin\multipass.exe`
+- Exit-Code: 0
+- Dauer: 114 ms
+- Rohdaten: `experiment-data/T05-20260917-005811.json`
+- Beobachtung: Dauer: 114 ms
+
+Roh-Ausgabe:
+
+```
+
+```
+
+## T05 — `exec cat` — Inhalt in der VM prüfen — 2026-09-17 00:58:11
+
+- Kommando: `multipass exec cbx-t03-b -- /bin/sh -c 'cat /tmp/cbx-t05-payload.txt'`
+- Binary: `C:\Program Files\Multipass\bin\multipass.exe`
+- Exit-Code: 0
+- Dauer: 128 ms
+- Rohdaten: `experiment-data/T05-20260917-005811.json`
+- Beobachtung: Dauer: 128 ms
+
+Roh-Ausgabe:
+
+```
+cbx-t05-payload-2d3cb2d2554a402a8ad14664542ecf08
+```
+
+## T05 — `transfer` — VM → Host — 2026-09-17 00:58:11
+
+- Kommando: `multipass transfer cbx-t03-b:/tmp/cbx-t05-payload.txt C:\Users\Clara\AppData\Local\Temp\cbx-t05-303f4bb7dae84a549fa3413cf2ee4ef8\payload-out.txt`
+- Binary: `C:\Program Files\Multipass\bin\multipass.exe`
+- Exit-Code: 2
+- Dauer: 119 ms
+- Rohdaten: `experiment-data/T05-20260917-005811.json`
+- Beobachtung: Dauer: 119 ms
+
+Roh-Ausgabe:
+
+```
+
+
+StdErr:
+[2026-09-17T00:58:11.812] [error] [sftp] cannot set permissions for local file C:\Users\Clara\AppData\Local\Temp\cbx-t05-303f4bb7dae84a549fa3413cf2ee4ef8\payload-out.txt
+```
+
+## T05 — `transfer` — Host → VM — 2026-09-17 00:58:21
+
+- Kommando: `multipass transfer C:\Users\Clara\AppData\Local\Temp\cbx-t05-8caf83e992514ebb82c72669ec353af7\payload.txt cbx-t03-b:/tmp/cbx-t05-payload.txt`
+- Binary: `C:\Program Files\Multipass\bin\multipass.exe`
+- Exit-Code: 0
+- Dauer: 110 ms
+- Rohdaten: `experiment-data/T05-20260917-005821.json`
+- Beobachtung: Dauer: 110 ms
+
+Roh-Ausgabe:
+
+```
+
+```
+
+## T05 — `exec cat` — Inhalt in der VM prüfen — 2026-09-17 00:58:21
+
+- Kommando: `multipass exec cbx-t03-b -- /bin/sh -c 'cat /tmp/cbx-t05-payload.txt'`
+- Binary: `C:\Program Files\Multipass\bin\multipass.exe`
+- Exit-Code: 0
+- Dauer: 123 ms
+- Rohdaten: `experiment-data/T05-20260917-005821.json`
+- Beobachtung: Dauer: 123 ms
+
+Roh-Ausgabe:
+
+```
+cbx-t05-payload-7b6a46800a90470a9918db930ddb58bf
+```
+
+## T05 — `transfer` — VM → Host — 2026-09-17 00:58:21
+
+- Kommando: `multipass transfer cbx-t03-b:/tmp/cbx-t05-payload.txt C:\Users\Clara\AppData\Local\Temp\cbx-t05-8caf83e992514ebb82c72669ec353af7\payload-out.txt`
+- Binary: `C:\Program Files\Multipass\bin\multipass.exe`
+- Exit-Code: 2
+- Dauer: 113 ms
+- Rohdaten: `experiment-data/T05-20260917-005821.json`
+- Beobachtung: Dauer: 113 ms
+
+Roh-Ausgabe:
+
+```
+
+
+StdErr:
+[2026-09-17T00:58:21.897] [error] [sftp] cannot set permissions for local file C:\Users\Clara\AppData\Local\Temp\cbx-t05-8caf83e992514ebb82c72669ec353af7\payload-out.txt
+```
+
+## T05 — `transfer` — Host -> VM — 2026-09-17 00:58:48
+
+- Kommando: `multipass transfer C:\Users\Clara\AppData\Local\Temp\cbx-t05-f5cad61065d746988a9e4c7cb5b0e482\payload.txt cbx-t03-b:/tmp/cbx-t05-payload.txt`
+- Binary: `C:\Program Files\Multipass\bin\multipass.exe`
+- Exit-Code: 0
+- Dauer: 113 ms
+- Rohdaten: `experiment-data/T05-20260917-005848.json`
+- Beobachtung: Dauer: 113 ms
+
+Roh-Ausgabe:
+
+```
+
+```
+
+## T05 — `exec cat` — Inhalt in der VM prüfen — 2026-09-17 00:58:48
+
+- Kommando: `multipass exec cbx-t03-b -- /bin/sh -c 'cat /tmp/cbx-t05-payload.txt'`
+- Binary: `C:\Program Files\Multipass\bin\multipass.exe`
+- Exit-Code: 0
+- Dauer: 126 ms
+- Rohdaten: `experiment-data/T05-20260917-005848.json`
+- Beobachtung: Dauer: 126 ms
+
+Roh-Ausgabe:
+
+```
+cbx-t05-payload-506707ad94ca445bb6e5b02d8bd063b6
+```
+
+## T05 — `transfer` — VM -> Host — 2026-09-17 00:58:48
+
+- Kommando: `multipass transfer cbx-t03-b:/tmp/cbx-t05-payload.txt C:\Users\Clara\AppData\Local\Temp\cbx-t05-f5cad61065d746988a9e4c7cb5b0e482\payload-out.txt`
+- Binary: `C:\Program Files\Multipass\bin\multipass.exe`
+- Exit-Code: 2
+- Dauer: 121 ms
+- Rohdaten: `experiment-data/T05-20260917-005848.json`
+- Beobachtung: Dauer: 121 ms
+
+Roh-Ausgabe:
+
+```
+
+
+StdErr:
+[2026-09-17T00:58:48.925] [error] [sftp] cannot set permissions for local file C:\Users\Clara\AppData\Local\Temp\cbx-t05-f5cad61065d746988a9e4c7cb5b0e482\payload-out.txt
+```
+
+## T05 — `transfer` VM -> Host — Bewertung — 2026-09-17 00:58:48
+
+- Kommando: `multipass transfer cbx-t03-b:/tmp/cbx-t05-payload.txt <lokal>`
+- Binary: `C:\Program Files\Multipass\bin\multipass.exe`
+- Exit-Code: 2
+- Dauer: 121 ms
+- Rohdaten: `experiment-data/T05-20260917-005848.json`
+- Beobachtung: Exit-Code 2 (sftp-Chmod-Fehler auf Windows), Inhalt aber korrekt — Sync-Weg nutzbar.
+
+Roh-Ausgabe:
+
+```
+Datei korrekt angekommen
+
+StdErr:
+[2026-09-17T00:58:48.925] [error] [sftp] cannot set permissions for local file C:\Users\Clara\AppData\Local\Temp\cbx-t05-f5cad61065d746988a9e4c7cb5b0e482\payload-out.txt
+```
+
+## T05 — `exec rm` — VM-seitig aufräumen — 2026-09-17 00:58:49
+
+- Kommando: `multipass exec cbx-t03-b -- /bin/sh -c 'rm -f /tmp/cbx-t05-payload.txt'`
+- Binary: `C:\Program Files\Multipass\bin\multipass.exe`
+- Exit-Code: 0
+- Dauer: 125 ms
+- Rohdaten: `experiment-data/T05-20260917-005849.json`
+- Beobachtung: Dauer: 125 ms
+
+Roh-Ausgabe:
+
+```
+
+```
+
+## T06 — `launch --cloud-init` — write_files — 2026-09-17 00:59:50
+
+- Kommando: `multipass launch --name cbx-t06 --cloud-init C:\Users\Clara\AppData\Local\Temp\cbx-t06-8125e7ff41f54bbfac0201fc46dfe002.yaml core26`
+- Binary: `C:\Program Files\Multipass\bin\multipass.exe`
+- Exit-Code: 0
+- Dauer: 56579 ms
+- Rohdaten: `experiment-data/T06-20260917-005950.json`
+- Beobachtung: Dauer: 56579 ms
+
+Roh-Ausgabe:
+
+```
+[2K[0A[0E[2K[0A[0ECreating cbx-t06  /-\| [2K[0A[0E[2K[0A[0EConfiguring cbx-t06  /-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/ [2K[0A[0E[2K[0A[0EStarting cbx-t06  /-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/- [2K[0A[0E[2K[0A[0EWaiting for initialization to complete  / [2K[0A[0ELaunched: cbx-t06
+[2K[0A[0E
+```
+
+## T06 — Marker-Polling — cloud-init async? — 2026-09-17 00:59:50
+
+- Kommando: `multipass exec cbx-t06 -- /bin/sh -c 'cat /tmp/cbx-t06-marker 2>/dev/null || echo marker-fehlt' (im 5-s-Takt)`
+- Binary: `C:\Program Files\Multipass\bin\multipass.exe`
+- Exit-Code: 0
+- Dauer: 252 ms
+- Rohdaten: `experiment-data/T06-20260917-005950.json`
+- Beobachtung: write_files auf core26 OK — Marker nach 252 ms sichtbar.
+
+Roh-Ausgabe:
+
+```
+Versuch 1: cbx-t06-cloud-init-ok
+```
+
+## T07 — IP aus `list` — 2026-09-17 00:59:55
+
+- Kommando: `multipass list --format json (Auszug)`
+- Binary: `C:\Program Files\Multipass\bin\multipass.exe`
+- Exit-Code: 0
+- Dauer: 0 ms
+- Rohdaten: `experiment-data/T07-20260917-005955.json`
+- Beobachtung: IPv4: [172.30.85.131, 172.30.91.14], State: Running
+
+Roh-Ausgabe:
+
+```
+ipv4: 172.30.85.131, 172.30.91.14; state: Running
+```
+
+## T07 — Routing — /proc/net/route — 2026-09-17 00:59:55
+
+- Kommando: `multipass exec cbx-t03-b -- /bin/sh -c cat /proc/net/route`
+- Binary: `C:\Program Files\Multipass\bin\multipass.exe`
+- Exit-Code: 0
+- Dauer: 126 ms
+- Rohdaten: `experiment-data/T07-20260917-005955.json`
+
+Roh-Ausgabe:
+
+```
+Iface	Destination	Gateway 	Flags	RefCnt	Use	Metric	Mask		MTU	Window	IRTT                                                       
+eth0	00000000	01501EAC	0003	0	0	100	00000000	0	0	0                                                                             
+eth0	00501EAC	00000000	0001	0	0	100	00F0FFFF	0	0	0                                                                             
+eth0	01501EAC	00000000	0005	0	0	100	FFFFFFFF	0	0	0
+```
+
+## T07 — DNS — /etc/resolv.conf — 2026-09-17 00:59:55
+
+- Kommando: `multipass exec cbx-t03-b -- /bin/sh -c cat /etc/resolv.conf`
+- Binary: `C:\Program Files\Multipass\bin\multipass.exe`
+- Exit-Code: 0
+- Dauer: 126 ms
+- Rohdaten: `experiment-data/T07-20260917-005955.json`
+
+Roh-Ausgabe:
+
+```
+# This is /run/systemd/resolve/stub-resolv.conf managed by man:systemd-resolved(8).
+# Do not edit.
+#
+# This file might be symlinked as /etc/resolv.conf. If you're looking at
+# /etc/resolv.conf and seeing this text, you have followed the symlink.
+#
+# This is a dynamic resolv.conf file for connecting local clients to the
+# internal DNS stub resolver of systemd-resolved. This file lists all
+# configured search domains.
+#
+# Run "resolvectl status" to see details about the uplink DNS servers
+# currently in use.
+#
+# Third party programs should typically not access this file directly, but only
+# through the symlink at /etc/resolv.conf. To manage man:resolv.conf(5) in a
+# different way, replace this symlink by a static file or a different symlink.
+#
+# See man:systemd-resolved.service(8) for details about the supported modes of
+# operation for /etc/resolv.conf.
+
+nameserver 127.0.0.53
+options edns0 trust-ad
+search .
+```
+
+## T07 — Verfügbare Netzwerk-Tools — 2026-09-17 00:59:55
+
+- Kommando: `multipass exec cbx-t03-b -- /bin/sh -c for t in ping ping4 curl wget nc; do command -v $t >/dev/null 2>&1 && echo $t=ja || echo $t=nein; done`
+- Binary: `C:\Program Files\Multipass\bin\multipass.exe`
+- Exit-Code: 0
+- Dauer: 126 ms
+- Rohdaten: `experiment-data/T07-20260917-005955.json`
+- Beobachtung: Gateway: 172.30.80.1 — Dauer: 126 ms
+
+Roh-Ausgabe:
+
+```
+ping=ja
+ping4=ja
+curl=nein
+wget=nein
+nc=ja
+```
+
+## T07 — Gateway-Ping (172.30.80.1) — 2026-09-17 00:59:55
+
+- Kommando: `multipass exec cbx-t03-b -- /bin/sh -c ping -c 2 172.30.80.1`
+- Binary: `C:\Program Files\Multipass\bin\multipass.exe`
+- Exit-Code: 2
+- Dauer: 139 ms
+- Rohdaten: `experiment-data/T07-20260917-005955.json`
+
+Roh-Ausgabe:
+
+```
+
+
+StdErr:
+ping: socktype: SOCK_RAW
+ping: socket: Operation not permitted
+ping: => missing cap_net_raw+p capability or setuid?
+```
+
+## T07 — IP aus `list` — 2026-09-17 01:00:27
+
+- Kommando: `multipass list --format json (Auszug)`
+- Binary: `C:\Program Files\Multipass\bin\multipass.exe`
+- Exit-Code: 0
+- Dauer: 0 ms
+- Rohdaten: `experiment-data/T07-20260917-010027-587.json`
+- Beobachtung: IPv4: [172.30.85.131, 172.30.91.14], State: Running
+
+Roh-Ausgabe:
+
+```
+ipv4: 172.30.85.131, 172.30.91.14; state: Running
+```
+
+## T07 — Routing — /proc/net/route — 2026-09-17 01:00:27
+
+- Kommando: `multipass exec cbx-t03-b -- /bin/sh -c cat /proc/net/route`
+- Binary: `C:\Program Files\Multipass\bin\multipass.exe`
+- Exit-Code: 0
+- Dauer: 127 ms
+- Rohdaten: `experiment-data/T07-20260917-010027-738.json`
+
+Roh-Ausgabe:
+
+```
+Iface	Destination	Gateway 	Flags	RefCnt	Use	Metric	Mask		MTU	Window	IRTT                                                       
+eth0	00000000	01501EAC	0003	0	0	100	00000000	0	0	0                                                                             
+eth0	00501EAC	00000000	0001	0	0	100	00F0FFFF	0	0	0                                                                             
+eth0	01501EAC	00000000	0005	0	0	100	FFFFFFFF	0	0	0
+```
+
+## T07 — DNS — /etc/resolv.conf — 2026-09-17 01:00:27
+
+- Kommando: `multipass exec cbx-t03-b -- /bin/sh -c cat /etc/resolv.conf`
+- Binary: `C:\Program Files\Multipass\bin\multipass.exe`
+- Exit-Code: 0
+- Dauer: 129 ms
+- Rohdaten: `experiment-data/T07-20260917-010027-873.json`
+
+Roh-Ausgabe:
+
+```
+# This is /run/systemd/resolve/stub-resolv.conf managed by man:systemd-resolved(8).
+# Do not edit.
+#
+# This file might be symlinked as /etc/resolv.conf. If you're looking at
+# /etc/resolv.conf and seeing this text, you have followed the symlink.
+#
+# This is a dynamic resolv.conf file for connecting local clients to the
+# internal DNS stub resolver of systemd-resolved. This file lists all
+# configured search domains.
+#
+# Run "resolvectl status" to see details about the uplink DNS servers
+# currently in use.
+#
+# Third party programs should typically not access this file directly, but only
+# through the symlink at /etc/resolv.conf. To manage man:resolv.conf(5) in a
+# different way, replace this symlink by a static file or a different symlink.
+#
+# See man:systemd-resolved.service(8) for details about the supported modes of
+# operation for /etc/resolv.conf.
+
+nameserver 127.0.0.53
+options edns0 trust-ad
+search .
+```
+
+## T07 — Verfügbare Netzwerk-Tools — 2026-09-17 01:00:28
+
+- Kommando: `multipass exec cbx-t03-b -- /bin/sh -c for t in ping ping4 curl wget nc; do command -v $t >/dev/null 2>&1 && echo $t=ja || echo $t=nein; done`
+- Binary: `C:\Program Files\Multipass\bin\multipass.exe`
+- Exit-Code: 0
+- Dauer: 128 ms
+- Rohdaten: `experiment-data/T07-20260917-010028-004.json`
+- Beobachtung: Gateway: 172.30.80.1 — Dauer: 128 ms
+
+Roh-Ausgabe:
+
+```
+ping=ja
+ping4=ja
+curl=nein
+wget=nein
+nc=ja
+```
+
+## T07 — Gateway-Ping (172.30.80.1) — 2026-09-17 01:00:28
+
+- Kommando: `multipass exec cbx-t03-b -- /bin/sh -c ping -c 2 172.30.80.1`
+- Binary: `C:\Program Files\Multipass\bin\multipass.exe`
+- Exit-Code: 2
+- Dauer: 129 ms
+- Rohdaten: `experiment-data/T07-20260917-010028-137.json`
+
+Roh-Ausgabe:
+
+```
+
+
+StdErr:
+ping: socktype: SOCK_RAW
+ping: socket: Operation not permitted
+ping: => missing cap_net_raw+p capability or setuid?
+```
+
+## T07 — IP aus `list` — 2026-09-17 01:01:58
+
+- Kommando: `multipass list --format json (Auszug)`
+- Binary: `C:\Program Files\Multipass\bin\multipass.exe`
+- Exit-Code: 0
+- Dauer: 0 ms
+- Rohdaten: `experiment-data/T07-20260917-010158-514.json`
+- Beobachtung: IPv4: [172.30.85.131, 172.30.91.14], State: Running
+
+Roh-Ausgabe:
+
+```
+ipv4: 172.30.85.131, 172.30.91.14; state: Running
+```
+
+## T07 — Routing — /proc/net/route — 2026-09-17 01:01:58
+
+- Kommando: `multipass exec cbx-t03-b -- /bin/sh -c cat /proc/net/route`
+- Binary: `C:\Program Files\Multipass\bin\multipass.exe`
+- Exit-Code: 0
+- Dauer: 126 ms
+- Rohdaten: `experiment-data/T07-20260917-010158-664.json`
+
+Roh-Ausgabe:
+
+```
+Iface	Destination	Gateway 	Flags	RefCnt	Use	Metric	Mask		MTU	Window	IRTT                                                       
+eth0	00000000	01501EAC	0003	0	0	100	00000000	0	0	0                                                                             
+eth0	00501EAC	00000000	0001	0	0	100	00F0FFFF	0	0	0                                                                             
+eth0	01501EAC	00000000	0005	0	0	100	FFFFFFFF	0	0	0
+```
+
+## T07 — DNS — /etc/resolv.conf — 2026-09-17 01:01:58
+
+- Kommando: `multipass exec cbx-t03-b -- /bin/sh -c cat /etc/resolv.conf`
+- Binary: `C:\Program Files\Multipass\bin\multipass.exe`
+- Exit-Code: 0
+- Dauer: 135 ms
+- Rohdaten: `experiment-data/T07-20260917-010158-806.json`
+
+Roh-Ausgabe:
+
+```
+# This is /run/systemd/resolve/stub-resolv.conf managed by man:systemd-resolved(8).
+# Do not edit.
+#
+# This file might be symlinked as /etc/resolv.conf. If you're looking at
+# /etc/resolv.conf and seeing this text, you have followed the symlink.
+#
+# This is a dynamic resolv.conf file for connecting local clients to the
+# internal DNS stub resolver of systemd-resolved. This file lists all
+# configured search domains.
+#
+# Run "resolvectl status" to see details about the uplink DNS servers
+# currently in use.
+#
+# Third party programs should typically not access this file directly, but only
+# through the symlink at /etc/resolv.conf. To manage man:resolv.conf(5) in a
+# different way, replace this symlink by a static file or a different symlink.
+#
+# See man:systemd-resolved.service(8) for details about the supported modes of
+# operation for /etc/resolv.conf.
+
+nameserver 127.0.0.53
+options edns0 trust-ad
+search .
+```
+
+## T07 — Verfügbare Netzwerk-Tools — 2026-09-17 01:01:58
+
+- Kommando: `multipass exec cbx-t03-b -- /bin/sh -c for t in ping ping4 curl wget nc; do command -v $t >/dev/null 2>&1 && echo $t=ja || echo $t=nein; done`
+- Binary: `C:\Program Files\Multipass\bin\multipass.exe`
+- Exit-Code: 0
+- Dauer: 126 ms
+- Rohdaten: `experiment-data/T07-20260917-010158-936.json`
+- Beobachtung: Gateway: 172.30.80.1 — Dauer: 126 ms
+
+Roh-Ausgabe:
+
+```
+ping=ja
+ping4=ja
+curl=nein
+wget=nein
+nc=ja
+```
+
+## T07 — Gateway-Ping (172.30.80.1) — 2026-09-17 01:01:59
+
+- Kommando: `multipass exec cbx-t03-b -- /bin/sh -c ping -c 2 172.30.80.1`
+- Binary: `C:\Program Files\Multipass\bin\multipass.exe`
+- Exit-Code: 2
+- Dauer: 123 ms
+- Rohdaten: `experiment-data/T07-20260917-010159-062.json`
+
+Roh-Ausgabe:
+
+```
+
+
+StdErr:
+ping: socktype: SOCK_RAW
+ping: socket: Operation not permitted
+ping: => missing cap_net_raw+p capability or setuid?
+```
+
+## T07 — Internet — TCP-Check via nc (example.com:80) — 2026-09-17 01:02:04
+
+- Kommando: `multipass exec cbx-t03-b -- /bin/sh -c nc -w 5 example.com 80 </dev/null >/dev/null 2>&1 && echo tcp-ok || echo tcp-fail`
+- Binary: `C:\Program Files\Multipass\bin\multipass.exe`
+- Exit-Code: 0
+- Dauer: 5162 ms
+- Rohdaten: `experiment-data/T07-20260917-010204-227.json`
+
+Roh-Ausgabe:
+
+```
+tcp-ok
+```
+
+## T08 — ssh-keygen — Schlüsselpair erzeugen — 2026-09-17 01:02:09
+
+- Kommando: `multipass ssh-keygen -t ed25519 -f <temp> -N "" -C cbx-t08`
+- Binary: `ssh-keygen.exe`
+- Exit-Code: 0
+- Dauer: 33 ms
+- Rohdaten: `experiment-data/T08-20260917-010209-688.json`
+- Beobachtung: Dauer: 33 ms
+
+Roh-Ausgabe:
+
+```
+Generating public/private ed25519 key pair.
+Your identification has been saved in C:\Users\Clara\AppData\Local\Temp\cbx-t08-93b6e8db284449f2953b1995f050540e\cbx-t08-key
+Your public key has been saved in C:\Users\Clara\AppData\Local\Temp\cbx-t08-93b6e8db284449f2953b1995f050540e\cbx-t08-key.pub
+The key fingerprint is:
+SHA256:mEwbWnjYTbb+MQmSB9X5kVjdSpPm++KJFyU0YpiaSO8 cbx-t08
+The key's randomart image is:
++--[ED25519 256]--+
+|      ..+. *.o o |
+|     +.* .* = O .|
+|    o.Oo=o o B + |
+|     *.O+. .. + .|
+|    . =.S +    + |
+|        E. o  o  |
+|          .    o |
+|             .o..|
+|            .oo. |
++----[SHA256]-----+
+```
+
+## T08 — Default-User ermitteln — 2026-09-17 01:02:09
+
+- Kommando: `multipass exec cbx-t03-b -- /bin/sh -c 'id -un || whoami'`
+- Binary: `C:\Program Files\Multipass\bin\multipass.exe`
+- Exit-Code: 0
+- Dauer: 128 ms
+- Rohdaten: `experiment-data/T08-20260917-010209-838.json`
+- Beobachtung: Dauer: 128 ms
+
+Roh-Ausgabe:
+
+```
+ubuntu
+```
+
+## T08 — `launch --cloud-init` — SSH-Key für Default-User — 2026-09-17 01:03:05
+
+- Kommando: `multipass launch --name cbx-t08 --cloud-init C:\Users\Clara\AppData\Local\Temp\cbx-t08-93b6e8db284449f2953b1995f050540e\cbx-t08-cloud-init.yaml core26`
+- Binary: `C:\Program Files\Multipass\bin\multipass.exe`
+- Exit-Code: 0
+- Dauer: 56150 ms
+- Rohdaten: `experiment-data/T08-20260917-010305-993.json`
+- Beobachtung: Dauer: 56150 ms — Ziel-User: ubuntu
+
+Roh-Ausgabe:
+
+```
+[2K[0A[0E[2K[0A[0ECreating cbx-t08  /-\| [2K[0A[0E[2K[0A[0EConfiguring cbx-t08  /-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\ [2K[0A[0E[2K[0A[0EStarting cbx-t08  /-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\| [2K[0A[0E[2K[0A[0EWaiting for initialization to complete  / [2K[0A[0ELaunched: cbx-t08
+[2K[0A[0E
+```
+
+## T08 — Native SSH mit Provisioning-Key — 2026-09-17 01:03:26
+
+- Kommando: `multipass ssh -i <key> -o BatchMode=yes ubuntu@172.30.87.44 echo cbx-t08-ssh-ok`
+- Binary: `ssh.exe`
+- Exit-Code: 0
+- Dauer: 10178 ms
+- Rohdaten: `experiment-data/T08-20260917-010326-568.json`
+- Beobachtung: Natives SSH funktioniert — Erfolg nach 10178 ms als ubuntu@172.30.87.44.
+
+Roh-Ausgabe:
+
+```
+cbx-t08-ssh-ok
+```
+
+## T09 — `stop` — 2026-09-17 01:04:13
+
+- Kommando: `multipass stop cbx-t03-a`
+- Binary: `C:\Program Files\Multipass\bin\multipass.exe`
+- Exit-Code: 0
+- Dauer: 3993 ms
+- Rohdaten: `experiment-data/T09-20260917-010413-708.json`
+- Beobachtung: Dauer: 3993 ms
+
+Roh-Ausgabe:
+
+```
+[2K[0A[0EStopping cbx-t03-a  /-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/ [2K[0A[0E
+```
+
+## T09 — Zustand nach `stop` — 2026-09-17 01:04:13
+
+- Kommando: `multipass list --format json (Auszug)`
+- Binary: `C:\Program Files\Multipass\bin\multipass.exe`
+- Exit-Code: 0
+- Dauer: 0 ms
+- Rohdaten: `experiment-data/T09-20260917-010413-892.json`
+- Beobachtung: State: Stopped
+
+Roh-Ausgabe:
+
+```
+state: Stopped
+```
+
+## T09 — `start` — 2026-09-17 01:05:02
+
+- Kommando: `multipass start cbx-t03-a`
+- Binary: `C:\Program Files\Multipass\bin\multipass.exe`
+- Exit-Code: 0
+- Dauer: 48556 ms
+- Rohdaten: `experiment-data/T09-20260917-010502-453.json`
+- Beobachtung: Dauer: 48556 ms
+
+Roh-Ausgabe:
+
+```
+[2K[0A[0EStarting cbx-t03-a  /-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\| [2K[0A[0E[2K[0A[0E
+```
+
+## T09 — Zustand nach `start` — 2026-09-17 01:05:03
+
+- Kommando: `multipass list --format json (Auszug)`
+- Binary: `C:\Program Files\Multipass\bin\multipass.exe`
+- Exit-Code: 0
+- Dauer: 0 ms
+- Rohdaten: `experiment-data/T09-20260917-010503-007.json`
+- Beobachtung: State: Running
+
+Roh-Ausgabe:
+
+```
+state: Running
+```
+
+## T09 — `delete` — in den Papierkorb (kein purge) — 2026-09-17 01:05:06
+
+- Kommando: `multipass delete cbx-t03-a`
+- Binary: `C:\Program Files\Multipass\bin\multipass.exe`
+- Exit-Code: 0
+- Dauer: 3951 ms
+- Rohdaten: `experiment-data/T09-20260917-010506-961.json`
+- Beobachtung: Dauer: 3951 ms
+
+Roh-Ausgabe:
+
+```
+
+```
+
+## T09 — Zustand nach `delete` — 2026-09-17 01:05:07
+
+- Kommando: `multipass list --format json (Auszug)`
+- Binary: `C:\Program Files\Multipass\bin\multipass.exe`
+- Exit-Code: 0
+- Dauer: 0 ms
+- Rohdaten: `experiment-data/T09-20260917-010507-116.json`
+- Beobachtung: cbx-t03-a nicht mehr in list — liegt im Papierkorb (nicht gepurgt).
+
+Roh-Ausgabe:
+
+```
+übrig: cbx-t06, cbx-t03-b, cbx-t08, cbx-t03-a
+```
+
+## T09 — `stop` — 2026-09-17 01:05:30
+
+- Kommando: `multipass stop cbx-t03-a`
+- Binary: `C:\Program Files\Multipass\bin\multipass.exe`
+- Exit-Code: 2
+- Dauer: 71 ms
+- Rohdaten: `experiment-data/T09-20260917-010530-680.json`
+- Beobachtung: Dauer: 71 ms
+
+Roh-Ausgabe:
+
+```
+[2K[0A[0EStopping cbx-t03-a  / [2K[0A[0E[2K[0A[0E
+
+StdErr:
+stop failed: The following errors occurred:
+instance "cbx-t03-a" is deleted
+```
+
+## T09 — Lifecycle — stop/start/delete — 2026-09-17 01:06:28
+
+- Kommando: `multipass stop/start/delete cbx-t03-a`
+- Binary: `C:\Program Files\Multipass\bin\multipass.exe`
+- Exit-Code: 0
+- Dauer: 0 ms
+- Rohdaten: `experiment-data/T09-20260917-010628-669.json`
+- Beobachtung: Übersprungen — VM existiert nicht (oder nur im Papierkorb): cbx-t03-a
+
+Roh-Ausgabe:
+
+```
+
+```
+
+## T10 — `delete` — cbx-t06 — 2026-09-17 01:06:33
+
+- Kommando: `multipass delete cbx-t06`
+- Binary: `C:\Program Files\Multipass\bin\multipass.exe`
+- Exit-Code: 0
+- Dauer: 3987 ms
+- Rohdaten: `experiment-data/T10-20260917-010633-959.json`
+- Beobachtung: Dauer: 3987 ms
+
+Roh-Ausgabe:
+
+```
+
+```
+
+## T10 — `delete` — cbx-t03-b — 2026-09-17 01:06:37
+
+- Kommando: `multipass delete cbx-t03-b`
+- Binary: `C:\Program Files\Multipass\bin\multipass.exe`
+- Exit-Code: 0
+- Dauer: 3960 ms
+- Rohdaten: `experiment-data/T10-20260917-010637-943.json`
+- Beobachtung: Dauer: 3960 ms
+
+Roh-Ausgabe:
+
+```
+
+```
+
+## T10 — `delete` — cbx-t08 — 2026-09-17 01:06:41
+
+- Kommando: `multipass delete cbx-t08`
+- Binary: `C:\Program Files\Multipass\bin\multipass.exe`
+- Exit-Code: 0
+- Dauer: 3980 ms
+- Rohdaten: `experiment-data/T10-20260917-010641-928.json`
+- Beobachtung: Dauer: 3980 ms
+
+Roh-Ausgabe:
+
+```
+
+```
+
+## T10 — Cleanup — Ergebnis — 2026-09-17 01:06:42
+
+- Kommando: `multipass list --format json (Auszug)`
+- Binary: `C:\Program Files\Multipass\bin\multipass.exe`
+- Exit-Code: 0
+- Dauer: 0 ms
+- Rohdaten: `experiment-data/T10-20260917-010642-053.json`
+- Beobachtung: Gelöscht: cbx-t06, cbx-t03-b, cbx-t08. Nicht-cbx-VMs unangetastet: keine vorhanden. Bereits im Papierkorb (bleiben dort): cbx-t03-a. Papierkorb nicht gepurgt (Regel: kein blindes purge).
+
+Roh-Ausgabe:
+
+```
+aktiv übrig: keine
+```

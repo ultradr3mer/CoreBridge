@@ -1,0 +1,12 @@
+{
+  "Id": "T07",
+  "Title": "IP aus \u0060list\u0060",
+  "Command": "list --format json (Auszug)",
+  "Binary": "C:\\Program Files\\Multipass\\bin\\multipass.exe",
+  "ExitCode": 0,
+  "DurationMs": 0,
+  "StartedAt": "2026-09-17T01:00:27.5877504+02:00",
+  "Observation": "IPv4: [172.30.85.131, 172.30.91.14], State: Running",
+  "StdOut": "ipv4: 172.30.85.131, 172.30.91.14; state: Running",
+  "StdErr": ""
+}

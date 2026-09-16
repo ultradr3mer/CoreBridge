@@ -1,0 +1,12 @@
+{
+  "Id": "T08",
+  "Title": "Native SSH mit Provisioning-Key",
+  "Command": "ssh -i \u003Ckey\u003E -o BatchMode=yes ubuntu@172.30.87.44 echo cbx-t08-ssh-ok",
+  "Binary": "ssh.exe",
+  "ExitCode": 0,
+  "DurationMs": 10178,
+  "StartedAt": "2026-09-17T01:03:26.5682901+02:00",
+  "Observation": "Natives SSH funktioniert \u2014 Erfolg nach 10178 ms als ubuntu@172.30.87.44.",
+  "StdOut": "cbx-t08-ssh-ok",
+  "StdErr": ""
+}

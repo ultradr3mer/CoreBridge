@@ -1,0 +1,12 @@
+{
+  "Id": "T09",
+  "Title": "Zustand nach \u0060delete\u0060",
+  "Command": "list --format json (Auszug)",
+  "Binary": "C:\\Program Files\\Multipass\\bin\\multipass.exe",
+  "ExitCode": 0,
+  "DurationMs": 0,
+  "StartedAt": "2026-09-17T01:05:07.1166675+02:00",
+  "Observation": "cbx-t03-a nicht mehr in list \u2014 liegt im Papierkorb (nicht gepurgt).",
+  "StdOut": "\u00FCbrig: cbx-t06, cbx-t03-b, cbx-t08, cbx-t03-a",
+  "StdErr": ""
+}

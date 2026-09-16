@@ -1,0 +1,12 @@
+{
+  "Id": "T08",
+  "Title": "Default-User ermitteln",
+  "Command": "exec cbx-t03-b -- /bin/sh -c \u0027id -un || whoami\u0027",
+  "Binary": "C:\\Program Files\\Multipass\\bin\\multipass.exe",
+  "ExitCode": 0,
+  "DurationMs": 128,
+  "StartedAt": "2026-09-17T01:02:09.8389531+02:00",
+  "Observation": "Dauer: 128 ms",
+  "StdOut": "ubuntu\n",
+  "StdErr": ""
+}

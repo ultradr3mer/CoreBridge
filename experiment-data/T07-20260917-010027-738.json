@@ -1,0 +1,12 @@
+{
+  "Id": "T07",
+  "Title": "Routing \u2014 /proc/net/route",
+  "Command": "exec cbx-t03-b -- /bin/sh -c cat /proc/net/route",
+  "Binary": "C:\\Program Files\\Multipass\\bin\\multipass.exe",
+  "ExitCode": 0,
+  "DurationMs": 127,
+  "StartedAt": "2026-09-17T01:00:27.7381538+02:00",
+  "Observation": null,
+  "StdOut": "Iface\tDestination\tGateway \tFlags\tRefCnt\tUse\tMetric\tMask\t\tMTU\tWindow\tIRTT                                                       \neth0\t00000000\t01501EAC\t0003\t0\t0\t100\t00000000\t0\t0\t0                                                                             \neth0\t00501EAC\t00000000\t0001\t0\t0\t100\t00F0FFFF\t0\t0\t0                                                                             \neth0\t01501EAC\t00000000\t0005\t0\t0\t100\tFFFFFFFF\t0\t0\t0                                                                             \n",
+  "StdErr": ""
+}

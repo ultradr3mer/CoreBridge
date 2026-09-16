@@ -27,21 +27,25 @@ ein Ergebnis.
   Inhaltsbasis); lokale Multipass-Doku als blobless Clone unter `refs/multipass`
   (sparse auf `docs/`, gegitignored).
 
-## Aktueller Stand (16.09.2026) — Plan §10 laufend gegen den Repo-Zustand prüfen
+## Aktueller Stand (17.09.2026) — Plan §10 laufend gegen den Repo-Zustand prüfen
 
 - Phase A steht: `CoreBridge.slnx` (SDK 10 erzeugt XML-Solution- statt `.sln`),
   `src/CoreBridge.Core` (`Vm/MultipassCli`, `Vm/Doctor`), `src/CoreBridge.Cli`
   (einziges Verb: `doctor`), `test/CoreBridge.Core.Tests`, `test/Multipass.Experiments`
   (T01/T02 implementiert).
-- T01–T03 liefen; Erkenntnisse in `EXPERIMENT_LOG.md`: `version --format json` ist
-  flach (`multipass`/`multipassd`), `find --format json` liefert `images` als
-  Objekt (kein Array), Ubuntu Core ist im Katalog (core16–core26). T03 (core26):
-  launch kalt 88,5 s / warm 58,2 s — die VMs `cbx-t03-a`/`cbx-t03-b` bleiben für
-  T09/T10 bestehen.
+- T01–T10 sind implementiert und gelaufen; alle Messwerte in `EXPERIMENT_LOG.md`
+  (volle Rohdaten unter `experiment-data/`). Kernaussagen: launch core26 kalt
+  88,5 s / warm 58,2 s; exec-Roundtrip ~130 ms mit sauberer Exit-Code-Weitergabe;
+  transfer VM→Host liefert korrekten Inhalt trotz Exit-Code 2 (Windows-sftp-Quirk);
+  cloud-init `write_files` und `ssh_authorized_keys` funktionieren auf core26
+  (natives SSH nach ~10 s als `ubuntu@`); ping durch cap_net_raw blockiert, TCP
+  nach draußen geht; stop ~4 s / start ~49 s / delete ~4 s.
+- Alle cbx-VMs liegen GELÖSCHT im Multipass-Papierkorb (kein purge, Regel) und
+  erscheinen in `list` mit state `Deleted`. Offen: ob `launch` einen Namen aus
+  dem Papierkorb übernehmen kann (T03-Rerun würde es klären).
 - Multipass 1.16.3 liegt im **User-PATH** (`C:\Program Files\Multipass\bin`), NICHT
   machine-weit → Locator-Stufe 2 (PATH) greift bereits.
-- T04–T09 sind noch NICHT implementiert — NUR nach ausdrücklicher Freigabe
-  schreiben/laufen lassen. T04/T05 können die vorhandenen cbx-VMs nutzen.
+- Neue Experimente (T11+) NUR nach ausdrücklicher Freigabe.
 
 ## Soll-Struktur
 
@@ -71,6 +75,8 @@ ein Ergebnis.
   `experiment-data/` und wird im Log-Eintrag unter „Rohdaten“ verlinkt.
 - Testkollektionen im Experiments-Projekt laufen serialisiert (ein `multipassd`
   ist eine geteilte Ressource).
+- Gelöschte VMs verschwinden NICHT aus `multipass list`, sondern tragen state
+  `Deleted` (Papierkorb) — Existenzchecks müssen den State prüfen.
 - Experiment-VMs tragen das Präfix `cbx-`. Gelöscht wird nur nach diesem Präfix —
   `delete --all`/`purge` sind tabu (und laufen sowieso nur über Tests).
 

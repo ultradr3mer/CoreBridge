@@ -1,0 +1,12 @@
+{
+  "Id": "T10",
+  "Title": "\u0060delete\u0060 \u2014 cbx-t03-b",
+  "Command": "delete cbx-t03-b",
+  "Binary": "C:\\Program Files\\Multipass\\bin\\multipass.exe",
+  "ExitCode": 0,
+  "DurationMs": 3960,
+  "StartedAt": "2026-09-17T01:06:37.9439595+02:00",
+  "Observation": "Dauer: 3960 ms",
+  "StdOut": "",
+  "StdErr": ""
+}

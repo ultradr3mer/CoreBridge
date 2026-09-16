@@ -1,0 +1,12 @@
+{
+  "Id": "T09",
+  "Title": "\u0060delete\u0060 \u2014 in den Papierkorb (kein purge)",
+  "Command": "delete cbx-t03-a",
+  "Binary": "C:\\Program Files\\Multipass\\bin\\multipass.exe",
+  "ExitCode": 0,
+  "DurationMs": 3951,
+  "StartedAt": "2026-09-17T01:05:06.9617572+02:00",
+  "Observation": "Dauer: 3951 ms",
+  "StdOut": "",
+  "StdErr": ""
+}

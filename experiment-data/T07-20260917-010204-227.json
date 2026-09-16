@@ -1,0 +1,12 @@
+{
+  "Id": "T07",
+  "Title": "Internet \u2014 TCP-Check via nc (example.com:80)",
+  "Command": "exec cbx-t03-b -- /bin/sh -c nc -w 5 example.com 80 \u003C/dev/null \u003E/dev/null 2\u003E\u00261 \u0026\u0026 echo tcp-ok || echo tcp-fail",
+  "Binary": "C:\\Program Files\\Multipass\\bin\\multipass.exe",
+  "ExitCode": 0,
+  "DurationMs": 5162,
+  "StartedAt": "2026-09-17T01:02:04.2276079+02:00",
+  "Observation": null,
+  "StdOut": "tcp-ok\n",
+  "StdErr": ""
+}

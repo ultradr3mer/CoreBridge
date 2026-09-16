@@ -1,0 +1,12 @@
+{
+  "Id": "T07",
+  "Title": "Gateway-Ping (172.30.80.1)",
+  "Command": "exec cbx-t03-b -- /bin/sh -c ping -c 2 172.30.80.1",
+  "Binary": "C:\\Program Files\\Multipass\\bin\\multipass.exe",
+  "ExitCode": 2,
+  "DurationMs": 129,
+  "StartedAt": "2026-09-17T01:00:28.1371252+02:00",
+  "Observation": null,
+  "StdOut": "",
+  "StdErr": "ping: socktype: SOCK_RAW\nping: socket: Operation not permitted\nping: =\u003E missing cap_net_raw\u002Bp capability or setuid?\n"
+}

@@ -1,0 +1,12 @@
+{
+  "Id": "T05",
+  "Title": "\u0060exec rm\u0060 \u2014 VM-seitig aufr\u00E4umen",
+  "Command": "exec cbx-t03-b -- /bin/sh -c \u0027rm -f /tmp/cbx-t05-payload.txt\u0027",
+  "Binary": "C:\\Program Files\\Multipass\\bin\\multipass.exe",
+  "ExitCode": 0,
+  "DurationMs": 125,
+  "StartedAt": "2026-09-17T00:58:49.0708811+02:00",
+  "Observation": "Dauer: 125 ms",
+  "StdOut": "",
+  "StdErr": ""
+}

@@ -1,0 +1,12 @@
+{
+  "Id": "T08",
+  "Title": "ssh-keygen \u2014 Schl\u00FCsselpair erzeugen",
+  "Command": "ssh-keygen -t ed25519 -f \u003Ctemp\u003E -N \u0022\u0022 -C cbx-t08",
+  "Binary": "ssh-keygen.exe",
+  "ExitCode": 0,
+  "DurationMs": 33,
+  "StartedAt": "2026-09-17T01:02:09.6882235+02:00",
+  "Observation": "Dauer: 33 ms",
+  "StdOut": "Generating public/private ed25519 key pair.\r\nYour identification has been saved in C:\\Users\\Clara\\AppData\\Local\\Temp\\cbx-t08-93b6e8db284449f2953b1995f050540e\\cbx-t08-key\r\nYour public key has been saved in C:\\Users\\Clara\\AppData\\Local\\Temp\\cbx-t08-93b6e8db284449f2953b1995f050540e\\cbx-t08-key.pub\r\nThe key fingerprint is:\r\nSHA256:mEwbWnjYTbb\u002BMQmSB9X5kVjdSpPm\u002B\u002BKJFyU0YpiaSO8 cbx-t08\r\nThe key\u0027s randomart image is:\r\n\u002B--[ED25519 256]--\u002B\r\n|      ..\u002B. *.o o |\r\n|     \u002B.* .* = O .|\r\n|    o.Oo=o o B \u002B |\r\n|     *.O\u002B. .. \u002B .|\r\n|    . =.S \u002B    \u002B |\r\n|        E. o  o  |\r\n|          .    o |\r\n|             .o..|\r\n|            .oo. |\r\n\u002B----[SHA256]-----\u002B\r\n",
+  "StdErr": ""
+}

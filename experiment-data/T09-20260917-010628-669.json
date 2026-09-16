@@ -1,0 +1,12 @@
+{
+  "Id": "T09",
+  "Title": "Lifecycle \u2014 stop/start/delete",
+  "Command": "stop/start/delete cbx-t03-a",
+  "Binary": "C:\\Program Files\\Multipass\\bin\\multipass.exe",
+  "ExitCode": 0,
+  "DurationMs": 0,
+  "StartedAt": "2026-09-17T01:06:28.6695147+02:00",
+  "Observation": "\u00DCbersprungen \u2014 VM existiert nicht (oder nur im Papierkorb): cbx-t03-a",
+  "StdOut": "",
+  "StdErr": ""
+}
