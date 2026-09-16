@@ -1,8 +1,8 @@
 # AGENTS.md — CoreBridge
 
 .NET-10-Konsolen-App („Multipass Bridge“): verbindet ein echtes Host-Git-Repo mit
-isolierten Agent-VMs über Multipass/Hyper-V. Frühstadium — der Plan ist aktuell
-verbindlicher als der (noch fehlende) Code.
+isolierten Agent-VMs über Multipass/Hyper-V. Frühstadium — der Plan (Phasen A–D)
+ist verbindlicher als der vorhandene Code.
 
 ## Wichtigste Regel (VERBOT)
 
@@ -24,17 +24,22 @@ ein Ergebnis.
 - `EXPERIMENT_LOG.md` — alle bisherigen Experimentläufe (Kommando, Exit, Dauer,
   Roh-Ausgabe); selbst anlegen, falls noch nicht vorhanden.
 - Weitere Quellen hinten an: `F:\source\PROJECT.md` (alte SandboxBridge-Spec,
-  Inhaltsbasis); Multipass-Doku geplant als blobless Clone unter `refs/multipass`.
+  Inhaltsbasis); lokale Multipass-Doku als blobless Clone unter `refs/multipass`
+  (sparse auf `docs/`, gegitignored).
 
-## Aktueller Stand (16.09.2026) — Plan §10 nicht blind trauen
+## Aktueller Stand (16.09.2026) — Plan §10 laufend gegen den Repo-Zustand prüfen
 
-- Repo enthält bisher NUR Doku. `src/`, `test/`, `global.json`, `EXPERIMENT_LOG.md`
-  existieren noch nicht, obwohl §10 Phase A abhakt. Nächster Schritt: Skeleton
-  anlegen (Plan §2).
-- Multipass 1.16.3 liegt unter `C:\Program Files\Multipass\bin\multipass.exe`, ist
-  aber NICHT im PATH → Binary-Locator muss Standardpfade mitprüfen.
-- T01/T02 liefen probehalber (read-only). T03–T09 NUR nach ausdrücklicher Freigabe
-  laufen lassen: sie legen `cbx-*`-VMs an, erster Launch lädt ein Image in
+- Phase A steht: `CoreBridge.slnx` (SDK 10 erzeugt XML-Solution- statt `.sln`),
+  `src/CoreBridge.Core` (`Vm/MultipassCli`, `Vm/Doctor`), `src/CoreBridge.Cli`
+  (einziges Verb: `doctor`), `test/CoreBridge.Core.Tests`, `test/Multipass.Experiments`
+  (T01/T02 implementiert).
+- T01/T02 liefen read-only; Erkenntnisse in `EXPERIMENT_LOG.md`: `version --format json`
+  ist flach (`multipass`/`multipassd`), `find --format json` liefert `images` als
+  Objekt (kein Array), Ubuntu Core ist im Katalog (core16–core26).
+- Multipass 1.16.3 liegt im **User-PATH** (`C:\Program Files\Multipass\bin`), NICHT
+  machine-weit → Locator-Stufe 2 (PATH) greift bereits.
+- T03–T09 sind noch NICHT implementiert — NUR nach ausdrücklicher Freigabe
+  schreiben/laufen lassen: sie legen `cbx-*`-VMs an, erster Launch lädt ein Image in
   GB-Größenordnung.
 
 ## Soll-Struktur
@@ -69,17 +74,22 @@ ein Ergebnis.
 
 - Eine `[Verb]`-Options-Klasse pro Befehl; `[Option]`-Attribute mit HelpText;
   Kurzformen explizit vergeben und pro Klasse eindeutig.
-- `parser.ParseArguments<T1,...>(args).MapResult(...)` — kein manuelles
-  Arg-Schleifen; `--help`/`--version` gratis via AutoHelp/AutoVersion.
+- **Single-Verb-Falle**: `ParseArguments<T>(args)` mit nur EINEM Verb parst im
+  Options-Modus (Verb-Name wird ignoriert, `foo` würde doctor ausführen). Deshalb
+  den `Type[]`-Overload nutzen: `ParseArguments(args, new[] { typeof(...) })`.
+- `MapResult` mit Hilfe-/Versions-Fehlern → Exit 0 (`HelpRequestedError`,
+  `VersionRequestedError`, `HelpVerbRequestedError`); Parse-Fehler → 1. Top-Level
+  `--help` exitet im Verb-Modus mit 1 (`NoVerbSelectedError`) — bekanntes
+  2.9-Verhalten, nicht „reparieren“.
 - Globaler JSON-/Exit-Code-Vertrag ist bewusst OFFEN bis Phase C — kein
   Früh-Commit auf einen Vertrag ohne Nutzer.
 
 ## Run & Debug
 
-- CLI lokal: `dotnet run --project src/CoreBridge.Cli -- <args>`
+- CLI lokal: `dotnet run --project src/CoreBridge.Cli -- doctor`
   (später `cb`-PowerShell-Funktion und VS-Code-`launch.json`, Plan §7).
 - Alle Tests: `dotnet test` · nur Experiments: `dotnet test test/Multipass.Experiments`
-- Einzelnes Experiment: `dotnet test test/Multipass.Experiments --filter "FullyQualifiedName~<Test>"`
+- Einzelnes Experiment: `dotnet test test/Multipass.Experiments --filter "FullyQualifiedName~T01"`
 - Binary-Override für Tests: Env `CORE_BRIDGE_MULTIPASS_EXE`
   (Locator-Reihenfolge: Env → PATH → `%ProgramFiles%\Multipass\bin\multipass.exe`).
 

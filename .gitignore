@@ -427,3 +427,6 @@ FodyWeavers.xsd
 *.msix
 *.msm
 *.msp
+
+# Lokaler Multipass-Doku-Clone (blobless, refs/multipass)
+/refs/

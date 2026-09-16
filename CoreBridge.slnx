@@ -1,0 +1,10 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/CoreBridge.Cli/CoreBridge.Cli.csproj" />
+    <Project Path="src/CoreBridge.Core/CoreBridge.Core.csproj" />
+  </Folder>
+  <Folder Name="/test/">
+    <Project Path="test/CoreBridge.Core.Tests/CoreBridge.Core.Tests.csproj" />
+    <Project Path="test/Multipass.Experiments/Multipass.Experiments.csproj" />
+  </Folder>
+</Solution>

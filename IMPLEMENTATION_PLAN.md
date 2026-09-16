@@ -177,19 +177,25 @@ pro Konfiguration änderbar:
 
 ## 9. Offene Punkte / bewusst zurückgestellt
 
-- Ubuntu-Core-Katalogfrage (T02 klärt, was `multipass find` wirklich hergibt;
-  „Core" steht im Standard-Katalog vermutlich nicht zur Wahl — falls nicht: plain
-  Ubuntu als VM-Basis, Snap-Härte als spätere Option)
+- Ubuntu-Core-Katalogfrage: durch T02 geklärt (16.09.2026) — Core-Images `core` (=16) bis
+  `core26` sind im Standard-Katalog (siehe `EXPERIMENT_LOG.md`, T02-Eintrag). Die konkrete
+  Wahl der VM-Basis bleibt trotzdem Phase D vorbehalten (Core vs. plain Ubuntu,
+  Snap-Härte als spätere Option)
 - Autobridge-Details, TUI, Installationsweg für `core-bridge` (PATH/Installation)
 - Git-Modell-Feinheiten (Sync-/Merge-Mechanik) — nach Phase-C-Ergebnissen
 
 ## 10. Status der Umsetzung (wird laufend aktualisiert)
 
 - [x] Plan hier dokumentiert (16.09.2026)
-- [x] Phase A: Skeleton unter `F:\source\CoreBridge` (Core/Cli/Tests/Experiments,
-      `AGENTS.md`, `README.md`, `EXPERIMENT_LOG.md`, `global.json`, `.gitignore`,
-      `git init` ohne Commit)
-- [x] T01/T02 probehalber über `dotnet test` gelaufen (read-only, legt keine VM an)
-- [ ] T03–T09: bewusst noch nicht gelaufen (legen `cbx-*`-VMs an, erster Lauf lädt
-      das Image herunter, GB-Größenordnung) — vollständiger Lauf erst auf ausdrückliches Los
+- [x] Phase A: Skeleton unter `F:\source\CoreBridge` — `CoreBridge.slnx` (SDK-10-Standard,
+      XML-Format) mit Core/Cli/Tests/Experiments, `AGENTS.md`, `README.md`,
+      `EXPERIMENT_LOG.md`, `global.json` (10.0.401), `refs/multipass` (blobless Clone,
+      sparse auf `docs/`); `MultipassCli`-Wrapper (Locator Env → PATH → ProgramFiles,
+      Timeout → Kill + Exception) und CLI-Verb `doctor` implementiert (16.09.2026)
+- [x] T01/T02 über `dotnet test` gelaufen (read-only, legt keine VM an) — Erkenntnisse
+      in `EXPERIMENT_LOG.md`: `version --format json` ist flach (`multipass`/`multipassd`),
+      `find --format json` liefert `images` als Objekt (kein Array), Ubuntu Core ist im
+      Katalog (core16–core26); Binary liegt im User-PATH
+- [ ] T03–T09: bewusst noch nicht implementiert/gelaufen (legen `cbx-*`-VMs an, erster
+      Lauf lädt das Image herunter, GB-Größenordnung) — erst nach ausdrücklicher Freigabe
 - [ ] Phase D: alle weiteren Schritte
