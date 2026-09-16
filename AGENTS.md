@@ -65,6 +65,9 @@ ein Ergebnis.
   Multipass-Installation selbst (xUnit-`MultipassFact`).
 - Jeden Lauf protokollieren: Kommando, Exit-Code, Dauer, Roh-Ausgabe →
   `EXPERIMENT_LOG.md`.
+- Roh-Ausgaben im Log werden automatisch gekürzt (Kopf/Schwanz je 15 Zeilen, Mitte
+  als `... [N Zeilen gekürzt] ...`); die VOLLE Ausgabe landet je Lauf als JSON in
+  `experiment-data/` und wird im Log-Eintrag unter „Rohdaten“ verlinkt.
 - Testkollektionen im Experiments-Projekt laufen serialisiert (ein `multipassd`
   ist eine geteilte Ressource).
 - Experiment-VMs tragen das Präfix `cbx-`. Gelöscht wird nur nach diesem Präfix —
@@ -92,6 +95,12 @@ ein Ergebnis.
 - Einzelnes Experiment: `dotnet test test/Multipass.Experiments --filter "FullyQualifiedName~T01"`
 - Binary-Override für Tests: Env `CORE_BRIDGE_MULTIPASS_EXE`
   (Locator-Reihenfolge: Env → PATH → `%ProgramFiles%\Multipass\bin\multipass.exe`).
+
+## Ausgabe-Stil
+
+- Antworten und wiedergegebene Kommando-/Datei-Ausgaben knapp halten: lange Blöcke
+  auf Kopf+Schwanz kürzen und die Mitte mit `...` andeuten. Gleiches gilt für
+  generierte Dateien (Logs etc.).
 
 ## Sicherheit
 
