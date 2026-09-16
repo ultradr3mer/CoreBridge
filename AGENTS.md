@@ -30,9 +30,13 @@ ein Ergebnis.
 ## Aktueller Stand (17.09.2026) — Plan §10 laufend gegen den Repo-Zustand prüfen
 
 - Phase A steht: `CoreBridge.slnx` (SDK 10 erzeugt XML-Solution- statt `.sln`),
-  `src/CoreBridge.Core` (`Vm/MultipassCli`, `Vm/Doctor`), `src/CoreBridge.Cli`
-  (einziges Verb: `doctor`), `test/CoreBridge.Core.Tests`, `test/Multipass.Experiments`
-  (T01/T02 implementiert).
+  `src/CoreBridge.Core` (`Vm/MultipassCli`, `Vm/Doctor`, `Vm/VmService`), `src/CoreBridge.Cli`
+  (Verbs: `doctor`, `vm-list`, `vm-create`, `vm-start`, `vm-stop`, `vm-delete`,
+  `vm-exec`, `vm-connect`), `test/CoreBridge.Core.Tests`, `test/Multipass.Experiments`.
+- Phase D ist angelaufen: vm-*-Verbs implementiert und end-to-end verifiziert
+  (create ~58 s / stop ~4 s / start ~50 s / delete ~1 s). `cb`-Shortcut liegt als
+  PowerShell-Funktion im Profil (absoluter Pfad, funktioniert aus jedem
+  Verzeichnis; neues Fenster oder `. $PROFILE` nötig).
 - T01–T10 sind implementiert und gelaufen; alle Messwerte in `EXPERIMENT_LOG.md`
   (volle Rohdaten unter `experiment-data/`). Kernaussagen: launch core26 kalt
   88,5 s / warm 58,2 s; exec-Roundtrip ~130 ms mit sauberer Exit-Code-Weitergabe;
@@ -96,8 +100,10 @@ ein Ergebnis.
 
 ## Run & Debug
 
-- CLI lokal: `dotnet run --project src/CoreBridge.Cli -- doctor`
-  (später `cb`-PowerShell-Funktion und VS-Code-`launch.json`, Plan §7).
+- CLI: `cb <verb> ...` (Funktion im PowerShell-Profil) oder direkt
+  `dotnet run --project src/CoreBridge.Cli -- <verb> ...`.
+  Interaktiv (z. B. `cb vm-connect -n x`) nur in echtem Terminal — nicht in
+  Agent-Shells. VS-Code-`launch.json` folgt (Plan §7).
 - Alle Tests: `dotnet test` · nur Experiments: `dotnet test test/Multipass.Experiments`
 - Einzelnes Experiment: `dotnet test test/Multipass.Experiments --filter "FullyQualifiedName~T01"`
 - Binary-Override für Tests: Env `CORE_BRIDGE_MULTIPASS_EXE`

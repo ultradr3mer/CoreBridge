@@ -2,7 +2,7 @@ using System.Diagnostics;
 
 namespace CoreBridge.Core.Vm;
 
-public sealed class MultipassCli
+public class MultipassCli
 {
     private readonly Func<string?> _locate;
 
@@ -16,7 +16,7 @@ public sealed class MultipassCli
         _locate = locate;
     }
 
-    public MultipassRunResult Run(IReadOnlyList<string> args, int timeoutMs = 30_000, string? exePath = null)
+    public virtual MultipassRunResult Run(IReadOnlyList<string> args, int timeoutMs = 30_000, string? exePath = null)
     {
         var binary = exePath ?? _locate() ?? throw new MultipassNotFoundException();
         var startInfo = new ProcessStartInfo
@@ -63,6 +63,35 @@ public sealed class MultipassCli
             stdOutTask.GetAwaiter().GetResult(),
             stdErrTask.GetAwaiter().GetResult(),
             stopwatch.ElapsedMilliseconds);
+    }
+
+    public virtual int Attach(IReadOnlyList<string> args, string? exePath = null)
+    {
+        var binary = exePath ?? _locate() ?? throw new MultipassNotFoundException();
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = binary,
+            UseShellExecute = false
+        };
+        foreach (var arg in args)
+        {
+            startInfo.ArgumentList.Add(arg);
+        }
+
+        Process? started;
+        try
+        {
+            started = Process.Start(startInfo);
+        }
+        catch (System.ComponentModel.Win32Exception exception)
+        {
+            throw new MultipassException($"Prozess konnte nicht gestartet werden: {binary}", exception);
+        }
+
+        using var process = started
+            ?? throw new MultipassException($"Prozess konnte nicht gestartet werden: {binary}");
+        process.WaitForExit();
+        return process.ExitCode;
     }
 
     private static void TryKill(Process process)

@@ -220,4 +220,14 @@ pro Konfiguration änderbar:
       - T10: Cleanup löscht gezielt alle cbx-VMs (kein purge); gelöschte VMs bleiben
         mit state `Deleted` in `list` sichtbar — Existenzchecks müssen den State
         prüfen. Offen: ob ein Launch den Namen einer Papierkorb-VM übernehmen kann
-- [ ] Phase D: alle weiteren Schritte
+- [ ] Phase D (angelaufen, 17.09.2026):
+      - [x] CLI-Ausbau Schritt 1: Verbs `vm-list`, `vm-create` (Default-Image
+            core26), `vm-start`, `vm-stop`, `vm-delete`, `vm-exec`,
+            `vm-connect` (interaktiv über `multipass shell`). Core-Layer:
+            `VmService`, `MultipassVmList`, `VmInfo`, `MultipassCli.Attach`.
+            End-to-end verifiziert: create 57,9 s / stop 4,0 s / start 49,6 s /
+            delete 1,1 s — deckt sich mit den T09-Messwerten. Damit sind die
+            Command-Namen gesetzt (vm-*-Schema, §8-Konventionen).
+      - [x] `cb`-Shortcut im PowerShell-Profil installiert (Plan §7; absoluter
+            Pfad statt relativ, damit `cb` aus jedem Verzeichnis funktioniert).
+      - [ ] Git-/Sync-Topologie, Autobridge, Secret-Scanning, TUI
