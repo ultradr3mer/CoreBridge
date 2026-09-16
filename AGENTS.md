@@ -33,14 +33,15 @@ ein Ergebnis.
   `src/CoreBridge.Core` (`Vm/MultipassCli`, `Vm/Doctor`), `src/CoreBridge.Cli`
   (einziges Verb: `doctor`), `test/CoreBridge.Core.Tests`, `test/Multipass.Experiments`
   (T01/T02 implementiert).
-- T01/T02 liefen read-only; Erkenntnisse in `EXPERIMENT_LOG.md`: `version --format json`
-  ist flach (`multipass`/`multipassd`), `find --format json` liefert `images` als
-  Objekt (kein Array), Ubuntu Core ist im Katalog (core16–core26).
+- T01–T03 liefen; Erkenntnisse in `EXPERIMENT_LOG.md`: `version --format json` ist
+  flach (`multipass`/`multipassd`), `find --format json` liefert `images` als
+  Objekt (kein Array), Ubuntu Core ist im Katalog (core16–core26). T03 (core26):
+  launch kalt 88,5 s / warm 58,2 s — die VMs `cbx-t03-a`/`cbx-t03-b` bleiben für
+  T09/T10 bestehen.
 - Multipass 1.16.3 liegt im **User-PATH** (`C:\Program Files\Multipass\bin`), NICHT
   machine-weit → Locator-Stufe 2 (PATH) greift bereits.
-- T03–T09 sind noch NICHT implementiert — NUR nach ausdrücklicher Freigabe
-  schreiben/laufen lassen: sie legen `cbx-*`-VMs an, erster Launch lädt ein Image in
-  GB-Größenordnung.
+- T04–T09 sind noch NICHT implementiert — NUR nach ausdrücklicher Freigabe
+  schreiben/laufen lassen. T04/T05 können die vorhandenen cbx-VMs nutzen.
 
 ## Soll-Struktur
 

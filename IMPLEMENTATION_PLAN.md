@@ -196,6 +196,10 @@ pro Konfiguration änderbar:
       in `EXPERIMENT_LOG.md`: `version --format json` ist flach (`multipass`/`multipassd`),
       `find --format json` liefert `images` als Objekt (kein Array), Ubuntu Core ist im
       Katalog (core16–core26); Binary liegt im User-PATH
-- [ ] T03–T09: bewusst noch nicht implementiert/gelaufen (legen `cbx-*`-VMs an, erster
-      Lauf lädt das Image herunter, GB-Größenordnung) — erst nach ausdrücklicher Freigabe
+- [x] T03 über `dotnet test` gelaufen (core26, legt `cbx-t03-a`/`cbx-t03-b` an; sie
+      bleiben für T09/T10 bestehen) — kalt 88,5 s (inkl. Download), warm 58,2 s;
+      Rohdaten in `EXPERIMENT_LOG.md`. Vorläufige Lesart für FRAGE 2: warm liegt
+      KNAPP unter der 60-s-Faustregel → Pool-/Persistenz-Frage bleibt Phase-D-Thema
+- [ ] T04–T09: bewusst noch nicht implementiert/gelaufen — erst nach ausdrücklicher
+      Freigabe (T04/T05 benutzen die vorhandenen cbx-VMs, legen keine neuen an)
 - [ ] Phase D: alle weiteren Schritte
