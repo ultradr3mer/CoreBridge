@@ -63,6 +63,17 @@ ein Ergebnis.
   dem Papierkorb übernehmen kann (T03-Rerun würde es klären).
 - Multipass 1.16.3 liegt im **User-PATH** (`C:\Program Files\Multipass\bin`), NICHT
   machine-weit → Locator-Stufe 2 (PATH) greift bereits.
+- **WIP/offene Fäden (17.09.2026):**
+  (a) Claude-als-Snap geprüft — Store-Snap `claude-code` 2.1.268 existiert, aber
+  Publisher `pfsmorigo*` = NICHT verifiziert (Community) und älter als das Native
+  2.1.273 → Empfehlung bleibt offizielles Binary von downloads.claude.ai
+  (Checksum-geprüft); endgültige Entscheidung steht noch aus.
+  (b) Custom-Image-Import: Ausweg A (https-Workaround, 1× UAC für Zertifikat) oder
+  B (parken + Upstream-Bug melden) — wartet auf Nutzerentscheidung.
+  (c) `opencode` und `python` als bootstrap-agent-vm-Komponenten noch nicht
+  implementiert (Rezepte offen).
+  (d) `cbx-t11-build2` läuft noch (Bau-Werkzeug, Wegwerf); 6 cbx-VMs liegen im
+  Multipass-Papierkorb und belegen Platz (purge tabu für Agenten).
 - Neue Experimente (T11+) NUR nach ausdrücklicher Freigabe.
 
 ## Soll-Struktur
