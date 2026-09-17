@@ -9,9 +9,14 @@ public class TestConfigs
     /// <summary>Konfig-Äquivalent zu src/CoreBridge.Cli/appsettings.json.</summary>
     public static ImagesConfig Images { get; } = new()
     {
+        DefaultModelUrl = "https://raw.githubusercontent.com/canonical/models/main/ubuntu-core-26-amd64-dangerous.model",
         Components = new Dictionary<string, ComponentConfig>(StringComparer.OrdinalIgnoreCase)
         {
-            ["claude"] = new() { Snap = "claude-code" },
+            ["claude"] = new()
+            {
+                Snap = "claude-code",
+                Symlinks = ["/snap/bin/claude-code|/home/ubuntu/.local/bin/claude"]
+            },
             ["dotnet"] = new()
             {
                 Snap = "dotnet-sdk-100",
@@ -46,16 +51,11 @@ public class TestConfigs
 public class ImageCloudInitTests
 {
     [Fact]
-    public void NeedsCloudInit_FalseBeiNurSnapKomponenten()
+    public void NeedsCloudInit_TrueSobaldKomponentenGewaehlt()
     {
-        Assert.False(ImageCloudInit.NeedsCloudInit(TestConfigs.Images, new[] { "claude", "opencode" }));
-    }
-
-    [Fact]
-    public void NeedsCloudInit_TrueBeiDotnetOderPython()
-    {
+        Assert.True(ImageCloudInit.NeedsCloudInit(TestConfigs.Images, new[] { "claude" }));
         Assert.True(ImageCloudInit.NeedsCloudInit(TestConfigs.Images, new[] { "claude", "dotnet" }));
-        Assert.True(ImageCloudInit.NeedsCloudInit(TestConfigs.Images, new[] { "python" }));
+        Assert.False(ImageCloudInit.NeedsCloudInit(TestConfigs.Images, Array.Empty<string>()));
     }
 
     [Fact]
@@ -72,7 +72,7 @@ public class ImageCloudInitTests
         Assert.Contains("apt-get download", yaml);
         Assert.Contains("dpkg -x", yaml);
         Assert.Contains("libunwind8", yaml);
-        Assert.Contains("chown -R ubuntu:ubuntu /home/ubuntu/.local", yaml);
+        Assert.Contains("chown -R ubuntu:ubuntu /home/ubuntu", yaml);
     }
 
     [Fact]
@@ -87,10 +87,21 @@ public class ImageCloudInitTests
     }
 
     [Fact]
-    public void GenerateOhneRest_HatKeineRuncmdSektion()
+    public void GenerateEnthaeltSnapInstallationen()
     {
         var yaml = ImageCloudInit.Generate("agent", TestConfigs.Images, new[] { "claude", "opencode" });
 
+        Assert.Contains("snap:", yaml);
+        Assert.Contains("- snap install claude-code", yaml);
+        Assert.Contains("- snap install opencode", yaml);
+    }
+
+    [Fact]
+    public void GenerateNurSnapKomponenten_HatKeineRuncmdSektion()
+    {
+        var yaml = ImageCloudInit.Generate("agent", TestConfigs.Images, new[] { "opencode" });
+
+        Assert.Contains("- snap install opencode", yaml);
         Assert.DoesNotContain("runcmd:", yaml);
         Assert.DoesNotContain("write_files:", yaml);
     }
@@ -122,6 +133,145 @@ public class ImageComponentsTests
     }
 }
 
+/// <summary>
+/// ImageStore ist statisch — alle Tests, die Initialize aufrufen, müssen serialisiert
+/// laufen (xUnit-Collection), sonst verbiegen parallel laufende Klassen den Root.
+/// </summary>
+[Collection("ImageStore")]
+public class ImageServiceConfigureGuardTests
+{
+    private sealed class StubHttpHandler : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            return Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+            {
+                Content = new StringContent("type: model\n...")
+            });
+        }
+    }
+
+    [Fact]
+    public void Configure_NeuesImage_SchreibtModellConfigCloudInit()
+    {
+        using var store = new TempDirectory();
+        ImageStore.Initialize(store);
+
+        var result = new ImageService(TestConfigs.Images, http: new HttpClient(new StubHttpHandler()))
+            .Configure("agent", ["claude", "dotnet"]);
+
+        Assert.Equal("agent", result.Name);
+        Assert.True(File.Exists(result.ModelPath));
+        Assert.True(File.Exists(result.ConfigPath));
+        Assert.NotNull(result.CloudInitPath);
+        Assert.True(File.Exists(result.CloudInitPath));
+        Assert.Equal(new[] { "claude-code", "dotnet-sdk-100" }, result.Snaps);
+    }
+    [Fact]
+    public void Configure_BestehendesImage_OhneForceWirftMultipassException()
+    {
+        using var store = new TempDirectory();
+        ImageStore.Initialize(store);
+        var dir = ImageStore.ModelDir("agent");
+        Directory.CreateDirectory(dir);
+        File.WriteAllText(ImageStore.ConfigFile("agent"), "x");
+
+        var exception = Assert.Throws<MultipassException>(
+            () => new ImageService(TestConfigs.Images).Configure("agent", ["claude"]));
+        Assert.Contains("image-delete", exception.Message);
+    }
+
+    [Fact]
+    public void Configure_BestehendesImage_MitForceLaeuftWeiter()
+    {
+        using var store = new TempDirectory();
+        ImageStore.Initialize(store);
+        var dir = ImageStore.ModelDir("agent");
+        Directory.CreateDirectory(dir);
+        File.WriteAllText(ImageStore.ConfigFile("agent"), "x");
+
+        // Force überspringt den Guard und konfiguriert neu (Stub-HTTP, offline).
+        var result = new ImageService(TestConfigs.Images, http: new HttpClient(new StubHttpHandler()))
+            .Configure("agent", ["claude"], force: true);
+
+        Assert.True(File.Exists(result.ConfigPath));
+    }
+}
+
+[Collection("ImageStore")]
+public class ImageServiceListDeleteTests
+{
+    private static void SeedStore(TempDirectory store, string name, string[] components, string[] snaps, bool withImage)
+    {
+        ImageStore.Initialize(store);
+        var dir = ImageStore.ModelDir(name);
+        Directory.CreateDirectory(dir);
+        var buildConfig = new ImageBuildConfig(
+            name,
+            TestConfigs.Images.DefaultModelUrl,
+            components,
+            snaps,
+            withImage ? ImageStore.ImageFile(name) : null);
+        File.WriteAllText(ImageStore.ConfigFile(name), buildConfig.ToJson());
+        if (withImage)
+        {
+            Directory.CreateDirectory(ImageStore.ImagesRoot);
+            File.WriteAllText(ImageStore.ImageFile(name), new string('x', 1024));
+        }
+    }
+
+    [Fact]
+    public void List_LiefertKonfigurierteImages()
+    {
+        using var store = new TempDirectory();
+        SeedStore(store, "alpha", ["claude"], ["claude-code"], withImage: false);
+        SeedStore(store, "beta", ["dotnet"], ["dotnet-sdk-100"], withImage: true);
+
+        var entries = new ImageService(TestConfigs.Images).List();
+
+        Assert.Equal(2, entries.Count);
+        Assert.Equal("alpha", entries[0].Name);
+        Assert.False(entries[0].HasImage);
+        Assert.Equal("beta", entries[1].Name);
+        Assert.True(entries[1].HasImage);
+        Assert.Equal(1024, entries[1].ImageBytes);
+    }
+
+    [Fact]
+    public void List_OhneModelsRoot_LiefertLeereListe()
+    {
+        using var store = new TempDirectory();
+        ImageStore.Initialize(store);
+
+        Assert.Empty(new ImageService(TestConfigs.Images).List());
+    }
+
+    [Fact]
+    public void Delete_EntferntKonfigurationUndImage()
+    {
+        using var store = new TempDirectory();
+        SeedStore(store, "agent", ["claude"], ["claude-code"], withImage: true);
+        var modelDir = ImageStore.ModelDir("agent");
+        var imageFile = ImageStore.ImageFile("agent");
+
+        var result = new ImageService(TestConfigs.Images).Delete("agent");
+
+        Assert.Equal(modelDir, result.ModelDir);
+        Assert.Equal(imageFile, result.ImageFile);
+        Assert.False(Directory.Exists(modelDir));
+        Assert.False(File.Exists(imageFile));
+    }
+
+    [Fact]
+    public void Delete_UnbekannterName_WirftMultipassException()
+    {
+        using var store = new TempDirectory();
+        ImageStore.Initialize(store);
+
+        Assert.Throws<MultipassException>(() => new ImageService(TestConfigs.Images).Delete("gibtsnicht"));
+    }
+}
+
 public class ImageBuildConfigTests
 {
     [Fact]
@@ -129,7 +279,7 @@ public class ImageBuildConfigTests
     {
         var config = new ImageBuildConfig(
             "agent",
-            ImageStore.DefaultModelUrl,
+            TestConfigs.Images.DefaultModelUrl,
             new[] { "claude", "dotnet" },
             new[] { "claude-code", "dotnet-sdk-100" });
 

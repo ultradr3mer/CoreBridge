@@ -1,5 +1,6 @@
 ﻿using CommandLine;
 using CoreBridge.Core.Config;
+using CoreBridge.Core.Images;
 using CoreBridge.Core.Vm;
 using Microsoft.Extensions.Configuration;
 
@@ -12,15 +13,18 @@ public static class Program
 
     /// <summary>
     /// Leitsatz 6: CLI und TUI lesen dieselbe Config-Quelle. Reihenfolge:
-    /// appsettings.json → appsettings.local.json (gitignored) → Env-Variablen
+    /// appsettings.json → appsettings.{Environment}.json (Env DOTNET_ENVIRONMENT,
+    /// Default Development) → appsettings.local.json (gitignored) → Env-Variablen
     /// (Doppelter Unterstrich, z. B. Images__Build__VmName). Keine Passwörter
     /// in der Config — Secrets laufen über die CORE_BRIDGE_*_PASSWORD-Env-Kette.
     /// </summary>
     private static AppConfig LoadConfig()
     {
+        var environment = Environment.GetEnvironmentVariable("DOTNET_ENVIRONMENT") ?? "Development";
         var configuration = new ConfigurationBuilder()
             .SetBasePath(AppContext.BaseDirectory)
             .AddJsonFile("appsettings.json", optional: false)
+            .AddJsonFile($"appsettings.{environment}.json", optional: true)
             .AddJsonFile("appsettings.local.json", optional: true)
             .AddEnvironmentVariables()
             .Build();
@@ -29,12 +33,17 @@ public static class Program
             ?? throw new InvalidOperationException("Konfiguration konnte nicht gebunden werden (appsettings.json).");
     }
 
+    static Program()
+    {
+        CoreBridge.Core.Images.ImageStore.Initialize(Config.Images.StoreRoot);
+    }
+
     public static int Main(string[] args)
     {
         return Parser.Default
             .ParseArguments(args, new[]
             {
-                typeof(DoctorOptions),
+                typeof(MultipassStatusOptions),
                 typeof(VmListOptions),
                 typeof(VmCreateOptions),
                 typeof(VmStartOptions),
@@ -45,20 +54,24 @@ public static class Program
                 typeof(VmPutOptions),
                 typeof(VmGetOptions),
                 typeof(ImageConfigureOptions),
-                typeof(ImageBuildOptions)
+                typeof(ImageBuildOptions),
+                typeof(ImageListOptions),
+                typeof(ImageDeleteOptions)
             })
             .MapResult(
-                (DoctorOptions _) => Guard(RunDoctor),
+                (MultipassStatusOptions _) => Guard(RunMultipassStatus),
                 (VmListOptions _) => Guard(RunVmList),
                 (VmCreateOptions o) => Guard(() => RunVmCreate(o)),                (VmStartOptions o) => Guard(() => RunSimpleVmCommand($"start {o.Name}", () => Vms.Start(o.Name))),
                 (VmStopOptions o) => Guard(() => RunSimpleVmCommand($"stop {o.Name}", () => Vms.Stop(o.Name))),
-                (VmDeleteOptions o) => Guard(() => RunSimpleVmCommand($"delete {o.Name}", () => Vms.Delete(o.Name))),
+                (VmDeleteOptions o) => Guard(() => RunSimpleVmCommand($"delete {o.Name}{(o.Purge ? " --purge" : string.Empty)}", () => Vms.Delete(o.Name, o.Purge))),
                 (VmExecOptions o) => Guard(() => Report(Vms.Exec(o.Name, o.Command, o.TimeoutSeconds * 1000))),
                 (VmConnectOptions o) => Guard(() => Vms.Connect(o.Name)),
                 (VmPutOptions o) => Guard(() => RunVmPut(o)),
                 (VmGetOptions o) => Guard(() => RunVmGet(o)),
                 (ImageConfigureOptions o) => Guard(() => RunImageConfigure(o)),
                 (ImageBuildOptions o) => Guard(() => RunImageBuild(o)),
+                (ImageListOptions _) => Guard(RunImageList),
+                (ImageDeleteOptions o) => Guard(() => RunImageDelete(o)),
                 errs => errs.Any(e => e.Tag is ErrorType.HelpRequestedError
                     or ErrorType.VersionRequestedError
                     or ErrorType.HelpVerbRequestedError)
@@ -99,7 +112,7 @@ public static class Program
         return result.ExitCode;
     }
 
-    private static int RunDoctor()
+    private static int RunMultipassStatus()
     {
         var report = Doctor.Check();
         if (!report.Found)
@@ -144,11 +157,24 @@ public static class Program
 
     private static int RunVmCreate(VmCreateOptions options)
     {
+        var cloudInit = options.CloudInit;
+        if (cloudInit is null && !options.Image.Contains(':') && !Path.IsPathRooted(options.Image))
+        {
+            // --image <name> ohne explizite --cloud-init: fertige cloud-init aus
+            // image-configure ableiten (artifacts/models/<name>/cloud-init.yaml).
+            var derived = ImageStore.CloudInitFile(options.Image);
+            if (File.Exists(derived))
+            {
+                cloudInit = derived;
+                Console.WriteLine($"cloud-init aus Image-Konfiguration: {derived}");
+            }
+        }
+
         Console.WriteLine(
             $"Lege VM `{options.Name}` an (Image: {options.Image}"
             + $"{(options.Disk is null ? string.Empty : $", Disk: {options.Disk}")}"
-            + $"{(options.CloudInit is null ? string.Empty : ", cloud-init")}) ...");
-        var result = Vms.Create(options.Name, options.Image, options.Disk, cloudInitPath: options.CloudInit);
+            + $"{(cloudInit is null ? string.Empty : ", cloud-init")}) ...");
+        var result = Vms.Create(options.Name, options.Image, options.Disk, cloudInitPath: cloudInit);
         if (result.ExitCode == 0)
         {
             Console.WriteLine($"OK — {result.DurationMs / 1000.0:F1} s");
@@ -216,7 +242,7 @@ public static class Program
     {
         var components = options.Components.Split(',', StringSplitOptions.RemoveEmptyEntries);
         var images = new CoreBridge.Core.Images.ImageService(Config.Images);
-        var result = images.Configure(options.Name, components, options.ModelUrl);
+        var result = images.Configure(options.Name, components, options.ModelUrl, options.BuildTo, options.Force);
 
         Console.WriteLine($"Image '{result.Name}' konfiguriert — Snaps im Image: {string.Join(", ", result.Snaps)}");
         Console.WriteLine($"  Modell:   {result.ModelPath} (Canonical dangerous, unverändert signiert)");
@@ -232,7 +258,44 @@ public static class Program
         }
 
         Console.WriteLine();
-        Console.WriteLine($"Naechster Schritt: cb image-build --name {result.Name}");
+        Console.WriteLine($"VM starten: cb vm-create --name <vm> --cloud-init \"{result.CloudInitPath ?? "<cloud-init-pfad>"}\"");
+        return 0;
+    }
+
+    private static int RunImageList()
+    {
+        var images = new CoreBridge.Core.Images.ImageService(Config.Images);
+        var entries = images.List();
+        if (entries.Count == 0)
+        {
+            Console.WriteLine("Keine konfigurierten Images.");
+            return 0;
+        }
+
+        Console.WriteLine($"{"Name",-20} {"Komponenten",-28} Image");
+        foreach (var entry in entries)
+        {
+            Console.WriteLine(
+                $"{entry.Name,-20} {string.Join(",", entry.Components),-28} {(entry.HasImage ? $"{entry.ImageBytes / (1024.0 * 1024.0):N0} MB" : "-")}");
+        }
+
+        return 0;
+    }
+
+    private static int RunImageDelete(ImageDeleteOptions options)
+    {
+        var images = new CoreBridge.Core.Images.ImageService(Config.Images);
+        var result = images.Delete(options.Name);
+        if (result.ModelDir is not null)
+        {
+            Console.WriteLine($"Konfiguration gelöscht: {result.ModelDir}");
+        }
+
+        if (result.ImageFile is not null)
+        {
+            Console.WriteLine($"Image gelöscht:       {result.ImageFile}");
+        }
+
         return 0;
     }
 

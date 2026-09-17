@@ -13,11 +13,12 @@ public static class ImageCloudInit
 {
     private const string Home = "/home/ubuntu";
 
+    /// <summary>Immer true, solange Komponenten gewählt sind — die Snaps selbst
+    /// werden inzwischen ebenfalls per cloud-init installiert (root), nicht nur
+    /// der Nicht-Snap-Rest.</summary>
     public static bool NeedsCloudInit(ImagesConfig config, IEnumerable<string> components)
     {
-        return components
-            .Select(c => c.Trim())
-            .Any(c => config.Components.TryGetValue(c, out var component) && component.NeedsCloudInit);
+        return components.Select(c => c.Trim()).Any(c => c.Length > 0);
     }
 
     public static string Generate(string name, ImagesConfig config, IEnumerable<string> components)
@@ -31,7 +32,23 @@ public static class ImageCloudInit
         var yaml = new StringBuilder();
         yaml.AppendLine("#cloud-config");
         yaml.AppendLine($"# Generiert von `cb image-configure --name {name}`.");
-        yaml.AppendLine("# Beim Launch mitgeben: cb vm-create --name <vm> --image <img> --cloud-init <diese-datei>");
+        yaml.AppendLine("# Vollständiger Bootstrap beim Launch (cloud-init läuft als root, kein sudo nötig):");
+        yaml.AppendLine("#   cb vm-create --name <vm> --cloud-init <diese-datei>");
+        yaml.AppendLine("# (Image-Bau via `image-build` optional — Snaps sind hier ohnehin enthalten und");
+        yaml.AppendLine("#  eine gebackene Version wäre idempotent.)");
+
+        var snaps = selected.Select(c => c.Snap).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        if (snaps.Length > 0)
+        {
+            yaml.AppendLine();
+            yaml.AppendLine("# Store-Snaps (als root installiert)");
+            yaml.AppendLine("snap:");
+            yaml.AppendLine("  commands:");
+            foreach (var snap in snaps)
+            {
+                yaml.AppendLine($"    - snap install {snap}");
+            }
+        }
 
         var exports = selected.SelectMany(c => c.ProfileExports).Distinct().ToArray();
         if (exports.Length > 0)
@@ -83,7 +100,9 @@ public static class ImageCloudInit
 
         if (runCmd.Count > 0)
         {
-            runCmd.Add($"chown -R ubuntu:ubuntu {Home}/.local");
+            // Core26 legt cloud-init-Pfade als root an — das ganze $HOME zurückgeben,
+            // sonst können Snaps als user ubuntu kein ~/snap anlegen.
+            runCmd.Add($"chown -R ubuntu:ubuntu {Home}");
             yaml.AppendLine();
             yaml.AppendLine("runcmd:");
             foreach (var command in runCmd)

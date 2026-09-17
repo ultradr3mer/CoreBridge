@@ -15,6 +15,13 @@ public sealed record ImagesConfig
     public string DefaultModelUrl { get; init; } =
         "https://raw.githubusercontent.com/canonical/models/main/ubuntu-core-26-amd64-dangerous.model";
 
+    /// <summary>
+    /// Wurzel für Modell-/Config-/cloud-init-/Image-Dateien. Absoluter Pfad oder
+    /// relativ zur Repo-Wurzel (Ordner, der CoreBridge.slnx enthält). Leer =
+    /// Repo-Wurzel/artifacts.
+    /// </summary>
+    public string? StoreRoot { get; init; }
+
     public ImageBuildDefaultsConfig Build { get; init; } = new();
 
     public Dictionary<string, ComponentConfig> Components { get; init; } = new(StringComparer.OrdinalIgnoreCase);

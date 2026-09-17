@@ -7,7 +7,7 @@ namespace CoreBridge.Core.Images;
 /// Persistierte Build-Konfiguration eines Custom-Images, erzeugt von
 /// `image-configure` und gelesen von `image-build`.
 /// </summary>
-public sealed record ImageBuildConfig(string Name, string BaseModelUrl, string[] Components, string[] Snaps)
+public sealed record ImageBuildConfig(string Name, string BaseModelUrl, string[] Components, string[] Snaps, string? BuildTo = null)
 {
     private static readonly JsonSerializerOptions Options = new() { WriteIndented = true };
 

@@ -2,8 +2,8 @@ using CommandLine;
 
 namespace CoreBridge.Cli;
 
-[Verb("doctor", HelpText = "Prüft, ob Multipass auffindbar ist, und gibt CLI- und Daemon-Version aus.")]
-public sealed class DoctorOptions
+[Verb("multipass-status", HelpText = "Prüft, ob Multipass auffindbar ist, und gibt CLI- und Daemon-Version aus.")]
+public sealed class MultipassStatusOptions
 {
 }
 
@@ -18,7 +18,7 @@ public sealed class VmCreateOptions
     [Option('n', "name", Required = true, HelpText = "Name der neuen VM.")]
     public string Name { get; set; } = string.Empty;
 
-    [Option('i', "image", Default = "core26", HelpText = "Image aus dem multipass-Katalog oder eine file://-URL.")]
+    [Option('i', "image", Default = "core26", HelpText = "Katalog-Image (core26), URL oder Name eines per image-configure konfigurierten Images (dessen cloud-init wird automatisch mitgegeben).")]
     public string Image { get; set; } = "core26";
 
     [Option('c', "cloud-init", HelpText = "Pfad zu einer cloud-init-YAML (z. B. aus image-configure).")]
@@ -39,9 +39,15 @@ public sealed class ImageConfigureOptions
 
     [Option("model-url", HelpText = "URL des Basis-Modells (Standard: Config Images:DefaultModelUrl).")]
     public string? ModelUrl { get; set; }
+
+    [Option('b', "build-to", HelpText = "Zielpfad der .img für image-build (absolut oder relativ zur Repo-Wurzel; Standard: <StoreRoot>\\images\\<name>.img).")]
+    public string? BuildTo { get; set; }
+
+    [Option('f', "force", HelpText = "Existierende Konfiguration überschreiben (sonst Fehler, wenn das Image schon konfiguriert ist).")]
+    public bool Force { get; set; }
 }
 
-[Verb("image-build", HelpText = "Baut das Custom-Image in einer klassischen Ubuntu-Bau-VM (ubuntu-image + --snap) und holt die .img auf den Host.")]
+[Verb("image-build", Hidden = true, HelpText = "(Verdeckt) Baut das Custom-Image in einer klassischen Ubuntu-Bau-VM (ubuntu-image + --snap) und holt die .img auf den Host.")]
 public sealed class ImageBuildOptions
 {
     [Option('n', "name", Required = true, HelpText = "Name des Images (muss mit image-configure konfiguriert sein).")]
@@ -63,6 +69,18 @@ public sealed class ImageBuildOptions
     public string? Destination { get; set; }
 }
 
+[Verb("image-list", HelpText = "Listet konfigurierte Custom-Images (Komponenten, Snaps, vorhandene .img).")]
+public sealed class ImageListOptions
+{
+}
+
+[Verb("image-delete", HelpText = "Löscht die Konfiguration (Modell/cloud-init/Build-Config) und die gebaute .img eines Custom-Images.")]
+public sealed class ImageDeleteOptions
+{
+    [Option('n', "name", Required = true, HelpText = "Name des Images (aus image-list).")]
+    public string Name { get; set; } = string.Empty;
+}
+
 [Verb("vm-start", HelpText = "Startet eine gestoppte VM.")]
 public sealed class VmStartOptions
 {
@@ -77,11 +95,14 @@ public sealed class VmStopOptions
     public string Name { get; set; } = string.Empty;
 }
 
-[Verb("vm-delete", HelpText = "Löscht eine VM in den Multipass-Papierkorb (kein purge).")]
+[Verb("vm-delete", HelpText = "Löscht eine VM in den Multipass-Papierkorb; --purge entfernt sie endgültig.")]
 public sealed class VmDeleteOptions
 {
     [Option('n', "name", Required = true, HelpText = "Name der VM.")]
     public string Name { get; set; } = string.Empty;
+
+    [Option('p', "purge", HelpText = "Endgültig löschen (multipass purge) statt nur in den Papierkorb.")]
+    public bool Purge { get; set; }
 }
 
 [Verb("vm-exec", HelpText = "Führt ein Kommando in der VM aus (via /bin/sh -c).")]

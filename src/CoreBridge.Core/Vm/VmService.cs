@@ -43,9 +43,15 @@ public sealed class VmService
         return _cli.Run(new[] { "stop", name }, 180_000);
     }
 
-    public MultipassRunResult Delete(string name)
+    public MultipassRunResult Delete(string name, bool purge = false)
     {
-        return _cli.Run(new[] { "delete", name }, 180_000);
+        var args = new List<string> { "delete", name };
+        if (purge)
+        {
+            args.Add("--purge");
+        }
+
+        return _cli.Run(args, 180_000);
     }
 
     public MultipassRunResult Exec(string name, string command, int timeoutMs = 600_000)

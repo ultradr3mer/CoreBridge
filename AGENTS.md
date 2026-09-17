@@ -31,7 +31,7 @@ ein Ergebnis.
 
 - Phase A steht: `CoreBridge.slnx` (SDK 10 erzeugt XML-Solution- statt `.sln`),
   `src/CoreBridge.Core` (`Vm/MultipassCli`, `Vm/Doctor`, `Vm/VmService`), `src/CoreBridge.Cli`
-  (Verbs: `doctor`, `vm-list`, `vm-create`, `vm-start`, `vm-stop`, `vm-delete`,
+  (Verbs: `multipass-status` (ehem. `doctor`), `vm-list`, `vm-create`, `vm-start`, `vm-stop`, `vm-delete`,
   `vm-exec`, `vm-connect`), `test/CoreBridge.Core.Tests`, `test/Multipass.Experiments`.
 - Phase D ist angelaufen: vm-*-Verbs implementiert und end-to-end verifiziert
   (create ~58 s / stop ~4 s / start ~50 s / delete ~1 s), dazu `vm-put`
@@ -74,8 +74,10 @@ ein Ergebnis.
   - `cb image-configure --name <n> [-c claude,dotnet,opencode,python] [--model-url <url>]`
     lädt das Basis-Modell (Canonical `ubuntu-core-26-amd64-dangerous.model`, signiert,
     unverändert — Custom-Snaps gehen als `ubuntu-image --snap`-Flags, kein Selbst-Signieren
-    nötig), schreibt `<n>.build.json` + (falls Komponenten Nicht-Snap-Rest haben) eine
-    cloud-init-YAML nach `%LOCALAPPDATA%\CoreBridge\models\<n>\`.
+    nötig),     schreibt `<n>.build.json` + (falls Komponenten Nicht-Snap-Rest haben) eine
+    cloud-init-YAML nach `%LOCALAPPDATA%\CoreBridge\models\<n>\`. Überschreibt einen
+    bereits konfigurierten Namen nur mit `--force` (sonst MultipassException mit
+    Hinweis auf `image-delete`).
   - `cb image-build --name <n>` macht, was früher `scripts/build-coreimage.ps1` tat:
     Bau-VM (Default aus Config) + `ubuntu-image snap` + `--snap <store-snap>` pro
     Komponente + `vm-get` der pc.img nach `%LOCALAPPDATA%\CoreBridge\images\<n>.img`.

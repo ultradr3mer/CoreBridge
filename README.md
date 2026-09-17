@@ -8,4 +8,4 @@ isolierten Agent-VMs über Multipass/Hyper-V verbindet.
 - Experimente: `dotnet test test/Multipass.Experiments` — jeder Lauf landet in
   `EXPERIMENT_LOG.md`; Multipass wird nie direkt in der Shell aufgerufen.
 
-Status: Phase A (Skeleton + CLI `doctor`), siehe Plan §10.
+Status: Phase A (Skeleton + CLI `multipass-status`), siehe Plan §10.

@@ -13,6 +13,15 @@ public sealed record ImageConfigureResult(
 
 public sealed record ImageBuildResult(string Name, string ImagePath, long DurationMs, string BuildVmName);
 
+public sealed record ImageListEntry(
+    string Name,
+    string[] Components,
+    string[] Snaps,
+    bool HasImage,
+    long ImageBytes);
+
+public sealed record ImageDeleteResult(string Name, string? ModelDir, string? ImageFile);
+
 /// <summary>
 /// Custom-Image-Pipeline: `Configure` lädt das Basis-Modell (Canonical dangerous,
 /// unverändert signiert), schreibt Build-Config + generierte cloud-init unter
@@ -33,11 +42,17 @@ public sealed class ImageService
         _http = http ?? new HttpClient();
     }
 
-    public ImageConfigureResult Configure(string name, string[] components, string? baseUrl = null)
+    public ImageConfigureResult Configure(string name, string[] components, string? baseUrl = null, string? buildTo = null, bool force = false)
     {
         if (string.IsNullOrWhiteSpace(name))
         {
             throw new MultipassException("Image-Name fehlt (--name).");
+        }
+
+        if (!force && File.Exists(ImageStore.ConfigFile(name)))
+        {
+            throw new MultipassException(
+                $"Image '{name}' ist bereits konfiguriert ({ImageStore.ModelDir(name)}) — `image-delete -n {name}` zuerst oder --force zum Überschreiben.");
         }
 
         var trimmed = components
@@ -72,7 +87,7 @@ public sealed class ImageService
 
         File.WriteAllText(ImageStore.ModelFile(name), model);
 
-        var buildConfig = new ImageBuildConfig(name, url, trimmed, snaps);
+        var buildConfig = new ImageBuildConfig(name, url, trimmed, snaps, buildTo);
         File.WriteAllText(ImageStore.ConfigFile(name), buildConfig.ToJson());
 
         string? cloudInitPath = null;
@@ -146,8 +161,12 @@ public sealed class ImageService
                 $"ubuntu-image fehlgeschlagen (exit {build.ExitCode}): {Tail(build.StdOut, 10)} / {Tail(build.StdErr, 10)}");
         }
 
-        Directory.CreateDirectory(ImageStore.ImagesRoot);
-        var imagePath = destination ?? ImageStore.ImageFile(name);
+        var imagePath = destination ?? buildConfig.BuildTo ?? ImageStore.ImageFile(name);
+        var imageDir = Path.GetDirectoryName(Path.GetFullPath(imagePath));
+        if (!string.IsNullOrEmpty(imageDir))
+        {
+            Directory.CreateDirectory(imageDir);
+        }
         var get = _vms.Get(vmName, "/home/ubuntu/imgout/pc.img", imagePath);
         if (!File.Exists(imagePath))
         {
@@ -156,6 +175,81 @@ public sealed class ImageService
         }
 
         return new ImageBuildResult(name, imagePath, stopwatch.ElapsedMilliseconds, vmName);
+    }
+
+    public IReadOnlyList<ImageListEntry> List()
+    {
+        if (!Directory.Exists(ImageStore.ModelsRoot))
+        {
+            return Array.Empty<ImageListEntry>();
+        }
+
+        var entries = new List<ImageListEntry>();
+        foreach (var dir in Directory.GetDirectories(ImageStore.ModelsRoot).OrderBy(d => d, StringComparer.OrdinalIgnoreCase))
+        {
+            var name = Path.GetFileName(dir);
+            var configPath = ImageStore.ConfigFile(name);
+            if (!File.Exists(configPath))
+            {
+                continue;
+            }
+
+            ImageBuildConfig buildConfig;
+            try
+            {
+                buildConfig = ImageBuildConfig.FromJson(File.ReadAllText(configPath));
+            }
+            catch (Exception exception) when (exception is IOException or System.Text.Json.JsonException)
+            {
+                throw new MultipassException($"Build-Config von '{name}' ist unlesbar: {configPath}", exception);
+            }
+
+            var imagePath = buildConfig.BuildTo ?? ImageStore.ImageFile(name);
+            var fileInfo = new FileInfo(imagePath);
+            entries.Add(new ImageListEntry(
+                name,
+                buildConfig.Components,
+                buildConfig.Snaps,
+                fileInfo.Exists,
+                fileInfo.Exists ? fileInfo.Length : 0));
+        }
+
+        return entries;
+    }
+
+    public ImageDeleteResult Delete(string name)
+    {
+        if (string.IsNullOrWhiteSpace(name))
+        {
+            throw new MultipassException("Image-Name fehlt (--name).");
+        }
+
+        var modelDir = ImageStore.ModelDir(name);
+        var configPath = ImageStore.ConfigFile(name);
+        var imagePath = File.Exists(configPath)
+            ? ImageBuildConfig.FromJson(File.ReadAllText(configPath)).BuildTo ?? ImageStore.ImageFile(name)
+            : ImageStore.ImageFile(name);
+
+        string? deletedModelDir = null;
+        string? deletedImage = null;
+        if (Directory.Exists(modelDir))
+        {
+            Directory.Delete(modelDir, recursive: true);
+            deletedModelDir = modelDir;
+        }
+
+        if (File.Exists(imagePath))
+        {
+            File.Delete(imagePath);
+            deletedImage = imagePath;
+        }
+
+        if (deletedModelDir is null && deletedImage is null)
+        {
+            throw new MultipassException($"Für '{name}' existiert weder eine Konfiguration noch ein Image.");
+        }
+
+        return new ImageDeleteResult(name, deletedModelDir, deletedImage);
     }
 
     private void EnsureSuccess(MultipassRunResult result, string label)
