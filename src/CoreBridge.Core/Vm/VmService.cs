@@ -74,4 +74,13 @@ public sealed class VmService
     {
         return _cli.Attach(new[] { "shell", name });
     }
+
+    /// <summary>
+    /// Testbare Konsolen-Session (multipass shell mit Pipes): Befehle senden,
+    /// Ausgaben prüfen. Für echtes interaktives Terminal weiterhin <c>Connect</c>.
+    /// </summary>
+    public VmConsoleSession OpenConsole(string name)
+    {
+        return VmConsoleSession.Open(name);
+    }
 }
