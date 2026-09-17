@@ -47,6 +47,13 @@ public sealed record ComponentConfig
 {
     public required string Snap { get; init; }
 
+    /// <summary>
+    /// Snap mit classic confinement — `snap install --classic` (z. B. opencode,
+    /// python3-alt). Ohne das Flag schlägt die Installation auf Core still fehl-
+    /// schlagend fehl („no matching snaps installed").
+    /// </summary>
+    public bool Classic { get; init; }
+
     /// <summary>"quelle|ziel" — absolute Pfade, z. B. /snap/bin/x|/home/ubuntu/.local/bin/x.</summary>
     public string[] Symlinks { get; init; } = [];
 

@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using CoreBridge.Core.Images;
 using CoreBridge.Core.Vm;
 using Xunit.Abstractions;
@@ -26,11 +27,94 @@ public static class VmCycleContext
 
   public static ImageConfigureResult? ConfigureResult { get; set; }
 
+  /// <summary>IO-Zähler von multipassd um den Launch (_2) für die Ressourcen-Logs.</summary>
+  internal static double LaunchGigabytesWritten { get; set; }
+
   /// <summary>
   /// Early-Return-Pattern: `if (SkipWithoutMultipass()) return;` — jedes
   /// Zyklus-Test startet damit (analog MultipassFact in den Experiments).
   /// </summary>
   public static bool SkipWithoutMultipass() => !MultipassAvailable;
+}
+
+/// <summary>
+/// IO-Monitor für den multipassd-Prozess: sampelt "IO Write Bytes/sec" /
+/// "IO Read Bytes/sec" (Performance Counter — Raten; kumulative Zähler gibt
+/// es in der .NET-Process-Klasse nicht) sekündlich und integriert zur
+/// Gesamtmenge. Läuft als eigener Task während vm-create; Stop() liefert GB.
+/// Approximation: Prozess-IO inkl. Hyper-V-Layer, nicht die physische Disk.
+/// </summary>
+internal sealed class ProcessIoMonitor : IDisposable
+{
+  private readonly PerformanceCounter _read;
+  private readonly PerformanceCounter _write;
+  private readonly CancellationTokenSource _cancel = new();
+  private readonly Task _sampler;
+  private long _readBytes;
+  private long _writeBytes;
+
+  private ProcessIoMonitor(string processName)
+  {
+    _read = new PerformanceCounter("Process", "IO Read Bytes/sec", processName, readOnly: true);
+    _write = new PerformanceCounter("Process", "IO Write Bytes/sec", processName, readOnly: true);
+    _ = _read.NextValue(); // erster Sample ist immer 0 — verwarmen.
+    _ = _write.NextValue();
+    _sampler = Task.Run(() => SampleLoop(_cancel.Token));
+  }
+
+  /// <summary>Monitor starten; null, wenn Counter nicht verfügbar (Rechte/OS).</summary>
+  public static ProcessIoMonitor? Start(string processName)
+  {
+    try
+    {
+      return new ProcessIoMonitor(processName);
+    }
+    catch (Exception)
+    {
+      return null;
+    }
+  }
+
+  private void SampleLoop(CancellationToken token)
+  {
+    while (!token.IsCancellationRequested)
+    {
+      try
+      {
+        Thread.Sleep(1_000);
+        Interlocked.Add(ref _readBytes, (long)_read.NextValue());
+        Interlocked.Add(ref _writeBytes, (long)_write.NextValue());
+      }
+      catch (Exception)
+      {
+        return; // Counter weg (Prozess beendet?) — stehen lassen, was da ist.
+      }
+    }
+  }
+
+  /// <summary>Sampling beenden und Gesamtmengen in GB liefern.</summary>
+  public (double ReadGb, double WriteGb) Stop()
+  {
+    _cancel.Cancel();
+    try
+    {
+      _sampler.Wait(3_000);
+    }
+    catch (AggregateException)
+    {
+    }
+
+    return (
+        Interlocked.Read(ref _readBytes) / (1024.0 * 1024.0 * 1024.0),
+        Interlocked.Read(ref _writeBytes) / (1024.0 * 1024.0 * 1024.0));
+  }
+
+  public void Dispose()
+  {
+    _cancel.Cancel();
+    _read.Dispose();
+    _write.Dispose();
+  }
 }
 
 [TestCaseOrderer(
@@ -100,9 +184,26 @@ public class VmCycleTests
     }
 
     var vms = new VmService();
+
+    // Ressourcen-Log: IO-Zähler von multipassd vor/nach dem Launch. Approximation
+    // (Prozess-IO inkl. Hyper-V-Layer, nicht physische Disk — aber gut genug, um
+    // die Größenordnung "wie viel GB schreibt ein Launch" festzuhalten).
+    using var io = ProcessIoMonitor.Start("multipassd");
+    if (io is null)
+    {
+      this.output.WriteLine("multipassd-Performance-Counter nicht verfügbar — IO-Messung übersprungen.");
+    }
+
     var create = vms.Create(VmCycleContext.VmName, "core26", null, cloudInitPath: configure.CloudInitPath);
     Assert.Equal(0, create.ExitCode);
     this.output.WriteLine($"launch: {create.DurationMs / 1000.0:F1} s");
+
+    if (io is { } monitor)
+    {
+      var (readGb, writeGb) = monitor.Stop();
+      VmCycleContext.LaunchGigabytesWritten = writeGb;
+      this.output.WriteLine($"multipassd-IO während launch: {writeGb:F2} GB geschrieben, {readGb:F2} GB gelesen");
+    }
   }
 
   [Fact]
@@ -273,6 +374,10 @@ public class VmCycleTests
     Assert.False(
         string.Equals(stopped.State, "Running", StringComparison.OrdinalIgnoreCase),
         $"State nach stop ist immer noch Running: {stopped.State}");
+
+    // Ressourcen-Log: gestaute Launch-Schreibmenge nochmal ausgeben, damit sie
+    // im Kontext des Abschlusses sichtbar ist (Reproduktion: EXPERIMENT_LOG).
+    this.output.WriteLine($"launch hat ~{VmCycleContext.LaunchGigabytesWritten:F2} GB an multipassd-IO geschrieben (siehe _2).");
   }
 
   [Fact]
@@ -305,3 +410,117 @@ public class VmCycleTests
     VmCycleContext.Store?.Dispose();
   }
 }
+
+/// <summary>
+/// Komponenten-Permutationen: für JEDE Komponente (claude, opencode, dotnet,
+/// python) ein eigener kleiner Zyklus — image-configure mit nur dieser
+/// Komponente, VM anlegen, per exec-Kanal verifizieren, purge. Läuft als
+/// [Theory] (4 Testfälle mit eigener Pass/Fail-Meldung), serialisiert in
+/// derselben ImageStore-Collection wie der Haupt-Zyklus (ein multipassd,
+/// ein statischer ImageStore).
+/// </summary>
+[Collection("ImageStore")]
+public class ComponentCycleTests
+{
+  private readonly ITestOutputHelper output;
+
+  public ComponentCycleTests(ITestOutputHelper output)
+  {
+    this.output = output;
+  }
+
+  public static TheoryData<string> Components => new()
+  {
+    "claude",
+    "opencode",
+    "dotnet",
+    "python"
+  };
+
+  [Theory]
+  [MemberData(nameof(Components))]
+  public void Vollzyklus_ProKomponente(string component)
+  {
+    if (VmCycleContext.SkipWithoutMultipass()) return;
+
+    var vmName = $"cbx-cmp-{component}";
+    var imageName = $"cbx-cmp-img-{component}";
+    var vms = new VmService();
+    var images = new ImageService(TestConfigs.Images);
+
+    using var store = new TempDirectory();
+    ImageStore.Initialize(store);
+
+    // Pre-Cleanup (abgebrochene Läufe).
+    if (vms.List().Any(v => v.Name == vmName))
+    {
+      vms.Delete(vmName, purge: true);
+    }
+
+    try
+    {
+      // Configure: nur DIESE Komponente.
+      var configure = images.Configure(imageName, [component], force: true);
+      Assert.True(File.Exists(configure.CloudInitPath ?? configure.ConfigPath),
+          "Weder cloud-init noch Build-Config erzeugt");
+
+      // Create + IO-Messung wie im Haupt-Zyklus.
+      using var io = ProcessIoMonitor.Start("multipassd");
+      var create = vms.Create(vmName, "core26", null, cloudInitPath: configure.CloudInitPath);
+      if (create.ExitCode != 0)
+      {
+        this.output.WriteLine($"launch fehlgeschlagen (exit {create.ExitCode}): {create.StdErr.Trim()}");
+      }
+
+      Assert.Equal(0, create.ExitCode);
+      this.output.WriteLine($"launch ({component}): {create.DurationMs / 1000.0:F1} s");
+      if (io is { } monitor)
+      {
+        var (readGb, writeGb) = monitor.Stop();
+        this.output.WriteLine($"multipassd-IO während launch: {writeGb:F2} GB geschrieben, {readGb:F2} GB gelesen");
+      }
+
+      // Verifizieren über den exec-Kanal. WaitFor pollt selbst — EINE
+      // großzügige Frist (Snaps brauchen nach First Boot oft ~2 min).
+      using var console = vms.OpenConsole(vmName, this.output.WriteLine);
+      var (verifyCommand, expected) = VerifyFor(component);
+      string result;
+      try
+      {
+        result = console.SendCommand($"{verifyCommand} 2>&1", expected, TimeSpan.FromMinutes(5));
+      }
+      catch (MultipassTimeoutException exception)
+      {
+        result = exception.StdOut;
+      }
+
+      Assert.True(result.Contains(expected, StringComparison.Ordinal),
+          $"{component}: Verifikation fehlgeschlagen. Letzte Ausgabe: {result.Trim()}");
+      this.output.WriteLine($"{component}: OK — {result.Trim()}");
+    }
+    finally
+    {
+      vms.Delete(vmName, purge: true);
+      images.Delete(imageName);
+    }
+  }
+
+  /// <summary>
+  /// Verifikationsbefehl je Komponente. Marker-Prinzip: `... && echo VERIFY-OK`
+  /// — der Marker kann NUR bei echtem Befehlserfolg erscheinen (schützt gegen
+  /// False Positives wie Snap-Namen in SSH-Fehlermeldungen). dotnet läuft über
+  /// Login-Shell (sh -l), weil LD_LIBRARY_PATH/DOTNET_ROOT in .profile stehen
+  /// — der Nicht-Login-exec-Kanal sieht die Env nicht (dokumentiertes Setup).
+  /// </summary>
+  private static (string Command, string Expected) VerifyFor(string component) => component switch
+  {
+    "claude" => ("snap list claude-code >/dev/null && echo VERIFY-OK", "VERIFY-OK"),
+    "opencode" => ("snap list opencode >/dev/null && echo VERIFY-OK", "VERIFY-OK"),
+    "dotnet" => ("sh -l -c '/home/ubuntu/.local/bin/dotnet --version' >/dev/null && echo VERIFY-OK", "VERIFY-OK"),
+    "python" => ("/home/ubuntu/.local/bin/python --version >/dev/null && echo VERIFY-OK", "VERIFY-OK"),
+    _ => throw new MultipassException($"Unbekannte Komponente: {component}")
+  };
+}
+
+
+

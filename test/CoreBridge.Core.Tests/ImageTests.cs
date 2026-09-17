@@ -34,10 +34,11 @@ public class TestConfigs
                     Destination = "/home/ubuntu/.local/lib"
                 }
             },
-            ["opencode"] = new() { Snap = "opencode" },
+            ["opencode"] = new() { Snap = "opencode", Classic = true },
             ["python"] = new()
             {
                 Snap = "python3-alt",
+                Classic = true,
                 Symlinks =
                 [
                     "/snap/bin/python3-alt.3-14|/home/ubuntu/.local/bin/python",
@@ -73,6 +74,16 @@ public class ImageCloudInitTests
         Assert.Contains("dpkg -x", yaml);
         Assert.Contains("libunwind8", yaml);
         Assert.Contains("chown -R ubuntu:ubuntu /home/ubuntu", yaml);
+    }
+
+    [Fact]
+    public void GenerateClassicSnaps_BekommenClassicFlag()
+    {
+        var yaml = ImageCloudInit.Generate("agent", TestConfigs.Images, new[] { "opencode", "python" });
+
+        Assert.Contains("- snap install opencode --classic", yaml);
+        Assert.Contains("- snap install python3-alt --classic", yaml);
+        Assert.DoesNotContain("snap install claude-code --classic", yaml);
     }
 
     [Fact]

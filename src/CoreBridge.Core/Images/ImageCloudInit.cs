@@ -37,16 +37,19 @@ public static class ImageCloudInit
         yaml.AppendLine("# (Image-Bau via `image-build` optional — Snaps sind hier ohnehin enthalten und");
         yaml.AppendLine("#  eine gebackene Version wäre idempotent.)");
 
-        var snaps = selected.Select(c => c.Snap).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        var snaps = selected
+            .Select(c => (c.Snap, c.Classic))
+            .DistinctBy(s => s.Snap, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
         if (snaps.Length > 0)
         {
             yaml.AppendLine();
-            yaml.AppendLine("# Store-Snaps (als root installiert)");
+            yaml.AppendLine("# Store-Snaps (als root installiert; --classic wo nötig)");
             yaml.AppendLine("snap:");
             yaml.AppendLine("  commands:");
-            foreach (var snap in snaps)
+            foreach (var (snap, classic) in snaps)
             {
-                yaml.AppendLine($"    - snap install {snap}");
+                yaml.AppendLine($"    - snap install {snap}{(classic ? " --classic" : string.Empty)}");
             }
         }
 
