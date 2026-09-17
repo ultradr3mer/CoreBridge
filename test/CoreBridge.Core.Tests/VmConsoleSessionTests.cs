@@ -10,7 +10,7 @@ namespace CoreBridge.Core.Tests;
 /// </summary>
 public class VmConsoleSessionTests
 {
-    private static VmConsoleSession StartPwsh()
+    private static VmConsoleSession StartPwsh(Action<string>? log = null)
     {
         return VmConsoleSession.Start(new ProcessStartInfo
         {
@@ -21,7 +21,16 @@ public class VmConsoleSessionTests
             RedirectStandardError = true,
             CreateNoWindow = true,
             Arguments = "-NoProfile -NoLogo"
-        });
+        }, log);
+    }
+
+    [Fact]
+    public void Log_Callback_SchreibtChunksLive()
+    {
+        var logged = new System.Text.StringBuilder();
+        using var session = StartPwsh(chunk => logged.Append(chunk));
+        session.SendCommand("Write-Output log-ok", "log-ok", TimeSpan.FromSeconds(30));
+        Assert.Contains("log-ok", logged.ToString());
     }
 
     [Fact]

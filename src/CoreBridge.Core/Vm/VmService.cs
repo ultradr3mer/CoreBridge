@@ -76,11 +76,25 @@ public sealed class VmService
     }
 
     /// <summary>
-    /// Testbare Konsolen-Session (multipass shell mit Pipes): Befehle senden,
-    /// Ausgaben prüfen. Für echtes interaktives Terminal weiterhin <c>Connect</c>.
+    /// Testbare Konsolen-Session auf der VM: Befehle senden, Ausgaben sammeln
+    /// und prüfen. Läuft über den exec-Kanal (pro Befehl ein exec) — gepipetes
+    /// stdin forwardet der Multipass-Windows-Client nicht, `multipass shell`
+    /// ist ohne TTY unbrauchbar. Optionaler log-Callback (z. B.
+    /// ITestOutputHelper.WriteLine im Test) schreibt die Ausgabe live mit.
     /// </summary>
-    public VmConsoleSession OpenConsole(string name)
+    public VmExecSession OpenConsole(string name, Action<string>? log = null)
     {
-        return VmConsoleSession.Open(name);
+        return new VmExecSession(name, log);
+    }
+
+    /// <summary>
+    /// Echte interaktive Shell über natives SSH (SSH.NET, PTY): gemeinsamer
+    /// Shell-Status, Prompt-Ausgabe, vm-connect in testbarer Form. Benötigt
+    /// SSH-Key auf der VM (cloud-init ssh_authorized_keys) — Verbindungsaufbau
+    /// nur Host→VM (Plan §6).
+    /// </summary>
+    public VmSshSession OpenSshSession(string name, Action<string>? log = null, string? privateKeyPath = null)
+    {
+        return VmSshSession.Open(name, log, privateKeyPath);
     }
 }
