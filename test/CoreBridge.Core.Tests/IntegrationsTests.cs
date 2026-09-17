@@ -165,14 +165,37 @@ public class VmCycleTests
     if (VmCycleContext.SkipWithoutMultipass()) return;
     var vms = new VmService();
 
-    // vm-connect (emuliert über Pipes). OHNE Prompt-Wait: ohne TTY gibt bash
-    // keinen Prompt aus (nur die Banner) — direkt Befehl senden und auf seine
-    // Ausgabe warten. Shell-Ausgabe läuft live via output.WriteLine mit.
+    // vm-connect (emuliert über den exec-Kanal): cloud-init abwarten, dann die
+    // Komponente verifizieren. claude-code selbst aufzurufen geht nicht —
+    // classic Snap zur Laufzeit auf Core bricht mit permission denied (siehe
+    // Log), und interaktiv würde es auf Login warten. Getestet wird: der Snap
+    // kommt per cloud-init an (Komponenten-Leistung), nicht seine Interaktivität.
     using var console = vms.OpenConsole(VmCycleContext.VmName, this.output.WriteLine);
     try
     {
-      var output = console.SendCommand("echo console-ok", "console-ok", TimeSpan.FromSeconds(30));
-      Assert.Contains("console-ok", output);
+      // Nur Status LOGGEN (kein --wait): core26-Katalog-Image meldet teils
+      // "status: disabled" — dann würde --wait ewig hängen.
+      var status = console.SendCommand("cloud-init status", "status:", TimeSpan.FromSeconds(30));
+      this.output.WriteLine(status.Trim());
+
+      // Snap-Installation prüfen — cloud-init/Snapd arbeiten asynchron nach
+      // dem Boot, deshalb Retry über mehrere Minuten.
+      string snapList = string.Empty;
+      var found = false;
+      for (var attempt = 1; attempt <= 10 && !found; attempt++)
+      {
+        snapList = console.SendCommand("snap list claude-code 2>&1", "claude-code", TimeSpan.FromSeconds(30));
+        found = snapList.Contains("claude-code", StringComparison.Ordinal)
+                && !snapList.Contains("no matching snaps", StringComparison.Ordinal);
+        if (!found)
+        {
+          this.output.WriteLine($"snap list Versuch {attempt}: noch nicht da — warte 30 s ...");
+          Thread.Sleep(30_000);
+        }
+      }
+
+      Assert.True(found, $"claude-code-Snap nicht installiert. cloud-init: {status.Trim()}; snap list: {snapList.Trim()}");
+      this.output.WriteLine(snapList.Trim());
     }
     catch (MultipassTimeoutException exception)
     {
