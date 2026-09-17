@@ -1,11 +1,33 @@
 ﻿using CommandLine;
+using CoreBridge.Core.Config;
 using CoreBridge.Core.Vm;
+using Microsoft.Extensions.Configuration;
 
 namespace CoreBridge.Cli;
 
 public static class Program
 {
     private static readonly VmService Vms = new();
+    private static readonly AppConfig Config = LoadConfig();
+
+    /// <summary>
+    /// Leitsatz 6: CLI und TUI lesen dieselbe Config-Quelle. Reihenfolge:
+    /// appsettings.json → appsettings.local.json (gitignored) → Env-Variablen
+    /// (Doppelter Unterstrich, z. B. Images__Build__VmName). Keine Passwörter
+    /// in der Config — Secrets laufen über die CORE_BRIDGE_*_PASSWORD-Env-Kette.
+    /// </summary>
+    private static AppConfig LoadConfig()
+    {
+        var configuration = new ConfigurationBuilder()
+            .SetBasePath(AppContext.BaseDirectory)
+            .AddJsonFile("appsettings.json", optional: false)
+            .AddJsonFile("appsettings.local.json", optional: true)
+            .AddEnvironmentVariables()
+            .Build();
+
+        return configuration.Get<AppConfig>()
+            ?? throw new InvalidOperationException("Konfiguration konnte nicht gebunden werden (appsettings.json).");
+    }
 
     public static int Main(string[] args)
     {
@@ -21,7 +43,9 @@ public static class Program
                 typeof(VmExecOptions),
                 typeof(VmConnectOptions),
                 typeof(VmPutOptions),
-                typeof(VmGetOptions)
+                typeof(VmGetOptions),
+                typeof(ImageConfigureOptions),
+                typeof(ImageBuildOptions)
             })
             .MapResult(
                 (DoctorOptions _) => Guard(RunDoctor),
@@ -33,6 +57,8 @@ public static class Program
                 (VmConnectOptions o) => Guard(() => Vms.Connect(o.Name)),
                 (VmPutOptions o) => Guard(() => RunVmPut(o)),
                 (VmGetOptions o) => Guard(() => RunVmGet(o)),
+                (ImageConfigureOptions o) => Guard(() => RunImageConfigure(o)),
+                (ImageBuildOptions o) => Guard(() => RunImageBuild(o)),
                 errs => errs.Any(e => e.Tag is ErrorType.HelpRequestedError
                     or ErrorType.VersionRequestedError
                     or ErrorType.HelpVerbRequestedError)
@@ -118,8 +144,11 @@ public static class Program
 
     private static int RunVmCreate(VmCreateOptions options)
     {
-        Console.WriteLine($"Lege VM `{options.Name}` an (Image: {options.Image}{(options.Disk is null ? string.Empty : $", Disk: {options.Disk}")}) ...");
-        var result = Vms.Create(options.Name, options.Image, options.Disk);
+        Console.WriteLine(
+            $"Lege VM `{options.Name}` an (Image: {options.Image}"
+            + $"{(options.Disk is null ? string.Empty : $", Disk: {options.Disk}")}"
+            + $"{(options.CloudInit is null ? string.Empty : ", cloud-init")}) ...");
+        var result = Vms.Create(options.Name, options.Image, options.Disk, cloudInitPath: options.CloudInit);
         if (result.ExitCode == 0)
         {
             Console.WriteLine($"OK — {result.DurationMs / 1000.0:F1} s");
@@ -181,5 +210,48 @@ public static class Program
         }
 
         return Report(result);
+    }
+
+    private static int RunImageConfigure(ImageConfigureOptions options)
+    {
+        var components = options.Components.Split(',', StringSplitOptions.RemoveEmptyEntries);
+        var images = new CoreBridge.Core.Images.ImageService(Config.Images);
+        var result = images.Configure(options.Name, components, options.ModelUrl);
+
+        Console.WriteLine($"Image '{result.Name}' konfiguriert — Snaps im Image: {string.Join(", ", result.Snaps)}");
+        Console.WriteLine($"  Modell:   {result.ModelPath} (Canonical dangerous, unverändert signiert)");
+        Console.WriteLine($"  Config:   {result.ConfigPath}");
+        if (result.CloudInitPath is null)
+        {
+            Console.WriteLine("  cloud-init: nicht nötig (alle Komponenten reine Snaps).");
+        }
+        else
+        {
+            Console.WriteLine($"  cloud-init: {result.CloudInitPath} (Symlinks/.profile/vendored libs)");
+            Console.WriteLine($"    -> beim Launch mitgeben: cb vm-create --name <vm> --image <img> --cloud-init \"{result.CloudInitPath}\"");
+        }
+
+        Console.WriteLine();
+        Console.WriteLine($"Naechster Schritt: cb image-build --name {result.Name}");
+        return 0;
+    }
+
+    private static int RunImageBuild(ImageBuildOptions options)
+    {
+        var images = new CoreBridge.Core.Images.ImageService(Config.Images);
+        var buildVm = options.BuildVmName ?? Config.Images.Build.VmName;
+        Console.WriteLine($"Baue Image '{options.Name}' in Bau-VM '{buildVm}' (ubuntu-image + --snap) ...");
+        var result = images.Build(
+            options.Name,
+            options.BuildVmName,
+            options.BuildImage,
+            options.Disk,
+            options.TimeoutSeconds,
+            options.Destination);
+
+        var megaBytes = new FileInfo(result.ImagePath).Length / (1024.0 * 1024.0);
+        Console.WriteLine($"OK — {result.ImagePath} ({megaBytes:N0} MB, {result.DurationMs / 1000.0:F1} s)");
+        Console.WriteLine("Hinweis: Import via `multipass launch <url>` — unter Windows NICHT via file:// (multipass 1.16.3 Bug), sondern https:// (siehe EXPERIMENT_LOG T11).");
+        return 0;
     }
 }

@@ -70,6 +70,28 @@ ein Ergebnis.
   dem Papierkorb übernehmen kann (T03-Rerun würde es klären).
 - Multipass 1.16.3 liegt im **User-PATH** (`C:\Program Files\Multipass\bin`), NICHT
   machine-weit → Locator-Stufe 2 (PATH) greift bereits.
+- **Custom-Image-Pipeline als CLI-Verbs (17.09.2026):**
+  - `cb image-configure --name <n> [-c claude,dotnet,opencode,python] [--model-url <url>]`
+    lädt das Basis-Modell (Canonical `ubuntu-core-26-amd64-dangerous.model`, signiert,
+    unverändert — Custom-Snaps gehen als `ubuntu-image --snap`-Flags, kein Selbst-Signieren
+    nötig), schreibt `<n>.build.json` + (falls Komponenten Nicht-Snap-Rest haben) eine
+    cloud-init-YAML nach `%LOCALAPPDATA%\CoreBridge\models\<n>\`.
+  - `cb image-build --name <n>` macht, was früher `scripts/build-coreimage.ps1` tat:
+    Bau-VM (Default aus Config) + `ubuntu-image snap` + `--snap <store-snap>` pro
+    Komponente + `vm-get` der pc.img nach `%LOCALAPPDATA%\CoreBridge\images\<n>.img`.
+    `build-coreimage.ps1` ist damit ersetzt (kann entfallen, sobald image-build
+    einmal gelaufen ist — noch NICHT end-to-end verifiziert).
+  - **Konfiguration statt Hardcoding (Leitsatz 6 umgesetzt):** alle Komponenten-
+    Definitionen (Snap-Name, Symlinks, .profile-Exports, vendored Libs mit ldd-Guard)
+    und Bau-Defaults stehen in `src/CoreBridge.Cli/appsettings.json`, gebunden über
+    `ConfigurationBuilder` (appsettings.json → appsettings.local.json (gitignored)
+    → Env `Images__…`) auf `AppConfig` in `CoreBridge.Core/Config/`. Neue Komponente
+    = Config-Eintrag, kein Code. Keine Passwörter in der Config (Regel bleibt).
+  - Nicht-Snap-Rest (dotnet/python-Symlinks, DOTNET_ROOT/LD_LIBRARY_PATH, vendored
+    Libs, Claude-Binary-Modus) läuft über die generierte cloud-init, die beim
+    `vm-create --cloud-init` mitgegeben wird. `vm-create` hat dafür `--cloud-init`.
+  - `bootstrap-agent-vm.ps1` bleibt bis zur Verifikation als Fallback; danach
+    kann es auf den Claude-Binary-Modus reduziert oder entfernt werden.
 - **WIP/offene Fäden (17.09.2026):**
   (a) ENTSCHIEDEN (Nutzer, 17.09.2026): Snap `claude-code` ist der DEFAULT-Weg
   (`bootstrap-agent-vm.ps1 -ClaudeInstallMode snap`). Publisher `pfsmorigo*`
@@ -90,6 +112,12 @@ ein Ergebnis.
   End-to-end noch nicht verifiziert.
   (d) `cbx-t11-build2` läuft noch (Bau-Werkzeug, Wegwerf); 6 cbx-VMs liegen im
   Multipass-Papierkorb und belegen Platz (purge tabu für Agenten).
+- **Hyper-V-VM-Gruppe**: `scripts/group-vms.ps1` hält cbx-*-VMs (Multipass
+  benennt Hyper-V-VMs wie Instanzen) in einer VMCollection-Gruppe (Default
+  „CoreBridge“). Benötigt Hyper-V-Rechte → in elevated PowerShell laufen
+  lassen; idempotent, einfach nach neuen cbx-VMs erneut ausführen.
+  `-Remove` entfernt die Gruppe (nur Metadaten — multipassd merkt nichts davon,
+  VMs selbst bleiben unberührt).
 - Neue Experimente (T11+) NUR nach ausdrücklicher Freigabe.
 
 ## Soll-Struktur

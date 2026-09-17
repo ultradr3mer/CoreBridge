@@ -15,13 +15,19 @@ public sealed class VmService
         return MultipassVmList.Parse(result.StdOut);
     }
 
-    public MultipassRunResult Create(string name, string image, string? disk = null, int timeoutMs = 2_400_000)
+    public MultipassRunResult Create(string name, string image, string? disk = null, int timeoutMs = 2_400_000, string? cloudInitPath = null)
     {
         var args = new List<string> { "launch", image, "--name", name };
         if (disk is not null)
         {
             args.Add("--disk");
             args.Add(disk);
+        }
+
+        if (cloudInitPath is not null)
+        {
+            args.Add("--cloud-init");
+            args.Add(cloudInitPath);
         }
 
         return _cli.Run(args, timeoutMs);

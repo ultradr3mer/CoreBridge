@@ -21,8 +21,46 @@ public sealed class VmCreateOptions
     [Option('i', "image", Default = "core26", HelpText = "Image aus dem multipass-Katalog oder eine file://-URL.")]
     public string Image { get; set; } = "core26";
 
+    [Option('c', "cloud-init", HelpText = "Pfad zu einer cloud-init-YAML (z. B. aus image-configure).")]
+    public string? CloudInit { get; set; }
+
     [Option('d', "disk", HelpText = "Disk-Größe, z. B. 20G (multipass-Standard: 5G).")]
     public string? Disk { get; set; }
+}
+
+[Verb("image-configure", HelpText = "Erzeugt Build-Config, Basis-Modell (Canonical dangerous, signiert) und cloud-init für ein Custom-Image.")]
+public sealed class ImageConfigureOptions
+{
+    [Option('n', "name", Required = true, HelpText = "Name des Images (Namespace für Modell/Config/cloud-init/Ausgabe-.img).")]
+    public string Name { get; set; } = string.Empty;
+
+    [Option('c', "components", Default = "claude,dotnet", HelpText = "Komma-Liste der Komponenten (verfügbar laut Config Images:Components, z. B. claude,dotnet,opencode,python).")]
+    public string Components { get; set; } = "claude,dotnet";
+
+    [Option("model-url", HelpText = "URL des Basis-Modells (Standard: Config Images:DefaultModelUrl).")]
+    public string? ModelUrl { get; set; }
+}
+
+[Verb("image-build", HelpText = "Baut das Custom-Image in einer klassischen Ubuntu-Bau-VM (ubuntu-image + --snap) und holt die .img auf den Host.")]
+public sealed class ImageBuildOptions
+{
+    [Option('n', "name", Required = true, HelpText = "Name des Images (muss mit image-configure konfiguriert sein).")]
+    public string Name { get; set; } = string.Empty;
+
+    [Option("build-vm", HelpText = "Name der Bau-VM (klassisches Ubuntu; wird bei Bedarf angelegt). Standard: Config Images:Build:VmName.")]
+    public string? BuildVmName { get; set; }
+
+    [Option("build-image", HelpText = "Katalog-Image der Bau-VM. Standard: Config Images:Build:Image.")]
+    public string? BuildImage { get; set; }
+
+    [Option('d', "disk", HelpText = "Disk-Größe der Bau-VM. Standard: Config Images:Build:Disk.")]
+    public string? Disk { get; set; }
+
+    [Option('t', "timeout", HelpText = "Timeout für den ubuntu-image-Lauf in Sekunden. Standard: Config Images:Build:TimeoutSeconds.")]
+    public int? TimeoutSeconds { get; set; }
+
+    [Option('o', "destination", HelpText = "Lokaler Zielpfad der .img (Standard: %LOCALAPPDATA%\\CoreBridge\\images\\<name>.img).")]
+    public string? Destination { get; set; }
 }
 
 [Verb("vm-start", HelpText = "Startet eine gestoppte VM.")]

@@ -430,3 +430,6 @@ FodyWeavers.xsd
 
 # Lokaler Multipass-Doku-Clone (blobless, refs/multipass)
 /refs/
+
+# Lokale Config-Overrides (keine Secrets, aber maschinenspezifisch)
+appsettings.local.json

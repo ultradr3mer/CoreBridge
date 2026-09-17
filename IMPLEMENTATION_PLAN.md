@@ -251,4 +251,11 @@ pro Konfiguration änderbar:
             `scripts/build-coreimage.ps1`, kein Ubuntu One nötig); Import nach
             Multipass unter Windows blockiert (1.16.3: file://-Client-Mangling +
             erzwungenes https) — offen: https-Workaround oder Upstream-Bugfix.
+      - [ ] Custom-Image-Pipeline als CLI-Verbs (17.09.2026, `image-configure`/
+            `image-build`, config-getrieben via `AppConfig`/`ConfigurationBuilder` —
+            Leitsatz 6): `build-coreimage.ps1` damit ersetzt; `image-configure`
+            verifiziert (Modell-Download + cloud-init-Generierung), `image-build`
+            NOCH NICHT end-to-end verifiziert. `vm-create --cloud-init` für den
+            Nicht-Snap-Rest (Symlinks/.profile/vendored Libs); runcmd-Anteil auf
+            core26 unbewiesen (write_files bewiesen via T06).
       - [ ] Git-/Sync-Topologie, Autobridge, Secret-Scanning, TUI
