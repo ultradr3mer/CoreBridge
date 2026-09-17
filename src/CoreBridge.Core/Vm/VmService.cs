@@ -15,9 +15,16 @@ public sealed class VmService
         return MultipassVmList.Parse(result.StdOut);
     }
 
-    public MultipassRunResult Create(string name, string image, int timeoutMs = 2_400_000)
+    public MultipassRunResult Create(string name, string image, string? disk = null, int timeoutMs = 2_400_000)
     {
-        return _cli.Run(new[] { "launch", image, "--name", name }, timeoutMs);
+        var args = new List<string> { "launch", image, "--name", name };
+        if (disk is not null)
+        {
+            args.Add("--disk");
+            args.Add(disk);
+        }
+
+        return _cli.Run(args, timeoutMs);
     }
 
     public MultipassRunResult Start(string name)
@@ -44,6 +51,11 @@ public sealed class VmService
     {
         var target = remotePath is null ? Path.GetFileName(localPath) : remotePath;
         return _cli.Run(new[] { "transfer", localPath, $"{name}:{target}" }, timeoutMs);
+    }
+
+    public MultipassRunResult Get(string name, string remotePath, string localPath, int timeoutMs = 600_000)
+    {
+        return _cli.Run(new[] { "transfer", $"{name}:{remotePath}", localPath }, timeoutMs);
     }
 
     public int Connect(string name)

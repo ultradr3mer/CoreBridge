@@ -1487,3 +1487,76 @@ Roh-Ausgabe:
 ```
 aktiv übrig: keine
 ```
+
+## T11 — file://-Launch des lokal gebauten core26-Images (dangerous-Modell, Canonical-signiert) — 2026-09-17 02:41:13
+
+- Kommando: `multipass launch file:///C:/Users/Clara/AppData/Local/CoreBridge/images/cbx-core26.img --name cbx-t11-local`
+- Binary: `C:\Program Files\Multipass\bin\multipass.exe`
+- Exit-Code: 2
+- Dauer: 793 ms
+- Rohdaten: `experiment-data/T11-20260917-024113-691.json`
+- Beobachtung: Dauer: 793 ms — Image: C:\Users\Clara\AppData\Local\CoreBridge\images\cbx-core26.img
+
+Roh-Ausgabe:
+
+```
+[2K[0A[0E[2K[0A[0ECreating cbx-t11-local  /-\|/ [2K[0A[0E[2K[0A[0E
+
+StdErr:
+launch failed: Invalid file URL `file://F:/C:/Users/Clara/AppData/Local/CoreBridge/images/cbx-core26.img`; did you forget a slash?
+```
+
+## T11 — file://-Launch des lokal gebauten core26-Images (dangerous-Modell, Canonical-signiert) — 2026-09-17 02:41:45
+
+- Kommando: `multipass launch file://C:/Users/Clara/AppData/Local/CoreBridge/images/cbx-core26.img --name cbx-t11-local`
+- Binary: `C:\Program Files\Multipass\bin\multipass.exe`
+- Exit-Code: 2
+- Dauer: 497 ms
+- Rohdaten: `experiment-data/T11-20260917-024145-304.json`
+- Beobachtung: Dauer: 497 ms — Image: C:\Users\Clara\AppData\Local\CoreBridge\images\cbx-core26.img
+
+Roh-Ausgabe:
+
+```
+[2K[0A[0E[2K[0A[0ECreating cbx-t11-local  /-\| [2K[0A[0E[2K[0A[0E
+
+StdErr:
+launch failed: Invalid file URL `file://C:/Users/Clara/AppData/Local/CoreBridge/images/cbx-core26.img`; did you forget a slash?
+```
+
+## T11 — file://-Launch des lokal gebauten core26-Images (dangerous-Modell, Canonical-signiert) — 2026-09-17 02:46:36
+
+- Kommando: `multipass launch file://///localhost/C$/Users/Clara/AppData/Local/CoreBridge/images/cbx-core26.img --name cbx-t11-local`
+- Binary: `C:\Program Files\Multipass\bin\multipass.exe`
+- Exit-Code: 2
+- Dauer: 743 ms
+- Rohdaten: `experiment-data/T11-20260917-024636-391.json`
+- Beobachtung: Dauer: 743 ms — Image: C:\Users\Clara\AppData\Local\CoreBridge\images\cbx-core26.img
+
+Roh-Ausgabe:
+
+```
+[2K[0A[0E[2K[0A[0ECreating cbx-t11-local  /-\| [2K[0A[0E[2K[0A[0E
+
+StdErr:
+launch failed: Custom image `///localhost/C$/Users/Clara/AppData/Local/CoreBridge/images/cbx-core26.img` does not exist.
+```
+
+## T11 — Custom-Image-Launch des lokal gebauten core26-Images (dangerous-Modell, Canonical-signiert) — 2026-09-17 02:48:06
+
+- Kommando: `multipass launch http://127.0.0.1:8017/cbx-core26.img --name cbx-t11-local`
+- Binary: `C:\Program Files\Multipass\bin\multipass.exe`
+- Exit-Code: 2
+- Dauer: 509 ms
+- Rohdaten: `experiment-data/T11-20260917-024806-628.json`
+- Beobachtung: Dauer: 509 ms — URL: http://127.0.0.1:8017/cbx-core26.img (lokal: C:\Users\Clara\AppData\Local\CoreBridge\images\cbx-core26.img)
+
+Roh-Ausgabe:
+
+```
+[2K[0A[0E[2K[0A[0ECreating cbx-t11-local  / [2K[0A[0E[2K[0A[0ECreating cbx-t11-local  /-\| [2K[0A[0E[2K[0A[0E
+
+StdErr:
+[2026-09-17T02:48:06.195] [error] [url downloader] Cannot retrieve headers for https://127.0.0.1:8017/cbx-core26.img: SSL handshake failed
+launch failed: failed to download from 'https://127.0.0.1:8017/cbx-core26.img': SSL handshake failed
+```

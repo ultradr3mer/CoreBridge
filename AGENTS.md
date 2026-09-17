@@ -42,6 +42,15 @@ ein Ergebnis.
   Core hat keines von beidem): Host lädt Binary von downloads.claude.ai,
   `vm-put` + `chmod +x`, Login-Shell findet es über ~/.local/bin. Das ist der
   Bootstrap-Pfad für die Autobridge (Phase D).
+- **.NET SDK 10 läuft auf core26** (bewiesen inkl. `dotnet new/run` + NuGet-Restore):
+  `snap install dotnet-sdk-100` (classic Snap — geht auf Core 26 DOCH), Symlink
+  nach `~/.local/bin` (/usr/local ist read-only), vendored `libunwind8` + `libicu78`
+  aus Ubuntu-debs nach `~/.local/lib` + `LD_LIBRARY_PATH`, `DOTNET_ROOT` in
+  `~/.profile`. Reproduzierbar: `scripts/bootstrap-agent-vm.ps1 -VmName <vm>`.
+- Custom-Image (T11): Bau komplett lokal bewiesen (`scripts/build-coreimage.ps1`,
+  Canonical-dangerous-Modell, kein Ubuntu One). Import nach Multipass unter Windows
+  BLOCKIERT (multipass 1.16.3: file://-Client-Mangling + erzwungenes https) —
+  Auswege: https-Workaround (Zertifikat) oder Upstream-Bugfix.
 - T01–T10 sind implementiert und gelaufen; alle Messwerte in `EXPERIMENT_LOG.md`
   (volle Rohdaten unter `experiment-data/`). Kernaussagen: launch core26 kalt
   88,5 s / warm 58,2 s; exec-Roundtrip ~130 ms mit sauberer Exit-Code-Weitergabe;
@@ -115,6 +124,10 @@ ein Ergebnis.
 - **Build-Lock**: Läuft noch eine CoreBridge.Cli-Instanz (z. B. offenes
   `cb vm-connect`), sperrt sie `CoreBridge.Core.dll` und der Debug-Build schlägt
   fehl (MSB3027). Session beenden oder mit `-c Release` bauen/ausführen.
+- **Quoting-Falle bei `vm-exec --command`**: In PowerShell IMMER Single-Quotes um
+  den Command-Befehl — Double-Quotes lassen den Host `$HOME`/`$(...)` expandieren
+  und schreiben Müll in VM-Dateien. Shell-Variablen innerhalb des Befehls laufen
+  über `\$` in sh-Double-Quotes.
 - Alle Tests: `dotnet test` · nur Experiments: `dotnet test test/Multipass.Experiments`
 - Einzelnes Experiment: `dotnet test test/Multipass.Experiments --filter "FullyQualifiedName~T01"`
 - Binary-Override für Tests: Env `CORE_BRIDGE_MULTIPASS_EXE`

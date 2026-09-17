@@ -20,18 +20,19 @@ public static class Program
                 typeof(VmDeleteOptions),
                 typeof(VmExecOptions),
                 typeof(VmConnectOptions),
-                typeof(VmPutOptions)
+                typeof(VmPutOptions),
+                typeof(VmGetOptions)
             })
             .MapResult(
                 (DoctorOptions _) => Guard(RunDoctor),
                 (VmListOptions _) => Guard(RunVmList),
-                (VmCreateOptions o) => Guard(() => RunVmCreate(o)),
-                (VmStartOptions o) => Guard(() => RunSimpleVmCommand($"start {o.Name}", () => Vms.Start(o.Name))),
+                (VmCreateOptions o) => Guard(() => RunVmCreate(o)),                (VmStartOptions o) => Guard(() => RunSimpleVmCommand($"start {o.Name}", () => Vms.Start(o.Name))),
                 (VmStopOptions o) => Guard(() => RunSimpleVmCommand($"stop {o.Name}", () => Vms.Stop(o.Name))),
                 (VmDeleteOptions o) => Guard(() => RunSimpleVmCommand($"delete {o.Name}", () => Vms.Delete(o.Name))),
-                (VmExecOptions o) => Guard(() => Report(Vms.Exec(o.Name, o.Command))),
+                (VmExecOptions o) => Guard(() => Report(Vms.Exec(o.Name, o.Command, o.TimeoutSeconds * 1000))),
                 (VmConnectOptions o) => Guard(() => Vms.Connect(o.Name)),
                 (VmPutOptions o) => Guard(() => RunVmPut(o)),
+                (VmGetOptions o) => Guard(() => RunVmGet(o)),
                 errs => errs.Any(e => e.Tag is ErrorType.HelpRequestedError
                     or ErrorType.VersionRequestedError
                     or ErrorType.HelpVerbRequestedError)
@@ -117,8 +118,8 @@ public static class Program
 
     private static int RunVmCreate(VmCreateOptions options)
     {
-        Console.WriteLine($"Lege VM `{options.Name}` an (Image: {options.Image}) ...");
-        var result = Vms.Create(options.Name, options.Image);
+        Console.WriteLine($"Lege VM `{options.Name}` an (Image: {options.Image}{(options.Disk is null ? string.Empty : $", Disk: {options.Disk}")}) ...");
+        var result = Vms.Create(options.Name, options.Image, options.Disk);
         if (result.ExitCode == 0)
         {
             Console.WriteLine($"OK — {result.DurationMs / 1000.0:F1} s");
@@ -152,6 +153,30 @@ public static class Program
         if (result.ExitCode == 0)
         {
             Console.WriteLine($"transfer: OK ({result.DurationMs / 1000.0:F1} s)");
+            return 0;
+        }
+
+        return Report(result);
+    }
+
+    private static int RunVmGet(VmGetOptions options)
+    {
+        var targetDirectory = Path.GetDirectoryName(Path.GetFullPath(options.Destination));
+        if (!string.IsNullOrEmpty(targetDirectory) && !Directory.Exists(targetDirectory))
+        {
+            Directory.CreateDirectory(targetDirectory);
+        }
+
+        var result = Vms.Get(options.Name, options.Remote, options.Destination);
+        if (File.Exists(options.Destination))
+        {
+            var megaBytes = new FileInfo(options.Destination).Length / (1024.0 * 1024.0);
+            Console.WriteLine($"transfer: OK — {megaBytes:N0} MB ({result.DurationMs / 1000.0:F1} s)");
+            if (result.ExitCode != 0)
+            {
+                Console.WriteLine($"Hinweis: Exit-Code {result.ExitCode} — {result.StdErr.Trim()}");
+            }
+
             return 0;
         }
 

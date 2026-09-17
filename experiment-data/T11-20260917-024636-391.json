@@ -1,0 +1,12 @@
+{
+  "Id": "T11",
+  "Title": "file://-Launch des lokal gebauten core26-Images (dangerous-Modell, Canonical-signiert)",
+  "Command": "launch file://///localhost/C$/Users/Clara/AppData/Local/CoreBridge/images/cbx-core26.img --name cbx-t11-local",
+  "Binary": "C:\\Program Files\\Multipass\\bin\\multipass.exe",
+  "ExitCode": 2,
+  "DurationMs": 743,
+  "StartedAt": "2026-09-17T02:46:36.3916008+02:00",
+  "Observation": "Dauer: 743 ms \u2014 Image: C:\\Users\\Clara\\AppData\\Local\\CoreBridge\\images\\cbx-core26.img",
+  "StdOut": "\u001B[2K\u001B[0A\u001B[0E\u001B[2K\u001B[0A\u001B[0ECreating cbx-t11-local  \b/\b-\b\\\b|\b \u001B[2K\u001B[0A\u001B[0E\u001B[2K\u001B[0A\u001B[0E",
+  "StdErr": "launch failed: Custom image \u0060///localhost/C$/Users/Clara/AppData/Local/CoreBridge/images/cbx-core26.img\u0060 does not exist.\r\n"
+}

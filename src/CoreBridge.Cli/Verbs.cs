@@ -18,8 +18,11 @@ public sealed class VmCreateOptions
     [Option('n', "name", Required = true, HelpText = "Name der neuen VM.")]
     public string Name { get; set; } = string.Empty;
 
-    [Option('i', "image", Default = "core26", HelpText = "Image aus dem multipass-Katalog.")]
+    [Option('i', "image", Default = "core26", HelpText = "Image aus dem multipass-Katalog oder eine file://-URL.")]
     public string Image { get; set; } = "core26";
+
+    [Option('d', "disk", HelpText = "Disk-Größe, z. B. 20G (multipass-Standard: 5G).")]
+    public string? Disk { get; set; }
 }
 
 [Verb("vm-start", HelpText = "Startet eine gestoppte VM.")]
@@ -51,6 +54,22 @@ public sealed class VmExecOptions
 
     [Option('c', "command", Required = true, HelpText = "Kommando, das in der VM ausgeführt wird.")]
     public string Command { get; set; } = string.Empty;
+
+    [Option('t', "timeout", Default = 600, HelpText = "Timeout in Sekunden (Standard: 600).")]
+    public int TimeoutSeconds { get; set; } = 600;
+}
+
+[Verb("vm-get", HelpText = "Kopiert eine Datei von der VM auf den Host (multipass transfer).")]
+public sealed class VmGetOptions
+{
+    [Option('n', "name", Required = true, HelpText = "Name der VM.")]
+    public string Name { get; set; } = string.Empty;
+
+    [Option('r', "remote", Required = true, HelpText = "Pfad der Datei in der VM.")]
+    public string Remote { get; set; } = string.Empty;
+
+    [Option('d', "destination", Required = true, HelpText = "Lokaler Zielpfad auf dem Host.")]
+    public string Destination { get; set; } = string.Empty;
 }
 
 [Verb("vm-connect", HelpText = "Öffnet eine interaktive Shell in der VM.")]

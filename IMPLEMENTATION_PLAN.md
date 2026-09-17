@@ -239,4 +239,16 @@ pro Konfiguration änderbar:
             Checksum-geprüft gegen das Release-Manifest): läuft auf core26 ohne
             npm/curl (`claude --version` = 2.1.273) — Bootstrap-Pfad für
             Autobridge-Agenten steht damit grundsätzlich.
+      - [x] .NET SDK 10 auf core26 bewiesen (17.09.2026): classic Snap
+            `dotnet-sdk-100` installiert und läuft DOCH auf Core 26 (Annahme
+            „classic geht auf Core nicht" ist widerlegt); nötig sind vendored
+            `libunwind8`/`libicu78` nach `~/.local/lib` (Core hat sie nicht) +
+            `LD_LIBRARY_PATH`/`DOTNET_ROOT` in `~/.profile`, Symlink nach
+            `~/.local/bin` statt /usr/local (read-only). Volltest inkl.
+            `dotnet new/run` + NuGet-Restore über HTTPS erfolgreich.
+            Reproduzierbar: `scripts/bootstrap-agent-vm.ps1`.
+      - [ ] T11 Custom-Image: Bau lokal bewiesen (Canonical-dangerous-Modell,
+            `scripts/build-coreimage.ps1`, kein Ubuntu One nötig); Import nach
+            Multipass unter Windows blockiert (1.16.3: file://-Client-Mangling +
+            erzwungenes https) — offen: https-Workaround oder Upstream-Bugfix.
       - [ ] Git-/Sync-Topologie, Autobridge, Secret-Scanning, TUI

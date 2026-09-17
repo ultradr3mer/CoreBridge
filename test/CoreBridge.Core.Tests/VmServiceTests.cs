@@ -36,6 +36,17 @@ public class VmServiceTests
     }
 
     [Fact]
+    public void CreateMitDiskUebergibtOption()
+    {
+        var cli = new FakeMultipassCli(EmptyResult);
+        var service = new VmService(cli);
+
+        service.Create("cbx-test", "26.04", "20G");
+
+        Assert.Equal(new[] { "launch", "26.04", "--name", "cbx-test", "--disk", "20G" }, cli.Calls[0]);
+    }
+
+    [Fact]
     public void StartStopDeleteVerwendenNamen()
     {
         var cli = new FakeMultipassCli(EmptyResult);
@@ -92,6 +103,17 @@ public class VmServiceTests
         service.Put(@"C:\temp\datei.txt", "cbx-test", ".local/bin/tool");
 
         Assert.Equal(new[] { "transfer", @"C:\temp\datei.txt", "cbx-test:.local/bin/tool" }, cli.Calls[0]);
+    }
+
+    [Fact]
+    public void GetTransferiertVonVmAufHost()
+    {
+        var cli = new FakeMultipassCli(EmptyResult);
+        var service = new VmService(cli);
+
+        service.Get("cbx-test", "/home/ubuntu/x.img", @"C:\images\x.img");
+
+        Assert.Equal(new[] { "transfer", "cbx-test:/home/ubuntu/x.img", @"C:\images\x.img" }, cli.Calls[0]);
     }
 
     private static MultipassRunResult EmptyResult(string[] _) => new(0, string.Empty, string.Empty, 1);
