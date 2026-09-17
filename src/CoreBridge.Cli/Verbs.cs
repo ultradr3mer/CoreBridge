@@ -59,3 +59,16 @@ public sealed class VmConnectOptions
     [Option('n', "name", Required = true, HelpText = "Name der VM.")]
     public string Name { get; set; } = string.Empty;
 }
+
+[Verb("vm-put", HelpText = "Kopiert eine Datei vom Host in die VM (multipass transfer).")]
+public sealed class VmPutOptions
+{
+    [Option('n', "name", Required = true, HelpText = "Name der VM.")]
+    public string Name { get; set; } = string.Empty;
+
+    [Option('s', "source", Required = true, HelpText = "Lokale Datei auf dem Host.")]
+    public string Source { get; set; } = string.Empty;
+
+    [Option('d', "destination", HelpText = "Zielpfad in der VM, relativ zu $HOME (Standard: Dateiname).")]
+    public string? Destination { get; set; }
+}

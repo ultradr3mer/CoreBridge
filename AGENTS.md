@@ -34,9 +34,14 @@ ein Ergebnis.
   (Verbs: `doctor`, `vm-list`, `vm-create`, `vm-start`, `vm-stop`, `vm-delete`,
   `vm-exec`, `vm-connect`), `test/CoreBridge.Core.Tests`, `test/Multipass.Experiments`.
 - Phase D ist angelaufen: vm-*-Verbs implementiert und end-to-end verifiziert
-  (create ~58 s / stop ~4 s / start ~50 s / delete ~1 s). `cb`-Shortcut liegt als
-  PowerShell-Funktion im Profil (absoluter Pfad, funktioniert aus jedem
-  Verzeichnis; neues Fenster oder `. $PROFILE` nötig).
+  (create ~58 s / stop ~4 s / start ~50 s / delete ~1 s), dazu `vm-put`
+  (Datei Host→VM). `cb`-Shortcut liegt als PowerShell-Funktion im Profil
+  (absoluter Pfad, funktioniert aus jedem Verzeichnis; neues Fenster oder
+  `. $PROFILE` nötig).
+- Claude Code läuft als Native-Binary in einer core26-VM (kein npm/curl nötig —
+  Core hat keines von beidem): Host lädt Binary von downloads.claude.ai,
+  `vm-put` + `chmod +x`, Login-Shell findet es über ~/.local/bin. Das ist der
+  Bootstrap-Pfad für die Autobridge (Phase D).
 - T01–T10 sind implementiert und gelaufen; alle Messwerte in `EXPERIMENT_LOG.md`
   (volle Rohdaten unter `experiment-data/`). Kernaussagen: launch core26 kalt
   88,5 s / warm 58,2 s; exec-Roundtrip ~130 ms mit sauberer Exit-Code-Weitergabe;
@@ -101,9 +106,15 @@ ein Ergebnis.
 ## Run & Debug
 
 - CLI: `cb <verb> ...` (Funktion im PowerShell-Profil) oder direkt
-  `dotnet run --project src/CoreBridge.Cli -- <verb> ...`.
+  `dotnet run --project src/CoreBridge.Cli -- <verb> ...`. Die `cb`-Funktion
+  wird per AfterBuild-Target des Cli-Projekts bei jedem Build idempotent in
+  BEIDE PS-Profile installiert (pwsh 7 + Windows PowerShell 5.1); Quelle ist
+  `scripts/cb.ps1` — Änderungen an der Funktion NUR dort, nie direkt im Profil.
   Interaktiv (z. B. `cb vm-connect -n x`) nur in echtem Terminal — nicht in
   Agent-Shells. VS-Code-`launch.json` folgt (Plan §7).
+- **Build-Lock**: Läuft noch eine CoreBridge.Cli-Instanz (z. B. offenes
+  `cb vm-connect`), sperrt sie `CoreBridge.Core.dll` und der Debug-Build schlägt
+  fehl (MSB3027). Session beenden oder mit `-c Release` bauen/ausführen.
 - Alle Tests: `dotnet test` · nur Experiments: `dotnet test test/Multipass.Experiments`
 - Einzelnes Experiment: `dotnet test test/Multipass.Experiments --filter "FullyQualifiedName~T01"`
 - Binary-Override für Tests: Env `CORE_BRIDGE_MULTIPASS_EXE`

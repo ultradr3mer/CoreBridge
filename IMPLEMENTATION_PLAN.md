@@ -228,6 +228,15 @@ pro Konfiguration änderbar:
             End-to-end verifiziert: create 57,9 s / stop 4,0 s / start 49,6 s /
             delete 1,1 s — deckt sich mit den T09-Messwerten. Damit sind die
             Command-Namen gesetzt (vm-*-Schema, §8-Konventionen).
-      - [x] `cb`-Shortcut im PowerShell-Profil installiert (Plan §7; absoluter
-            Pfad statt relativ, damit `cb` aus jedem Verzeichnis funktioniert).
+      - [x] `cb`-Shortcut (Plan §7; absoluter Pfad statt relativ, damit `cb` aus
+            jedem Verzeichnis funktioniert): Quelle `scripts/cb.ps1`,
+            Installer `scripts/install-cb.ps1`, AfterBuild-Target im Cli-Projekt
+            installiert die Funktion bei JEDEM Build idempotent (Marker-Blöcke)
+            in BEIDE PowerShell-Profile — pwsh 7 und Windows PowerShell 5.1.
+            Verifiziert in beiden Hosts.
+      - [x] `vm-put` (Datei Host→VM über `multipass transfer`) — erster Baustein
+            des Sync-Wegs. Verifiziert mit dem Claude-Code-Native-Binary (218 MB,
+            Checksum-geprüft gegen das Release-Manifest): läuft auf core26 ohne
+            npm/curl (`claude --version` = 2.1.273) — Bootstrap-Pfad für
+            Autobridge-Agenten steht damit grundsätzlich.
       - [ ] Git-/Sync-Topologie, Autobridge, Secret-Scanning, TUI

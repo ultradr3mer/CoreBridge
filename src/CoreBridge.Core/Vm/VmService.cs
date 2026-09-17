@@ -40,6 +40,12 @@ public sealed class VmService
         return _cli.Run(new[] { "exec", name, "--", "/bin/sh", "-c", command }, timeoutMs);
     }
 
+    public MultipassRunResult Put(string localPath, string name, string? remotePath = null, int timeoutMs = 600_000)
+    {
+        var target = remotePath is null ? Path.GetFileName(localPath) : remotePath;
+        return _cli.Run(new[] { "transfer", localPath, $"{name}:{target}" }, timeoutMs);
+    }
+
     public int Connect(string name)
     {
         return _cli.Attach(new[] { "shell", name });

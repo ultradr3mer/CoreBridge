@@ -72,6 +72,28 @@ public class VmServiceTests
         Assert.Equal(new[] { "shell", "cbx-test" }, cli.Calls[0]);
     }
 
+    [Fact]
+    public void PutTransferiertMitDefaultZielpfad()
+    {
+        var cli = new FakeMultipassCli(EmptyResult);
+        var service = new VmService(cli);
+
+        service.Put(@"C:\temp\datei.txt", "cbx-test");
+
+        Assert.Equal(new[] { "transfer", @"C:\temp\datei.txt", "cbx-test:datei.txt" }, cli.Calls[0]);
+    }
+
+    [Fact]
+    public void PutTransferiertMitExplizitemZielpfad()
+    {
+        var cli = new FakeMultipassCli(EmptyResult);
+        var service = new VmService(cli);
+
+        service.Put(@"C:\temp\datei.txt", "cbx-test", ".local/bin/tool");
+
+        Assert.Equal(new[] { "transfer", @"C:\temp\datei.txt", "cbx-test:.local/bin/tool" }, cli.Calls[0]);
+    }
+
     private static MultipassRunResult EmptyResult(string[] _) => new(0, string.Empty, string.Empty, 1);
 
     private sealed class FakeMultipassCli : MultipassCli

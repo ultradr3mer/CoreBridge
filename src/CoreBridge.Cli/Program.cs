@@ -19,7 +19,8 @@ public static class Program
                 typeof(VmStopOptions),
                 typeof(VmDeleteOptions),
                 typeof(VmExecOptions),
-                typeof(VmConnectOptions)
+                typeof(VmConnectOptions),
+                typeof(VmPutOptions)
             })
             .MapResult(
                 (DoctorOptions _) => Guard(RunDoctor),
@@ -30,6 +31,7 @@ public static class Program
                 (VmDeleteOptions o) => Guard(() => RunSimpleVmCommand($"delete {o.Name}", () => Vms.Delete(o.Name))),
                 (VmExecOptions o) => Guard(() => Report(Vms.Exec(o.Name, o.Command))),
                 (VmConnectOptions o) => Guard(() => Vms.Connect(o.Name)),
+                (VmPutOptions o) => Guard(() => RunVmPut(o)),
                 errs => errs.Any(e => e.Tag is ErrorType.HelpRequestedError
                     or ErrorType.VersionRequestedError
                     or ErrorType.HelpVerbRequestedError)
@@ -132,6 +134,24 @@ public static class Program
         if (result.ExitCode == 0)
         {
             Console.WriteLine($"{label}: OK ({result.DurationMs / 1000.0:F1} s)");
+            return 0;
+        }
+
+        return Report(result);
+    }
+
+    private static int RunVmPut(VmPutOptions options)
+    {
+        if (!File.Exists(options.Source))
+        {
+            Console.Error.WriteLine($"Quelldatei fehlt: {options.Source}");
+            return 1;
+        }
+
+        var result = Vms.Put(options.Source, options.Name, options.Destination);
+        if (result.ExitCode == 0)
+        {
+            Console.WriteLine($"transfer: OK ({result.DurationMs / 1000.0:F1} s)");
             return 0;
         }
 

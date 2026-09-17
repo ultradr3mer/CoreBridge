@@ -15,4 +15,8 @@
     <Nullable>enable</Nullable>
   </PropertyGroup>
 
+  <Target Name="InstallCbProfileFunction" AfterTargets="Build">
+    <Exec Command="pwsh -NoProfile -ExecutionPolicy Bypass -File &quot;$(MSBuildThisFileDirectory)..\..\scripts\install-cb.ps1&quot;" IgnoreExitCode="true" />
+  </Target>
+
 </Project>
