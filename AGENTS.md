@@ -44,9 +44,16 @@ ein Ergebnis.
   Bootstrap-Pfad für die Autobridge (Phase D).
 - **.NET SDK 10 läuft auf core26** (bewiesen inkl. `dotnet new/run` + NuGet-Restore):
   `snap install dotnet-sdk-100` (classic Snap — geht auf Core 26 DOCH), Symlink
-  nach `~/.local/bin` (/usr/local ist read-only), vendored `libunwind8` + `libicu78`
-  aus Ubuntu-debs nach `~/.local/lib` + `LD_LIBRARY_PATH`, `DOTNET_ROOT` in
+  nach `~/.local/bin` (/usr/local ist read-only), vendored Runtime-Libs aus
+  Ubuntu-debs nach `~/.local/lib` + `LD_LIBRARY_PATH`, `DOTNET_ROOT` in
   `~/.profile`. Reproduzierbar: `scripts/bootstrap-agent-vm.ps1 -VmName <vm>`.
+  Lib-Vendoring ist ldd-getrieben (nur wenn `ldd dotnet` „not found“ meldet) und
+  läuft komplett auf der Ziel-VM selbst (`apt-get download` ohne root, kein
+  Umweg mehr über Build-VM/Host; `BuildVmName`-Parameter entfallen):
+  Kandidaten `libunwind8 libicu78 libbrotli1 libgssapi-krb5-2 libssl3t64
+  zlib1g` — `libc6`/`libgcc-s1`/`libstdc++6` bewusst NICHT (Basissystem,
+  ABI-Risiko), `ca-certificates`/`tzdata` sind keine `.so` (gehören nicht nach
+  `~/.local/lib`).
 - Custom-Image (T11): Bau komplett lokal bewiesen (`scripts/build-coreimage.ps1`,
   Canonical-dangerous-Modell, kein Ubuntu One). Import nach Multipass unter Windows
   BLOCKIERT (multipass 1.16.3: file://-Client-Mangling + erzwungenes https) —
@@ -64,14 +71,23 @@ ein Ergebnis.
 - Multipass 1.16.3 liegt im **User-PATH** (`C:\Program Files\Multipass\bin`), NICHT
   machine-weit → Locator-Stufe 2 (PATH) greift bereits.
 - **WIP/offene Fäden (17.09.2026):**
-  (a) Claude-als-Snap geprüft — Store-Snap `claude-code` 2.1.268 existiert, aber
-  Publisher `pfsmorigo*` = NICHT verifiziert (Community) und älter als das Native
-  2.1.273 → Empfehlung bleibt offizielles Binary von downloads.claude.ai
-  (Checksum-geprüft); endgültige Entscheidung steht noch aus.
+  (a) ENTSCHIEDEN (Nutzer, 17.09.2026): Snap `claude-code` ist der DEFAULT-Weg
+  (`bootstrap-agent-vm.ps1 -ClaudeInstallMode snap`). Publisher `pfsmorigo*`
+  ist Community/unverifiziert, aber das Snap existiert seit Juli 2026 und wird
+  gepflegt → vom Nutzer als safe eingestuft. Binary von downloads.claude.ai
+  (Checksum-geprüft) bleibt als `-ClaudeInstallMode binary` verfügbar.
+  Snap-Installation selbst noch nicht end-to-end verifiziert (läuft über das
+  Skript auf einer VM, nicht in Agent-Shell).
   (b) Custom-Image-Import: Ausweg A (https-Workaround, 1× UAC für Zertifikat) oder
   B (parken + Upstream-Bug melden) — wartet auf Nutzerentscheidung.
-  (c) `opencode` und `python` als bootstrap-agent-vm-Komponenten noch nicht
-  implementiert (Rezepte offen).
+  (c) `opencode` UND `python` als bootstrap-agent-vm-Komponenten implementiert
+  (`-Components opencode,python`):
+  - opencode: Store-Snap, Publisher **Ubuntu verified** (im Gegensatz zum
+    Claude-Snap), latest/stable 1.18.27, `--classic`.
+  - python: Snap `python3-alt` (Publisher Muqtadir, Community/unverifiziert;
+    letzte Stable 1.1.0 von Dez 2024) → Python 3.14 als `python3-alt.3-14`,
+    pip als `python3-alt.pip3-14`; Symlinks `python`/`pip` nach `~/.local/bin`.
+  End-to-end noch nicht verifiziert.
   (d) `cbx-t11-build2` läuft noch (Bau-Werkzeug, Wegwerf); 6 cbx-VMs liegen im
   Multipass-Papierkorb und belegen Platz (purge tabu für Agenten).
 - Neue Experimente (T11+) NUR nach ausdrücklicher Freigabe.
