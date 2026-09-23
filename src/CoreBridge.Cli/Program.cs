@@ -61,7 +61,8 @@ public static class Program
             .MapResult(
                 (MultipassStatusOptions _) => Guard(RunMultipassStatus),
                 (VmListOptions _) => Guard(RunVmList),
-                (VmCreateOptions o) => Guard(() => RunVmCreate(o)),                (VmStartOptions o) => Guard(() => RunSimpleVmCommand($"start {o.Name}", () => Vms.Start(o.Name))),
+                (VmCreateOptions o) => Guard(() => RunVmCreate(o)),
+                (VmStartOptions o) => Guard(() => RunSimpleVmCommand($"start {o.Name}", () => Vms.Start(o.Name))),
                 (VmStopOptions o) => Guard(() => RunSimpleVmCommand($"stop {o.Name}", () => Vms.Stop(o.Name))),
                 (VmDeleteOptions o) => Guard(() => RunSimpleVmCommand($"delete {o.Name}{(o.Purge ? " --purge" : string.Empty)}", () => Vms.Delete(o.Name, o.Purge))),
                 (VmExecOptions o) => Guard(() => Report(Vms.Exec(o.Name, o.Command, o.TimeoutSeconds * 1000))),
@@ -245,7 +246,7 @@ public static class Program
         var result = images.Configure(options.Name, components, options.ModelUrl, options.BuildTo, options.Force);
 
         Console.WriteLine($"Image '{result.Name}' konfiguriert — Snaps im Image: {string.Join(", ", result.Snaps)}");
-        Console.WriteLine($"  Modell:   {result.ModelPath} (Canonical dangerous, unverändert signiert)");
+        Console.Wr iteLine($"  Modell:   {result.ModelPath} (Canonical dangerous, unverändert signiert)");
         Console.WriteLine($"  Config:   {result.ConfigPath}");
         if (result.CloudInitPath is null)
         {
