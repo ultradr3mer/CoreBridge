@@ -73,8 +73,12 @@ Custom-Images (Ubuntu-Core-Image mit vorinstallierten Snaps/Tools bauen):
 | `image-delete -n <name>` | Löscht Konfiguration + gebaute `.img` eines Custom-Images |
 
 `image-build` existiert bereits (baut in einer Wegwerf-Ubuntu-VM via
-`ubuntu-image`), ist aber noch nicht end-to-end verifiziert und deshalb aus
-der Hilfe ausgeblendet — siehe `IMPLEMENTATION_PLAN.md` §10.
+`ubuntu-image`) und funktioniert grundsätzlich, ist aber aus der Hilfe
+ausgeblendet: der Import der gebauten `.img` nach Multipass macht unter
+Windows Probleme, wenn man sie ihm als `file://`-Pfad übergibt (vermutlich
+Windows/Linux-Pfadunterschiede in Multipass selbst) — als Workaround
+funktioniert der Import über einen `https://`-Pfad. Siehe `EXPERIMENT_LOG.md`
+(T11) und `IMPLEMENTATION_PLAN.md` §10.
 
 `--help` bzw. `<verb> --help` zeigt die aktuelle Referenz direkt aus dem Code
 (CommandLineParser generiert sie aus den `[Verb]`/`[Option]`-Attributen in
@@ -118,10 +122,51 @@ dotnet test test/CoreBridge.Core.Tests         # Unit- + Integrationstests
 dotnet test test/Multipass.Experiments         # Experimente (siehe EXPERIMENT_LOG.md)
 ```
 
-- `test/CoreBridge.Core.Tests` — u. a. `IntegrationsTests.cs`: ein
-  durchgängiger `image-configure` → `vm-create` → `vm-exec`/`vm-connect`
-  (Pipe **und** natives SSH) → `vm-stop`/`vm-delete` → `image-delete`-Zyklus
-  gegen eine echte `cbx-cycle-a`-VM.
+- `test/CoreBridge.Core.Tests` → `IntegrationsTests.cs` (`VmCycleTests`) —
+  **guter Einstiegspunkt, um die App kennenzulernen**: ein durchgängiger
+  `image-configure` → `vm-create` → `vm-list` → `vm-start` → `vm-exec` →
+  `vm-connect` (Pipe **und** natives SSH) → `vm-stop` → `vm-delete` →
+  `image-delete`-Zyklus, der die `cbx-cycle-a`-VM wirklich **von null aufbaut
+  und am Ende wieder komplett abbaut** — nichts bleibt hängen. Läuft komplett
+  gegen echtes Multipass, dauert ca. 2,5 Minuten (den Löwenanteil davon macht
+  `vm-create`):
+
+  ```
+  ✅ VmCycleTests (10) ──────────────── 2,5 min
+  ├─ ✅ _0_multipassStatus ─────────────── 56 ms
+  ├─ ✅ _1_imageConfigure ─────────────── 140 ms
+  ├─ ✅ _2_vmCreate ───────────────────── 2,2 min
+  ├─ ✅ _3_vmList ─────────────────────── 140 ms
+  ├─ ✅ _4_vmStart ────────────────────── 12,6 sec
+  ├─ ✅ _5_vmExec ─────────────────────── 380 ms
+  ├─ ✅ _6_vmConnect ──────────────────── 138 ms
+  ├─ ✅ _7_vmConnectSsh ───────────────── 761 ms
+  ├─ ✅ _8_vmStop ─────────────────────── 4,1 sec
+  ╰─ ✅ _9_vmDelete ───────────────────── 543 ms
+  ```
+
+  Solange der Testlauf steht (oder wenn man ihn mit `--filter` vor `_9`
+  abbricht), existiert `cbx-cycle-a` wirklich — man kann sich parallel in
+  einem zweiten Terminal mit `cb vm-connect --name cbx-cycle-a` reinhängen
+  und sich die VM live ansehen.
+
+  **Bekannter offener Punkt, den man dabei sieht:** die per `image-configure
+  --components claude` gezogene `claude-code`-Snap ist zwar installiert,
+  lässt sich aber nicht starten:
+
+  ```
+  PS> cb vm-connect --name cbx-cycle-a
+  ...
+  -bash-5.3$ claude-code
+  2026/09/23 12:46:12.314119 cmd_run.go:1585: WARNING: cannot create user data directory: cannot create snap home dir: mkdir /home/ubuntu/snap: permission denied
+  cannot create user data directory: /home/ubuntu/snap/claude-code/53: Permission denied
+  ```
+
+  Vermutlich braucht die Snap `--classic`-Confinement, um außerhalb der
+  Snap-Sandbox schreiben zu dürfen — und `--classic` läuft auf Ubuntu Core
+  (strict confinement per Systemdesign) nicht. Noch ungeklärt; bis dahin ist
+  der in `AGENTS.md` als Default beschriebene Claude-Binary-Modus (statt
+  Snap) der verlässlichere Weg, Claude Code in die VM zu bekommen.
 - `test/Multipass.Experiments` — die T01–T11-Experimente, die die
   Architekturentscheidungen belegen (Latenzen, JSON-Formate, Netzwerk, SSH,
   Lifecycle). Jeder Lauf wird protokolliert: Kommando, Exit-Code, Dauer,
@@ -149,8 +194,11 @@ test/
 scripts/               cb-Shortcut, VM-Bootstrap, Custom-Image-Build, Hyper-V-Gruppierung
 ```
 
-`src/CoreBridge.Tui` (Terminal-UI) ist für eine spätere Phase vorgesehen,
-existiert noch nicht.
+`src/CoreBridge.Tui` (Terminal-UI, geplant mit
+[Terminal.Gui](https://github.com/tui-cs/Terminal.Gui) v2) ist für eine
+spätere Phase vorgesehen und wurde bisher nicht angegangen — die CLI ist
+bislang einfach genug (wenige Verbs, kein interaktiver Dauerbetrieb), dass
+eine TUI noch keinen Mehrwert gebracht hätte.
 
 ## Status
 
