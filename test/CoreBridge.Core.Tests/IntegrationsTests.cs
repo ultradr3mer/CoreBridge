@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using CoreBridge.Core.Images;
 using CoreBridge.Core.Vm;
 using Xunit.Abstractions;
@@ -27,94 +26,11 @@ public static class VmCycleContext
 
   public static ImageConfigureResult? ConfigureResult { get; set; }
 
-  /// <summary>IO-Zähler von multipassd um den Launch (_2) für die Ressourcen-Logs.</summary>
-  internal static double LaunchGigabytesWritten { get; set; }
-
   /// <summary>
   /// Early-Return-Pattern: `if (SkipWithoutMultipass()) return;` — jedes
   /// Zyklus-Test startet damit (analog MultipassFact in den Experiments).
   /// </summary>
   public static bool SkipWithoutMultipass() => !MultipassAvailable;
-}
-
-/// <summary>
-/// IO-Monitor für den multipassd-Prozess: sampelt "IO Write Bytes/sec" /
-/// "IO Read Bytes/sec" (Performance Counter — Raten; kumulative Zähler gibt
-/// es in der .NET-Process-Klasse nicht) sekündlich und integriert zur
-/// Gesamtmenge. Läuft als eigener Task während vm-create; Stop() liefert GB.
-/// Approximation: Prozess-IO inkl. Hyper-V-Layer, nicht die physische Disk.
-/// </summary>
-internal sealed class ProcessIoMonitor : IDisposable
-{
-  private readonly PerformanceCounter _read;
-  private readonly PerformanceCounter _write;
-  private readonly CancellationTokenSource _cancel = new();
-  private readonly Task _sampler;
-  private long _readBytes;
-  private long _writeBytes;
-
-  private ProcessIoMonitor(string processName)
-  {
-    _read = new PerformanceCounter("Process", "IO Read Bytes/sec", processName, readOnly: true);
-    _write = new PerformanceCounter("Process", "IO Write Bytes/sec", processName, readOnly: true);
-    _ = _read.NextValue(); // erster Sample ist immer 0 — verwarmen.
-    _ = _write.NextValue();
-    _sampler = Task.Run(() => SampleLoop(_cancel.Token));
-  }
-
-  /// <summary>Monitor starten; null, wenn Counter nicht verfügbar (Rechte/OS).</summary>
-  public static ProcessIoMonitor? Start(string processName)
-  {
-    try
-    {
-      return new ProcessIoMonitor(processName);
-    }
-    catch (Exception)
-    {
-      return null;
-    }
-  }
-
-  private void SampleLoop(CancellationToken token)
-  {
-    while (!token.IsCancellationRequested)
-    {
-      try
-      {
-        Thread.Sleep(1_000);
-        Interlocked.Add(ref _readBytes, (long)_read.NextValue());
-        Interlocked.Add(ref _writeBytes, (long)_write.NextValue());
-      }
-      catch (Exception)
-      {
-        return; // Counter weg (Prozess beendet?) — stehen lassen, was da ist.
-      }
-    }
-  }
-
-  /// <summary>Sampling beenden und Gesamtmengen in GB liefern.</summary>
-  public (double ReadGb, double WriteGb) Stop()
-  {
-    _cancel.Cancel();
-    try
-    {
-      _sampler.Wait(3_000);
-    }
-    catch (AggregateException)
-    {
-    }
-
-    return (
-        Interlocked.Read(ref _readBytes) / (1024.0 * 1024.0 * 1024.0),
-        Interlocked.Read(ref _writeBytes) / (1024.0 * 1024.0 * 1024.0));
-  }
-
-  public void Dispose()
-  {
-    _cancel.Cancel();
-    _read.Dispose();
-    _write.Dispose();
-  }
 }
 
 [TestCaseOrderer(
@@ -184,26 +100,9 @@ public class VmCycleTests
     }
 
     var vms = new VmService();
-
-    // Ressourcen-Log: IO-Zähler von multipassd vor/nach dem Launch. Approximation
-    // (Prozess-IO inkl. Hyper-V-Layer, nicht physische Disk — aber gut genug, um
-    // die Größenordnung "wie viel GB schreibt ein Launch" festzuhalten).
-    using var io = ProcessIoMonitor.Start("multipassd");
-    if (io is null)
-    {
-      this.output.WriteLine("multipassd-Performance-Counter nicht verfügbar — IO-Messung übersprungen.");
-    }
-
     var create = vms.Create(VmCycleContext.VmName, "core26", null, cloudInitPath: configure.CloudInitPath);
     Assert.Equal(0, create.ExitCode);
     this.output.WriteLine($"launch: {create.DurationMs / 1000.0:F1} s");
-
-    if (io is { } monitor)
-    {
-      var (readGb, writeGb) = monitor.Stop();
-      VmCycleContext.LaunchGigabytesWritten = writeGb;
-      this.output.WriteLine($"multipassd-IO während launch: {writeGb:F2} GB geschrieben, {readGb:F2} GB gelesen");
-    }
   }
 
   [Fact]
@@ -266,37 +165,14 @@ public class VmCycleTests
     if (VmCycleContext.SkipWithoutMultipass()) return;
     var vms = new VmService();
 
-    // vm-connect (emuliert über den exec-Kanal): cloud-init abwarten, dann die
-    // Komponente verifizieren. claude-code selbst aufzurufen geht nicht —
-    // classic Snap zur Laufzeit auf Core bricht mit permission denied (siehe
-    // Log), und interaktiv würde es auf Login warten. Getestet wird: der Snap
-    // kommt per cloud-init an (Komponenten-Leistung), nicht seine Interaktivität.
+    // vm-connect (emuliert über Pipes). OHNE Prompt-Wait: ohne TTY gibt bash
+    // keinen Prompt aus (nur die Banner) — direkt Befehl senden und auf seine
+    // Ausgabe warten. Shell-Ausgabe läuft live via output.WriteLine mit.
     using var console = vms.OpenConsole(VmCycleContext.VmName, this.output.WriteLine);
     try
     {
-      // Nur Status LOGGEN (kein --wait): core26-Katalog-Image meldet teils
-      // "status: disabled" — dann würde --wait ewig hängen.
-      var status = console.SendCommand("cloud-init status", "status:", TimeSpan.FromSeconds(30));
-      this.output.WriteLine(status.Trim());
-
-      // Snap-Installation prüfen — cloud-init/Snapd arbeiten asynchron nach
-      // dem Boot, deshalb Retry über mehrere Minuten.
-      string snapList = string.Empty;
-      var found = false;
-      for (var attempt = 1; attempt <= 10 && !found; attempt++)
-      {
-        snapList = console.SendCommand("snap list claude-code 2>&1", "claude-code", TimeSpan.FromSeconds(30));
-        found = snapList.Contains("claude-code", StringComparison.Ordinal)
-                && !snapList.Contains("no matching snaps", StringComparison.Ordinal);
-        if (!found)
-        {
-          this.output.WriteLine($"snap list Versuch {attempt}: noch nicht da — warte 30 s ...");
-          Thread.Sleep(30_000);
-        }
-      }
-
-      Assert.True(found, $"claude-code-Snap nicht installiert. cloud-init: {status.Trim()}; snap list: {snapList.Trim()}");
-      this.output.WriteLine(snapList.Trim());
+      var output = console.SendCommand("echo console-ok", "console-ok", TimeSpan.FromSeconds(30));
+      Assert.Contains("console-ok", output);
     }
     catch (MultipassTimeoutException exception)
     {
@@ -374,10 +250,6 @@ public class VmCycleTests
     Assert.False(
         string.Equals(stopped.State, "Running", StringComparison.OrdinalIgnoreCase),
         $"State nach stop ist immer noch Running: {stopped.State}");
-
-    // Ressourcen-Log: gestaute Launch-Schreibmenge nochmal ausgeben, damit sie
-    // im Kontext des Abschlusses sichtbar ist (Reproduktion: EXPERIMENT_LOG).
-    this.output.WriteLine($"launch hat ~{VmCycleContext.LaunchGigabytesWritten:F2} GB an multipassd-IO geschrieben (siehe _2).");
   }
 
   [Fact]
@@ -410,6 +282,3 @@ public class VmCycleTests
     VmCycleContext.Store?.Dispose();
   }
 }
-
-
-

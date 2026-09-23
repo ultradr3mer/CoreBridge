@@ -246,7 +246,7 @@ public static class Program
         var result = images.Configure(options.Name, components, options.ModelUrl, options.BuildTo, options.Force);
 
         Console.WriteLine($"Image '{result.Name}' konfiguriert — Snaps im Image: {string.Join(", ", result.Snaps)}");
-        Console.Wr iteLine($"  Modell:   {result.ModelPath} (Canonical dangerous, unverändert signiert)");
+        Console.WriteLine($"  Modell:   {result.ModelPath} (Canonical dangerous, unverändert signiert)");
         Console.WriteLine($"  Config:   {result.ConfigPath}");
         if (result.CloudInitPath is null)
         {
