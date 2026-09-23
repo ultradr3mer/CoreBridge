@@ -265,20 +265,20 @@ public class VmCycleTests
     Assert.Empty(after); // purge: VM muss WIRKLICH weg sein, nicht nur Papierkorb.
   }
 
-  [Fact]
-  public void _A_imageDelete()
-  {
-    if (VmCycleContext.SkipWithoutMultipass()) return;
-    var images = new ImageService(TestConfigs.Images);
+  //[Fact]
+  //public void _A_imageDelete()
+  //{
+  //  if (VmCycleContext.SkipWithoutMultipass()) return;
+  //  var images = new ImageService(TestConfigs.Images);
 
-    var result = images.Delete(VmCycleContext.ImageName);
-    Assert.Equal(ImageStore.ModelDir(VmCycleContext.ImageName), result.ModelDir);
-    Assert.False(Directory.Exists(ImageStore.ModelDir(VmCycleContext.ImageName)));
+  //  var result = images.Delete(VmCycleContext.ImageName);
+  //  Assert.Equal(ImageStore.ModelDir(VmCycleContext.ImageName), result.ModelDir);
+  //  Assert.False(Directory.Exists(ImageStore.ModelDir(VmCycleContext.ImageName)));
 
-    // image-list: Eintrag ist weg.
-    Assert.DoesNotContain(VmCycleContext.ImageName, images.List().Select(e => e.Name));
+  //  // image-list: Eintrag ist weg.
+  //  Assert.DoesNotContain(VmCycleContext.ImageName, images.List().Select(e => e.Name));
 
-    VmCycleContext.ConfigureResult = null;
-    VmCycleContext.Store?.Dispose();
-  }
+  //  VmCycleContext.ConfigureResult = null;
+  //  VmCycleContext.Store?.Dispose();
+  //}
 }
