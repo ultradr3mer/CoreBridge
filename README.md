@@ -19,7 +19,7 @@ auf den Host bekommt.
 ## Schnellstart
 
 ```powershell
-git clone https://github.com/ultradr3mer/CoreBridge.git
+git clone https://support.ngroup.info/Root/Sandbox/_git/Clara-CoreBridge
 cd CoreBridge
 dotnet build
 .\scripts\install-cb.ps1   # installiert die `cb`-Shell-Funktion in beide PS-Profile
@@ -30,10 +30,16 @@ Verzeichnis:
 
 ```powershell
 cb multipass-status
-cb vm-create --name meine-vm
+cb image-configure --name mein-image [ --components claude,dotnet ]
+cb vm-create --name meine-vm --image mein-image
+cb vm-start --name meine-vm 
 cb vm-exec --name meine-vm --command 'echo hallo'
+cb vm-connect --name meine-vm
 cb vm-delete --name meine-vm
 ```
+
+`image-configure` gibt den passenden `vm-create`-Aufruf am Ende selbst aus.
+`vm-connect` macht eine SSH verbindung auf, hier könnte man dann mit dem KI Agenten kommunizieren als hätte man ihn lokal laufen
 
 `cb` ruft im Repo `dotnet run --project src/CoreBridge.Cli -- @args` auf; ohne
 Repo würde es einen installierten `core-bridge`-Befehl erwarten (noch nicht
@@ -83,15 +89,6 @@ funktioniert der Import über einen `https://`-Pfad. Siehe `EXPERIMENT_LOG.md`
 `--help` bzw. `<verb> --help` zeigt die aktuelle Referenz direkt aus dem Code
 (CommandLineParser generiert sie aus den `[Verb]`/`[Option]`-Attributen in
 `src/CoreBridge.Cli/Verbs.cs`) — im Zweifel verbindlicher als diese Tabelle.
-
-### Beispiel: VM mit vorinstalliertem Claude Code + .NET
-
-```powershell
-cb image-configure --name agent-vm --components claude,dotnet
-cb vm-create --name meine-agent-vm --cloud-init "$env:LOCALAPPDATA\CoreBridge\models\agent-vm\cloud-init.yaml"
-```
-
-`image-configure` gibt den passenden `vm-create`-Aufruf am Ende selbst aus.
 
 ## Konfiguration
 
