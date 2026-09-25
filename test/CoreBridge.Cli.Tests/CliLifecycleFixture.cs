@@ -32,6 +32,8 @@ public sealed class CliLifecycleFixture : IDisposable
             // Ohne interaktive Rückfrage (Antwort Nein) darf ein langer cloud-init-Launch
             // nicht nach dem ersten Abschnitt abgebrochen werden.
             DefaultTimeoutVmCreation = "2400s",
+            // Start/Stop/Exec/Transfer warten DefaultTimeout (Standard 10 s) — für echte VMs zu kurz.
+            DefaultTimeout = "600s",
             Images = new ImagesConfig
             {
                 StoreRoot = store.Path,

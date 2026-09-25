@@ -11,9 +11,9 @@ public sealed class VmService
         _cli = cli ?? new MultipassCli();
     }
 
-    public IReadOnlyList<VmInfo> List()
+    public IReadOnlyList<VmInfo> List(int timeoutMs = 60_000)
     {
-        var result = _cli.Run(new[] { "list", "--format", "json" }, 60_000);
+        var result = _cli.Run(new[] { "list", "--format", "json" }, timeoutMs);
         if (result.ExitCode != 0)
         {
             var message = MultipassStdErr.Clean(result.StdErr);
@@ -67,17 +67,17 @@ public sealed class VmService
             keepWaiting ?? (() => false));
     }
 
-    public MultipassRunResult Start(string name)
+    public MultipassRunResult Start(string name, int timeoutMs = 180_000)
     {
-        return _cli.Run(new[] { "start", name }, 180_000);
+        return _cli.Run(new[] { "start", name }, timeoutMs);
     }
 
-    public MultipassRunResult Stop(string name)
+    public MultipassRunResult Stop(string name, int timeoutMs = 180_000)
     {
-        return _cli.Run(new[] { "stop", name }, 180_000);
+        return _cli.Run(new[] { "stop", name }, timeoutMs);
     }
 
-    public MultipassRunResult Delete(string name, bool purge = false)
+    public MultipassRunResult Delete(string name, bool purge = false, int timeoutMs = 180_000)
     {
         var args = new List<string> { "delete", name };
         if (purge)
@@ -85,7 +85,7 @@ public sealed class VmService
             args.Add("--purge");
         }
 
-        return _cli.Run(args, 180_000);
+        return _cli.Run(args, timeoutMs);
     }
 
     public MultipassRunResult Exec(string name, string command, int timeoutMs = 600_000)

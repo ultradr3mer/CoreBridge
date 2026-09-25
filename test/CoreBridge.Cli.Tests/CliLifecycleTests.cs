@@ -44,6 +44,7 @@ public sealed class CliLifecycleTests
         {
             Name = fixture.ImageName,
             Components = "claude,dotnet",
+            OverrideTimeout = "300s",
             Force = true
         }, output.WriteLine);
 
@@ -58,7 +59,8 @@ public sealed class CliLifecycleTests
         var result = await fixture.RunAsync(new VmCreateOptions
         {
             Name = fixture.VmName,
-            Image = fixture.ImageName
+            Image = fixture.ImageName,
+
         }, output.WriteLine);
 
         CliLifecycleFixture.AssertCompleted(result, $"create {fixture.VmName}", "Running");

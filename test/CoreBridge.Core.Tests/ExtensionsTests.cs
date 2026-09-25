@@ -24,4 +24,22 @@ public class ExtensionsTests
     {
         Assert.Throws<FormatException>(() => value.ReadTime());
     }
+
+    [Fact]
+    public void InlineThrowWirftUebergebeneExceptionAlsArgument()
+    {
+        var expected = new InvalidOperationException("kaputt");
+
+        var actual = Assert.Throws<InvalidOperationException>(() => Math.Max(1, Inline.Throw<int>(expected)));
+
+        Assert.Same(expected, actual);
+    }
+
+    [Fact]
+    public void InlineTodoWirftNotImplemented()
+    {
+        var exception = Assert.Throws<NotImplementedException>(() => TimeSpan.FromSeconds(Inline.Todo<double>("Timeout")));
+
+        Assert.Contains("Timeout", exception.Message);
+    }
 }

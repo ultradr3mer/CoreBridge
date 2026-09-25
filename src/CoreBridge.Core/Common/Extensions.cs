@@ -1,5 +1,5 @@
+using System.Diagnostics.CodeAnalysis;
 using System.Text.RegularExpressions;
-using UnionTypes;
 
 namespace CoreBridge.Core.Common;
 
@@ -39,38 +39,16 @@ public static class Progress
     public const string ProgressTick = ".";
 }
 
-public class InlineException<TFake> : InlineException 
+/// <summary>
+/// Throws where C# allows no <c>throw</c> expression (e.g. method arguments); <c>T</c> is the type expected there.
+/// </summary>
+public static class Inline
 {
-    public InlineException(string message) : base(message)
-    {
-    }
-}
+    /// <summary>Wirft <paramref name="exception"/>.</summary>
+    [DoesNotReturn]
+    public static T Throw<T>(Exception exception) => throw exception;
 
-public class InlineException : Exception
-{
-    public InlineException()
-    {
-    }
-
-    public InlineException(string message) : base(message)
-    {
-    }
-
-        /// <summary>
-    /// Act like returning T for compiler, actually throws an exception of type T. 
-    /// Use for inline throw expressions.
-    /// </summary>
-    public T Throw<T>(string message) where T : Exception, new()
-    {
-        throw new InlineException(message);
-    }
-
-    /// <summary>
-    /// Act like returning T for compiler, actually throws an exception of type T. 
-    /// Use for inline throw expressions.
-    /// </summary>
-    public T Throw<T>() where T : Exception, new()
-    {
-        throw new InlineException();
-    }
+    /// <summary>Platzhalter für einen noch nicht implementierten Wert; wirft <see cref="NotImplementedException"/>.</summary>
+    [DoesNotReturn]
+    public static T Todo<T>(string what) => throw new NotImplementedException($"{what} is not implemented yet.");
 }

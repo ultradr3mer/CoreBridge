@@ -1,3 +1,4 @@
+using CoreBridge.Core.Common;
 using CoreBridge.Core.Config;
 using CoreBridge.Core.Vm;
 
@@ -18,4 +19,8 @@ public sealed record CommandContext(
     VmService Vms,
     Func<string, bool> Confirm,
     Func<string, string?> Prompt,
-    CancellationToken CancellationToken);
+    CancellationToken CancellationToken)
+{
+    /// <summary><c>DefaultTimeout</c> (ggf. per <c>--timeout</c> ersetzt) in Millisekunden.</summary>
+    public int DefaultTimeoutMs => (int)Config.DefaultTimeout.ReadTime().TotalMilliseconds;
+}

@@ -98,7 +98,7 @@ public static class Program
         {
             if (options is MultipassRestartOptions { PauseOnExit: true })
             {
-                Console.Write("Beliebige Taste zum Schließen ...");
+                Console.Write("Any key to continue ...");
                 Console.ReadKey(intercept: true);
             }
         }
@@ -217,7 +217,22 @@ public static class Program
         ArgumentNullException.ThrowIfNull(config);
         ArgumentNullException.ThrowIfNull(options);
 
-        return RunCore(config, options, confirm ?? (_ => false), prompt ?? (_ => null), cancellationToken);
+        return RunCore(ApplyTimeoutOverride(config, options), options, confirm ?? (_ => false), prompt ?? (_ => null), cancellationToken);
+    }
+
+    /// <summary>
+    /// Einzige Stelle, die <c>--timeout</c> liest: ersetzt für diesen Aufruf die
+    /// Config-Timeouts, danach sehen alle Kommandos nur noch die Config.
+    /// </summary>
+    private static AppConfig ApplyTimeoutOverride(AppConfig config, IOptions options)
+    {
+        return options is ITimeoutOverride ovr
+            ? config with
+            {
+                DefaultTimeoutVmCreation = ovr.OverrideTimeout ?? config.DefaultTimeoutVmCreation,
+                DefaultTimeout = ovr.OverrideTimeout ?? config.DefaultTimeout
+            }
+            : config;
     }
 
     /// <summary>
@@ -271,6 +286,10 @@ public static class Program
             System.Text.Json.JsonException => new(1, $"Unerwartete Multipass-Antwort (kein JSON): {exception.Message}", exception),
             FormatException => new(1, $"Configuration error: {exception.Message}", exception),
             IOException or UnauthorizedAccessException => new(1, $"CLI-I/O-Fehler: {exception.Message}", exception),
+            TaskCanceledException { InnerException: TimeoutException } => new(
+                1,
+                "Download timed out — raise it with `--timeout` (e.g. 300s) or `DefaultTimeout` in the config.",
+                exception),
             OperationCanceledException => new(130, "Abgebrochen.", exception),
             _ => null
         };
@@ -298,20 +317,25 @@ public static class Program
         {
             MultipassStatusOptions => RunMultipassStatus(cancellationToken),
             MultipassRestartOptions => RunMultipassRestart(context),
-            VmListOptions => RunVmList(vms, cancellationToken),
+            VmListOptions => RunVmList(vms, context.DefaultTimeoutMs, cancellationToken),
             VmCreateOptions o => RunVmCreate(context, o),
-            VmStartOptions o => RunVmStart(vms, o, cancellationToken),
-            VmStopOptions o => RunVmStateCommand(vms, o.Name, $"stop {o.Name}", () => vms.Stop(o.Name), cancellationToken),
+            VmStartOptions o => RunVmStart(vms, o, context.DefaultTimeoutMs, cancellationToken),
+            VmStopOptions o => RunVmStateCommand(
+                vms,
+                o.Name,
+                $"stop {o.Name}",
+                () => vms.Stop(o.Name, context.DefaultTimeoutMs),
+                cancellationToken),
             VmDeleteOptions o => RunVmStateCommand(
                 vms,
                 o.Name,
                 $"delete {o.Name}{(o.Purge ? " --purge" : string.Empty)}",
-                () => vms.Delete(o.Name, o.Purge),
+                () => vms.Delete(o.Name, o.Purge, context.DefaultTimeoutMs),
                 cancellationToken),
-            VmExecOptions o => RunVmExec(vms, o, cancellationToken),
+            VmExecOptions o => RunVmExec(vms, o, context.DefaultTimeoutMs, cancellationToken),
             VmConnectOptions o => RunVmConnect(vms, o, cancellationToken),
-            VmPutOptions o => RunVmPut(vms, o, cancellationToken),
-            VmGetOptions o => RunVmGet(vms, o, cancellationToken),
+            VmPutOptions o => RunVmPut(vms, o, context.DefaultTimeoutMs, cancellationToken),
+            VmGetOptions o => RunVmGet(vms, o, context.DefaultTimeoutMs, cancellationToken),
             ImageConfigureOptions o => RunImageConfigure(config, o, cancellationToken),
             ImageListOptions => RunImageList(config, cancellationToken),
             ImageDeleteOptions o => RunImageDelete(config, o, cancellationToken),
@@ -442,7 +466,7 @@ public static class Program
             }
 
             yield return "Starte erhöht (UAC-Abfrage) — Ausgabe und Rückfragen folgen im Administratorfenster ...";
-            var exitCode = await RunElevatedAsync(cancellationToken);
+            var exitCode = await RunElevatedAsync(context.Config.DefaultTimeout, cancellationToken);
             if (exitCode != 0)
             {
                 throw new ProgramExecutionException(exitCode, $"multipass-restart im Administratorfenster fehlgeschlagen (Exit {exitCode}).");
@@ -462,11 +486,11 @@ public static class Program
 
     /// <summary>
     /// Startet dieselbe CLI per UAC (<c>runas</c>) mit <c>multipass-restart
-    /// --pause-on-exit</c> und wartet auf ihr Ende; Timeouts liest der erhöhte
-    /// Prozess aus derselben Config. Läuft die CLI als DLL unter <c>dotnet</c>,
+    /// --pause-on-exit --timeout &lt;timeout&gt;</c> (der wirksame <c>DefaultTimeout</c>)
+    /// und wartet auf ihr Ende. Läuft die CLI als DLL unter <c>dotnet</c>,
     /// wird die DLL als erstes Argument mitgegeben.
     /// </summary>
-    private static async Task<int> RunElevatedAsync(CancellationToken cancellationToken)
+    private static async Task<int> RunElevatedAsync(string timeout, CancellationToken cancellationToken)
     {
         var processPath = Environment.ProcessPath
             ?? throw new ProgramExecutionException(1, "Pfad der laufenden CLI unbekannt — erhöhter Neustart nicht möglich.");
@@ -487,6 +511,9 @@ public static class Program
             startInfo.ArgumentList.Add(argument);
         }
 
+        startInfo.ArgumentList.Add("--timeout");
+        startInfo.ArgumentList.Add(timeout);
+
         System.Diagnostics.Process? process;
         try
         {
@@ -505,9 +532,10 @@ public static class Program
 
     private static async IAsyncEnumerable<string> RunVmList(
         VmService vms,
+        int timeoutMs,
         [EnumeratorCancellation] CancellationToken cancellationToken)
     {
-        var list = await Task.Run(vms.List, cancellationToken);
+        var list = await Task.Run(() => vms.List(timeoutMs), cancellationToken);
         yield return $"{"Name",-30} {"State",-10} IPv4";
         foreach (var vm in list)
         {
@@ -571,7 +599,8 @@ public static class Program
                 throw new ProgramExecutionException(1, $"Invalid follow-up command: {followUp}");
             }
 
-            await foreach (var line in Dispatch(context, followUpOptions))
+            var followUpContext = context with { Config = ApplyTimeoutOverride(context.Config, followUpOptions) };
+            await foreach (var line in Dispatch(followUpContext, followUpOptions))
             {
                 yield return line;
             }
@@ -601,10 +630,11 @@ public static class Program
     private static async IAsyncEnumerable<string> RunVmExec(
         VmService vms,
         VmExecOptions options,
+        int timeoutMs,
         [EnumeratorCancellation] CancellationToken cancellationToken)
     {
         var result = await Task.Run(
-            () => vms.Exec(options.Name, options.Command, options.TimeoutSeconds * 1000),
+            () => vms.Exec(options.Name, options.Command, timeoutMs),
             cancellationToken);
         foreach (var line in Report(result))
         {
@@ -629,6 +659,7 @@ public static class Program
     private static async IAsyncEnumerable<string> RunVmStart(
         VmService vms,
         VmStartOptions options,
+        int timeoutMs,
         [EnumeratorCancellation] CancellationToken cancellationToken)
     {
         if (string.Equals(await QueryVmState(vms, options.Name, cancellationToken), "Running", StringComparison.OrdinalIgnoreCase))
@@ -641,7 +672,7 @@ public static class Program
             vms,
             options.Name,
             $"start {options.Name}",
-            () => vms.Start(options.Name),
+            () => vms.Start(options.Name, timeoutMs),
             cancellationToken))
         {
             yield return line;
@@ -687,7 +718,7 @@ public static class Program
     /// <summary>State der VM laut vm-list, <c>null</c> wenn sie nicht existiert.</summary>
     private static async Task<string?> QueryVmState(VmService vms, string name, CancellationToken cancellationToken)
     {
-        var list = await Task.Run(vms.List, cancellationToken);
+        var list = await Task.Run(() => vms.List(), cancellationToken);
         return list
             .FirstOrDefault(vm => string.Equals(vm.Name, name, StringComparison.OrdinalIgnoreCase))
             ?.State;
@@ -696,6 +727,7 @@ public static class Program
     private static async IAsyncEnumerable<string> RunVmPut(
         VmService vms,
         VmPutOptions options,
+        int timeoutMs,
         [EnumeratorCancellation] CancellationToken cancellationToken)
     {
         if (!File.Exists(options.Source))
@@ -705,7 +737,7 @@ public static class Program
 
         yield return $"transfer {options.Source} → {options.Name} ...";
         var result = await Task.Run(
-            () => vms.Put(options.Source, options.Name, options.Destination),
+            () => vms.Put(options.Source, options.Name, options.Destination, timeoutMs),
             cancellationToken);
         if (result.ExitCode != 0)
         {
@@ -721,6 +753,7 @@ public static class Program
     private static async IAsyncEnumerable<string> RunVmGet(
         VmService vms,
         VmGetOptions options,
+        int timeoutMs,
         [EnumeratorCancellation] CancellationToken cancellationToken)
     {
         var targetDirectory = Path.GetDirectoryName(Path.GetFullPath(options.Destination));
@@ -731,7 +764,7 @@ public static class Program
 
         yield return $"transfer {options.Name}:{options.Remote} → {options.Destination} ...";
         var result = await Task.Run(
-            () => vms.Get(options.Name, options.Remote, options.Destination),
+            () => vms.Get(options.Name, options.Remote, options.Destination, timeoutMs),
             cancellationToken);
         if (!File.Exists(options.Destination))
         {
@@ -758,7 +791,8 @@ public static class Program
     {
         var components = options.Components.Split(',', StringSplitOptions.RemoveEmptyEntries);
         yield return $"Konfiguriere Image '{options.Name}' ({string.Join(", ", components)}) ...";
-        var images = new ImageService(config.Images);
+        using var http = new HttpClient { Timeout = config.DefaultTimeout.ReadTime() };
+        var images = new ImageService(config.Images, http);
         var result = await Task.Run(
             () => images.Configure(
                 options.Name,
