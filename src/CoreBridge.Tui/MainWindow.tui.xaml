@@ -6,8 +6,10 @@
         Width="Dim.Fill()"
         Height="Dim.Fill()">
 
-  <DropDownList x:Name="Command"
-         ItemsSource="{Binding CommandList}" />
+  <DropDownList x="1"
+                     y="2"
+                     x:Name="Command"
+                     ItemsSource="{Binding CommandList}" />
 
   <Label X="2"
          Y="3"
