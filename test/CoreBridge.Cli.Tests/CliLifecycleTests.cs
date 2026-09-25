@@ -19,9 +19,9 @@ public sealed class CliLifecycleTests
     }
 
     [Fact]
-    public void Stage00_MultipassStatus()
+    public async Task Stage00_MultipassStatus()
     {
-        var exitCode = fixture.Run(new MultipassStatusOptions());
+        var exitCode = await fixture.RunAsync(new MultipassStatusOptions());
         fixture.RecordStatus(exitCode);
         if (fixture.ShouldSkip())
         {
@@ -29,11 +29,11 @@ public sealed class CliLifecycleTests
             return;
         }
 
-        Assert.True(exitCode.Success);
+        Assert.Equal(0, exitCode);
     }
 
     [Fact]
-    public void Stage01_ImageConfigure()
+    public async Task Stage01_ImageConfigure()
     {
         if (SkipWhenUnavailable())
         {
@@ -41,20 +41,20 @@ public sealed class CliLifecycleTests
         }
 
         fixture.ImageCleanupRequired = true;
-        var exitCode = fixture.Run(new ImageConfigureOptions
+        var exitCode = await fixture.RunAsync(new ImageConfigureOptions
         {
             Name = fixture.ImageName,
             Components = "claude,dotnet"
         });
 
-        Assert.True(exitCode.Success);
+        Assert.Equal(0, exitCode);
         fixture.ImageConfigured = true;
         Assert.True(File.Exists(fixture.ModelPath), $"Modellprofil fehlt: {fixture.ModelPath}");
         Assert.True(File.Exists(fixture.ProfileConfigPath), $"Profilkonfiguration fehlt: {fixture.ProfileConfigPath}");
     }
 
     [Fact]
-    public void Stage02_VmCreate()
+    public async Task Stage02_VmCreate()
     {
         if (SkipWhenUnavailable())
         {
@@ -68,61 +68,61 @@ public sealed class CliLifecycleTests
         }
 
         fixture.VmCleanupRequired = true;
-        var exitCode = fixture.Run(new VmCreateOptions
+        var exitCode = await fixture.RunAsync(new VmCreateOptions
         {
             Name = fixture.VmName,
             Image = fixture.ImageName
         });
 
-        Assert.True(exitCode.Success);
+        Assert.Equal(0, exitCode);
         fixture.VmCreated = true;
     }
 
     [Fact]
-    public void Stage03_VmStartIdempotent()
+    public async Task Stage03_VmStartIdempotent()
     {
         if (SkipWhenPrerequisite())
         {
             return;
         }
 
-        var exitCode = fixture.Run(new VmStartOptions { Name = fixture.VmName });
+        var exitCode = await fixture.RunAsync(new VmStartOptions { Name = fixture.VmName });
 
-        Assert.True(exitCode.Success);
+        Assert.Equal(0, exitCode);
     }
 
     [Fact]
-    public void Stage04_VmExecSmoke()
+    public async Task Stage04_VmExecSmoke()
     {
         if (SkipWhenPrerequisite())
         {
             return;
         }
 
-        var exitCode = fixture.Run(new VmExecOptions
+        var exitCode = await fixture.RunAsync(new VmExecOptions
         {
             Name = fixture.VmName,
             Command = "printf 'hallo\\n' | grep -qx hallo"
         });
 
-        Assert.True(exitCode.Success);
+        Assert.Equal(0, exitCode);
     }
 
     [Fact]
-    public void Stage05_VmExecClassicRelease()
+    public async Task Stage05_VmExecClassicRelease()
     {
         if (SkipWhenPrerequisite())
         {
             return;
         }
 
-        var exitCode = fixture.Run(new VmExecOptions
+        var exitCode = await fixture.RunAsync(new VmExecOptions
         {
             Name = fixture.VmName,
             Command = ". /etc/os-release && test \"$VERSION_ID\" = \"26.10\""
         });
 
-        Assert.True(exitCode.Success);
+        Assert.Equal(0, exitCode);
     }
 
     [Fact]
@@ -135,17 +135,17 @@ public sealed class CliLifecycleTests
 
         for (var attempt = 1; attempt <= 6; attempt++)
         {
-            var exitCode = fixture.Run(new VmExecOptions
+            var exitCode = await fixture.RunAsync(new VmExecOptions
             {
                 Name = fixture.VmName,
                 Command = "command -v claude >/dev/null && claude --version >/dev/null"
             });
-            if (exitCode.Success)
+            if (exitCode == 0)
             {
                 return;
             }
 
-            output.WriteLine($"Claude probe {attempt} fehlgeschlagen (Exit {exitCode.ExitCode}).");
+            output.WriteLine($"Claude probe {attempt} fehlgeschlagen (Exit {exitCode}).");
             await Task.Delay(TimeSpan.FromSeconds(10));
         }
 
@@ -153,9 +153,9 @@ public sealed class CliLifecycleTests
     }
 
     [Fact]
-    public void Stage99_Cleanup()
+    public async Task Stage99_Cleanup()
     {
-        var report = fixture.Cleanup();
+        var report = await fixture.CleanupAsync();
         output.WriteLine(report.Diagnostics);
         Assert.True(report.Success, report.Diagnostics);
     }

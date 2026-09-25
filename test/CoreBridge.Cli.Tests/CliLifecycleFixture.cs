@@ -75,14 +75,30 @@ public sealed class CliLifecycleFixture : IDisposable
 
     internal bool VmCleanupRequired { get; set; }
 
-    internal ProgramExecution Run(IOptions options)
+    /// <summary>
+    /// Konsumiert den Ausgabestrom vollständig und bildet
+    /// <see cref="ProgramExecutionException"/> auf ihren Exit-Code ab (0 bei
+    /// Erfolg). Andere Exceptions werden nicht abgefangen.
+    /// </summary>
+    internal async Task<int> RunAsync(IOptions options)
     {
-        return Program.Run(config, options);
+        try
+        {
+            await foreach (var _ in Program.Run(config, options))
+            {
+            }
+
+            return 0;
+        }
+        catch (ProgramExecutionException exception)
+        {
+            return exception.ExitCode;
+        }
     }
 
-    internal void RecordStatus(ProgramExecution result)
+    internal void RecordStatus(int exitCode)
     {
-        MultipassAvailable = result.Success;
+        MultipassAvailable = exitCode == 0;
         SkipReason = MultipassAvailable ? null : "CLI-Integration übersprungen — multipass-status fehlgeschlagen.";
     }
 
@@ -91,16 +107,16 @@ public sealed class CliLifecycleFixture : IDisposable
         return !MultipassAvailable;
     }
 
-    internal CliLifecycleCleanupReport Cleanup()
+    internal async Task<CliLifecycleCleanupReport> CleanupAsync()
     {
         var failures = new List<string>();
 
         if (VmCleanupRequired)
         {
-            var delete = Run(new VmDeleteOptions { Name = VmName });
-            if (!delete.Success)
+            var exitCode = await RunAsync(new VmDeleteOptions { Name = VmName });
+            if (exitCode != 0)
             {
-                failures.Add($"vm-delete '{VmName}' fehlgeschlagen (Exit {delete.ExitCode}).");
+                failures.Add($"vm-delete '{VmName}' fehlgeschlagen (Exit {exitCode}).");
             }
             else
             {
@@ -117,10 +133,10 @@ public sealed class CliLifecycleFixture : IDisposable
             }
             else
             {
-                var delete = Run(new ImageDeleteOptions { Name = ImageName });
-                if (!delete.Success)
+                var exitCode = await RunAsync(new ImageDeleteOptions { Name = ImageName });
+                if (exitCode != 0)
                 {
-                    failures.Add($"image-delete '{ImageName}' fehlgeschlagen (Exit {delete.ExitCode}).");
+                    failures.Add($"image-delete '{ImageName}' fehlgeschlagen (Exit {exitCode}).");
                 }
                 else if (Directory.Exists(modelDirectory))
                 {
@@ -149,7 +165,7 @@ public sealed class CliLifecycleFixture : IDisposable
         CliLifecycleCleanupReport report;
         try
         {
-            report = Cleanup();
+            report = CleanupAsync().GetAwaiter().GetResult();
         }
         finally
         {

@@ -2,6 +2,7 @@ using CoreBridge.Cli;
 using CoreBridge.Core.Config;
 using CoreBridge.Core.Images;
 using CommandLine;
+using CoreBridge.Core.Vm;
 
 namespace CoreBridge.Cli.Tests;
 
@@ -24,7 +25,7 @@ public sealed class CliContractTests
     }
 
     [Fact]
-    public void RunVerwendetDenUebergebenenStoreRoot()
+    public async Task RunLiefertMeldungenAlsAsyncEnumerable()
     {
         using var store = new TempDirectory();
         var config = new AppConfig
@@ -32,33 +33,17 @@ public sealed class CliContractTests
             Images = new ImagesConfig { StoreRoot = store.Path }
         };
 
-        var result = Program.Run(config, new ImageListOptions());
-
-        Assert.True(result.Success);
-    }
-
-    [Fact]
-    public async Task RunLiefertEineNativeAsyncEnumerableAusgabe()
-    {
-        using var store = new TempDirectory();
-        var config = new AppConfig
-        {
-            Images = new ImagesConfig { StoreRoot = store.Path }
-        };
-
-        var result = Program.Run(config, new ImageListOptions());
         var lines = new List<string>();
-        await foreach (var line in result)
+        await foreach (var line in Program.Run(config, new ImageListOptions()))
         {
             lines.Add(line);
         }
 
-        Assert.True(result.Success);
         Assert.Contains("Keine konfigurierten Classic-Profile.", lines);
     }
 
     [Fact]
-    public void RunBeendetFehlendesImageProfilMitFehler()
+    public async Task RunWirftBeiFehlendemImageProfil()
     {
         using var store = new TempDirectory();
         var config = new AppConfig
@@ -66,9 +51,12 @@ public sealed class CliContractTests
             Images = new ImagesConfig { StoreRoot = store.Path }
         };
 
-        var result = Program.Run(config, new ImageDeleteOptions { Name = "does-not-exist" });
-
-        Assert.Equal(1, result.ExitCode);
+        await Assert.ThrowsAsync<MultipassException>(async () =>
+        {
+            await foreach (var _ in Program.Run(config, new ImageDeleteOptions { Name = "does-not-exist" }))
+            {
+            }
+        });
     }
 
     [Fact]
