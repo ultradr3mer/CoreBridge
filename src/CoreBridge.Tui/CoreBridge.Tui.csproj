@@ -9,6 +9,7 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <PackageReference Include="T2t.Terminal.Gui.XamlLike" Version="1.1.0" />
     <PackageReference Include="Terminal.Gui" Version="2.4.17" />
   </ItemGroup>
 
