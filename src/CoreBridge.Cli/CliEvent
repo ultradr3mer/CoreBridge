@@ -1,0 +1,95 @@
+using System.Runtime.CompilerServices;
+using System.Text;
+using CommandLine;
+using CoreBridge.Core.Common;
+using CoreBridge.Core.Config;
+using CoreBridge.Core.Images;
+using CoreBridge.Core.Multipass;
+using CoreBridge.Core.Vm;
+using Microsoft.Extensions.Configuration;
+
+namespace CoreBridge.Cli;
+
+public abstract class CliEvent
+{
+    public CliEvent()
+    {
+        this.Timestamp = DateTime.UtcNow;
+    }
+
+    public DateTime Timestamp { get; }
+}
+
+public class StdEvent : CliEvent
+{
+    private string data;
+
+
+    public StdEvent(string data)
+    {
+        this.data = data;
+    }
+}
+
+public class ErrEvent : CliEvent
+{
+    private string data;
+
+
+    public ErrEvent(string data)
+    {
+        this.data = data;
+    }
+}
+
+public class InteractionEvent<T> : StdEvent, IAwaitable<T>
+{
+    private T? result;
+
+    public InteractionEvent(string message)
+        : base(message)
+    {
+    }
+
+    public IAwaiter<T> GetAwaiter()
+    {
+        return this.result ?? throw new InvalidOperationException("Result not set yet.");
+    }
+
+    protected T Result { set => this.result = value; }
+}
+
+public class QuestionEvent<T> : InteractionEvent
+{
+    private static abstract class Options<T>
+    {
+        public static T[] Values { get; }
+        public static string[] Display { get; }
+    }
+
+    public static class YesNoOptions : Options
+    {
+        public static string[] Values { get => ["y", "n"] };
+    }
+
+    public static class OkCancelOptions : Options
+    {
+        public static string[] Values { get => ["ok", "cancel"] };
+    }
+
+    private T? result;
+
+
+    public IAwaiter<T> GetAwaiter()
+    {
+        return this.result ?? throw new InvalidOperationException("Result not set yet.");
+    }
+
+    protected T Result { set => this.result = value; }
+}
+
+public interface IUserInteractionCallback
+{
+    public string AskForAnswer(string message);
+    public bool AskYesNo(string message);
+}

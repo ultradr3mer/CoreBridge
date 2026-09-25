@@ -217,7 +217,11 @@ public static class Program
         ArgumentNullException.ThrowIfNull(config);
         ArgumentNullException.ThrowIfNull(options);
 
-        return RunCore(ApplyTimeoutOverride(config, options), options, confirm ?? (_ => false), prompt ?? (_ => null), cancellationToken);
+        return RunCore(config: ApplyTimeoutOverride(config, options),
+                       options: options,
+                       confirm: confirm ?? (_ => false),
+                       prompt: prompt ?? (_ => null),
+                       cancellationToken: cancellationToken);
     }
 
     /// <summary>
