@@ -4,9 +4,12 @@ namespace CoreBridge.Tui;
 
 public partial class MainWindow
 {
-    public MainWindow ()
+    public List<string> CommandList { get; set; } 
+
+    public MainWindow()
     {
-        InitializeComponent ();
+        CommandList = new List<string> { "Option 1", "Option 2", "Option 3" };
+        InitializeComponent();
     }
 
     private void OnNameChanged (object? sender, EventArgs e)

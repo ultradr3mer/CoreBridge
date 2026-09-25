@@ -6,10 +6,8 @@
         Width="Dim.Fill()"
         Height="Dim.Fill()">
 
-  <Label x:Name="WelcomeLabel"
-         X="2"
-         Y="1"
-         Text="Welcome to CoreBridge!" />
+  <DropDownList x:Name="Command"
+         ItemsSource="{Binding CommandList}" />
 
   <Label X="2"
          Y="3"
