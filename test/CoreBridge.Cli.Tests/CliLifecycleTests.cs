@@ -14,7 +14,7 @@ public sealed class CliLifecycleTests
 
     [Fact]
     public async Task KonfiguriertesClassicProfilLaeuftVollstaendigUeberCli()
-    {
+    {//TODO THIS NEEDS TO SEPERATE LIKE INTEGRATION TEST DID - ONE COMMAND PER TEST!
         using var cli = new CliRunner();
         var status = cli.Run(["multipass-status"], TimeSpan.FromMinutes(2));
         if (status.ExitCode != 0)
@@ -52,8 +52,6 @@ public sealed class CliLifecycleTests
             AssertOk(create, "vm-create");
             Assert.Contains("Gast-Provisionierung: cloud-init", create.StdOut);
 
-            // vm-connect bleibt wegen TTY-Bedararf im separaten
-            // CliProcessContractTests; der redirected Lifecycle ruft es nicht auf.
             var start = cli.Run(["vm-start", "--name", vmName], TimeSpan.FromMinutes(5));
             AssertOk(start, "vm-start");
             Assert.Contains("bereits Running", start.StdOut);

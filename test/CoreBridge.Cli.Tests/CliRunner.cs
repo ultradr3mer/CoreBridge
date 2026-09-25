@@ -13,7 +13,7 @@ internal sealed class CliRunner : IDisposable
     private readonly string _repositoryRoot;
     private readonly string _cliDll;
 
-    public CliRunner()
+    public CliRunner() 
     {
         _repositoryRoot = FindRepositoryRoot();
         // Bewusst die Development-Konfiguration verwenden: StoreRoot=artifacts

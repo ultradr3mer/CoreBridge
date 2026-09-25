@@ -129,21 +129,21 @@ public static class ImageCloudInit
             runCmd.Add($"chown -h ubuntu:ubuntu {target}");
         }
 
-        foreach (var vendored in selected.Select(component => component.VendoredLibs).Where(value => value is not null))
-        {
-            var packagesText = string.Join(" ", vendored!.Packages.Select(package => $"\"{package}\""));
-            runCmd.Add($"install -d -o ubuntu -g ubuntu {vendored.Destination}");
-            runCmd.Add(string.Join('\n',
-                "set -e",
-                $"if ! ldd {vendored.LddTarget} 2>/dev/null | grep -q \"not found\"; then exit 0; fi",
-                $"cd {Home} && rm -rf vm-libs && mkdir vm-libs && cd vm-libs",
-                $"for p in {packagesText}; do apt-get download \"$p\"; done",
-                "for d in *.deb; do dpkg -x \"$d\" \"ex-$d\"; done",
-                $"cp ex-*.deb/{vendored.ExtractGlob} {vendored.Destination}/",
-                $"chown -R ubuntu:ubuntu {vendored.Destination}",
-                $"cd {Home} && rm -rf vm-libs"));
-        }
-
+        //foreach (var vendored in selected.Select(component => component.VendoredLibs).Where(value => value is not null))
+        //{
+        //    var packagesText = string.Join(" ", vendored!.Packages.Select(package => $"\"{package}\""));
+        //    runCmd.Add($"install -d -o ubuntu -g ubuntu {vendored.Destination}");
+        //    runCmd.Add(string.Join('\n',
+        //        "set -e",
+        //        $"if ! ldd {vendored.LddTarget} 2>/dev/null | grep -q \"not found\"; then exit 0; fi",
+        //        $"cd {Home} && rm -rf vm-libs && mkdir vm-libs && cd vm-libs",
+        //        $"for p in {packagesText}; do apt-get download \"$p\"; done",
+        //        "for d in *.deb; do dpkg -x \"$d\" \"ex-$d\"; done",
+        //        $"cp ex-*.deb/{vendored.ExtractGlob} {vendored.Destination}/",
+        //        $"chown -R ubuntu:ubuntu {vendored.Destination}",
+        //        $"cd {Home} && rm -rf vm-libs"));
+        //}
+        // TODO CHECK IF CAN BE REMOVED SHOUDL BE DEPRECATED
         var scriptCommands = scripts
             .Select(component => component.CloudInitInstallPath!)
             .ToArray();
