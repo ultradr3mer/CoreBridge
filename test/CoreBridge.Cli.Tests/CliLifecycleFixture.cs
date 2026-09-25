@@ -1,20 +1,18 @@
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.RegularExpressions;
 using CoreBridge.Cli;
 using CoreBridge.Core.Config;
 using CoreBridge.Core.Images;
 
 namespace CoreBridge.Cli.Tests;
 
-internal sealed record CliLifecycleCleanupReport(bool Success, string Diagnostics)
-{
-    public static CliLifecycleCleanupReport Ok() => new(true, "Keine Lifecycle-Ressourcen offen.");
-}
-
-internal sealed record CliRunResult(int ExitCode, IReadOnlyList<string> Lines);
+/// <summary>Ergebnis eines CLI-Kommandos; <paramref name="Error"/> ist die fertige Fehlermeldung bei Exit ≠ 0.</summary>
+internal sealed record CliRunResult(int ExitCode, IReadOnlyList<string> Lines, string? Error = null);
 
 /// <summary>
-/// Gemeinsamer, serialisierter Zustand für die nummerierten Integrationstufen.
+/// Gemeinsame Namen, Config und Temp-Store der Lifecycle-Stufen; den
+/// Fortschrittszustand (Image, VM) hinterlässt jeweils die vorherige Stufe.
 /// CLI-Kommandos laufen ausschließlich über den öffentlichen
 /// <see cref="Program.Run"/>-Dispatcher (kein CLI-Kindprozess). Nur die
 /// interaktiven Verbindungen (vm-connect, SSH) gehen direkt über die
@@ -31,6 +29,11 @@ public sealed class CliLifecycleFixture : IDisposable
         store = new TempDirectory();
         config = new AppConfig
         {
+            // Ohne interaktive Rückfrage (Antwort Nein) darf ein langer cloud-init-Launch
+            // nicht nach dem ersten Abschnitt abgebrochen werden.
+            DefaultTimeoutVmCreation = "2400s",
+            // Start/Stop/Exec/Transfer warten DefaultTimeout (Standard 10 s) — für echte VMs zu kurz.
+            DefaultTimeout = "600s",
             Images = new ImagesConfig
             {
                 StoreRoot = store.Path,
@@ -68,18 +71,6 @@ public sealed class CliLifecycleFixture : IDisposable
     internal string ModelPath => Path.Combine(store.Path, "models", ImageName, ImageName + ".model");
 
     internal string ProfileConfigPath => Path.Combine(store.Path, "models", ImageName, ImageName + ".profile.json");
-
-    internal bool MultipassAvailable { get; private set; }
-
-    internal string? SkipReason { get; private set; }
-
-    internal bool ImageConfigured { get; set; }
-
-    internal bool VmCreated { get; set; }
-
-    internal bool ImageCleanupRequired { get; set; }
-
-    internal bool VmCleanupRequired { get; set; }
 
     internal string SshPrivateKeyPath => Path.Combine(store.Path, "ssh", "id_rsa");
 
@@ -134,7 +125,15 @@ public sealed class CliLifecycleFixture : IDisposable
         var lines = new List<string>();
         try
         {
-            await foreach (var line in Program.Run(config, options))
+            // Rückfragen (VM starten/stoppen/löschen, weiter warten) werden im
+            // automatisierten Lauf bejaht und protokolliert.
+            bool Confirm(string question)
+            {
+                log($"{question} [y/n] y (Test)");
+                return true;
+            }
+
+            await foreach (var line in Program.Run(config, options, confirm: Confirm))
             {
                 log(line);
                 lines.Add(line);
@@ -145,66 +144,78 @@ public sealed class CliLifecycleFixture : IDisposable
         catch (ProgramExecutionException exception)
         {
             log($"Fehler (Exit {exception.ExitCode}): {exception.Message}");
-            return new CliRunResult(exception.ExitCode, lines);
+            return new CliRunResult(exception.ExitCode, lines, exception.Message);
         }
     }
 
-    internal void RecordStatus(int exitCode)
+    /// <summary>Wie <see cref="RunAsync"/>, wirft aber bei Exit ≠ 0.</summary>
+    internal async Task<CliRunResult> RunCheckedAsync(IOptions options, Action<string> log)
     {
-        MultipassAvailable = exitCode == 0;
-        SkipReason = MultipassAvailable ? null : "CLI-Integration übersprungen — multipass-status fehlgeschlagen.";
-    }
-
-    internal bool ShouldSkip()
-    {
-        return !MultipassAvailable;
-    }
-
-    internal async Task<CliLifecycleCleanupReport> CleanupAsync(Action<string> log)
-    {
-        var failures = new List<string>();
-
-        if (VmCleanupRequired)
+        var result = await RunAsync(options, log);
+        if (result.ExitCode != 0)
         {
-            var exitCode = (await RunAsync(new VmDeleteOptions { Name = VmName, Purge = true }, log)).ExitCode;
-            if (exitCode != 0)
-            {
-                failures.Add($"vm-delete '{VmName}' fehlgeschlagen (Exit {exitCode}).");
-            }
-            else
-            {
-                VmCleanupRequired = false;
-            }
+            throw new InvalidOperationException(
+                $"{options.GetType().Name} fehlgeschlagen (Exit {result.ExitCode}): {result.Error}");
         }
 
-        if (ImageCleanupRequired)
+        return result;
+    }
+
+    /// <summary>State der Test-VM laut vm-list, <c>null</c> wenn sie nicht existiert.</summary>
+    internal async Task<string?> QueryVmStateAsync(Action<string> log)
+    {
+        var list = await RunCheckedAsync(new VmListOptions(), log);
+        return FindVmState(list, VmName);
+    }
+
+    /// <summary>Scheitert bei Exit ≠ 0 mit der Fehlermeldung des Kommandos statt „Expected 0, Actual 1“.</summary>
+    internal static void AssertSucceeded(CliRunResult result)
+    {
+        if (result.ExitCode != 0)
         {
-            var modelDirectory = Path.Combine(store.Path, "models", ImageName);
-            if (!Directory.Exists(modelDirectory))
-            {
-                ImageCleanupRequired = false;
-            }
-            else
-            {
-                var exitCode = (await RunAsync(new ImageDeleteOptions { Name = ImageName }, log)).ExitCode;
-                if (exitCode != 0)
-                {
-                    failures.Add($"image-delete '{ImageName}' fehlgeschlagen (Exit {exitCode}).");
-                }
-                else if (Directory.Exists(modelDirectory))
-                {
-                    failures.Add($"Image-Profil '{ImageName}' existiert nach image-delete weiterhin.");
-                }
-                else
-                {
-                    ImageCleanupRequired = false;
-                }
-            }
+            Assert.Fail($"Exit {result.ExitCode}: {result.Error}");
+        }
+    }
+
+    /// <summary>
+    /// Prüft Exit 0 und die Abschlusszeile zustandsändernder Kommandos:
+    /// <c>&lt;label&gt;: OK (&lt;Dauer&gt;) — State: &lt;state&gt;</c>.
+    /// </summary>
+    internal static void AssertCompleted(CliRunResult result, string label, string state)
+    {
+        AssertSucceeded(result);
+        Assert.NotEmpty(result.Lines);
+        Assert.Matches(
+            $@"^{Regex.Escape(label)}: OK \([^)]*\) — State: {Regex.Escape(state)}$",
+            result.Lines[^1]);
+    }
+
+    internal static string? FindVmState(CliRunResult list, string vmName)
+    {
+        return list.Lines
+            .Select(line => line.Split(' ', StringSplitOptions.RemoveEmptyEntries))
+            .Where(columns => columns.Length >= 2 && columns[0] == vmName)
+            .Select(columns => columns[1])
+            .FirstOrDefault();
+    }
+
+    /// <summary>
+    /// Räumt anhand des echten Zustands auf, egal an welcher Stufe der Lauf
+    /// abgebrochen ist: VM laut vm-list (endgültig, auch aus dem Papierkorb),
+    /// Image laut Modellverzeichnis.
+    /// </summary>
+    internal async Task CleanupAsync(Action<string> log)
+    {
+        if (await QueryVmStateAsync(log) is not null)
+        {
+            await RunCheckedAsync(new VmDeleteOptions { Name = VmName, Purge = true }, log);
         }
 
-        return failures.Count == 0
-            ? CliLifecycleCleanupReport.Ok()
-            : new CliLifecycleCleanupReport(false, string.Join(Environment.NewLine, failures));
+        var modelDirectory = Path.Combine(store.Path, "models", ImageName);
+        if (Directory.Exists(modelDirectory))
+        {
+            await RunCheckedAsync(new ImageDeleteOptions { Name = ImageName }, log);
+        }
     }
 
     public void Dispose()
@@ -215,23 +226,22 @@ public sealed class CliLifecycleFixture : IDisposable
         }
 
         disposed = true;
-        // Kein ITestOutputHelper beim Dispose — die Meldungen gehen in die Diagnose.
+        // Kein ITestOutputHelper beim Dispose — die Meldungen gehen in die Exception.
         var log = new List<string>();
-        CliLifecycleCleanupReport report;
         try
         {
-            report = CleanupAsync(log.Add).GetAwaiter().GetResult();
+            CleanupAsync(log.Add).GetAwaiter().GetResult();
+        }
+        catch (Exception exception)
+        {
+            throw new InvalidOperationException(string.Join(
+                Environment.NewLine,
+                ["Lifecycle-Cleanup fehlgeschlagen:", exception.Message, "Log:", .. log]),
+                exception);
         }
         finally
         {
             store.Dispose();
-        }
-
-        if (!report.Success)
-        {
-            throw new InvalidOperationException(string.Join(
-                Environment.NewLine,
-                ["Lifecycle-Cleanup fehlgeschlagen:", report.Diagnostics, "Log:", .. log]));
         }
     }
 }

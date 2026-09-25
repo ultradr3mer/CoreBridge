@@ -1,6 +1,7 @@
 using System.Text.Json;
+using CoreBridge.Core.Vm;
 
-namespace CoreBridge.Core.Vm;
+namespace CoreBridge.Core.Multipass;
 
 public static class MultipassVmList
 {

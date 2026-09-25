@@ -1,12 +1,15 @@
+using CoreBridge.Core.Multipass;
 using CoreBridge.Core.Vm;
 using Xunit.Abstractions;
 
 namespace CoreBridge.Cli.Tests;
 
 /// <summary>
-/// Kompletter VM-Zyklus in fester Reihenfolge (<see cref="LifecycleTestCaseOrderer"/>
-/// sortiert nach Methodenname): Status → Image → Create → List → Start → Exec →
-/// Connect → SSH → Stop → Delete. Jede Stufe setzt die vorherigen voraus.
+/// Kompletter VM-Zyklus: Status → Image → Create → List → Start → Exec →
+/// Connect (SSH) → Stop → Delete, strikt in dieser Reihenfolge
+/// (<see cref="LifecycleTestCaseOrderer"/>). Jede Stufe setzt den Zustand der
+/// vorherigen voraus und stellt ihn nicht selbst her — schlägt eine Stufe fehl,
+/// schlagen die folgenden ebenfalls fehl. Nur die ganze Klasse ausführen.
 /// </summary>
 [Collection(CliLifecycleCollection.Name)]
 [TestCaseOrderer(
@@ -27,106 +30,68 @@ public sealed class CliLifecycleTests
     }
 
     [Fact]
-    public async Task _0_multipassStatus()
+    public async Task Stage00_MultipassStatus()
     {
         var result = await fixture.RunAsync(new MultipassStatusOptions(), output.WriteLine);
-        fixture.RecordStatus(result.ExitCode);
-        if (fixture.ShouldSkip())
-        {
-            output.WriteLine(fixture.SkipReason);
-            return;
-        }
 
-        Assert.Equal(0, result.ExitCode);
+        CliLifecycleFixture.AssertSucceeded(result);
     }
 
     [Fact]
-    public async Task _1_imageConfigure()
+    public async Task Stage01_ImageConfigure()
     {
-        if (SkipWhenUnavailable())
-        {
-            return;
-        }
-
-        fixture.ImageCleanupRequired = true;
         var result = await fixture.RunAsync(new ImageConfigureOptions
         {
             Name = fixture.ImageName,
-            Components = "claude,dotnet"
+            Components = "claude,dotnet",
+            OverrideTimeout = "300s",
+            Force = true
         }, output.WriteLine);
 
-        Assert.Equal(0, result.ExitCode);
-        fixture.ImageConfigured = true;
+        CliLifecycleFixture.AssertSucceeded(result);
         Assert.True(File.Exists(fixture.ModelPath), $"Modellprofil fehlt: {fixture.ModelPath}");
         Assert.True(File.Exists(fixture.ProfileConfigPath), $"Profilkonfiguration fehlt: {fixture.ProfileConfigPath}");
     }
 
     [Fact]
-    public async Task _2_vmCreate()
+    public async Task Stage02_VmCreate()
     {
-        if (SkipWhenUnavailable())
-        {
-            return;
-        }
-
-        if (!fixture.ImageConfigured)
-        {
-            output.WriteLine("_2_vmCreate übersprungen — _1_imageConfigure hat kein Profil erzeugt.");
-            return;
-        }
-
-        fixture.VmCleanupRequired = true;
         var result = await fixture.RunAsync(new VmCreateOptions
         {
             Name = fixture.VmName,
-            Image = fixture.ImageName
+            Image = fixture.ImageName,
+
         }, output.WriteLine);
 
-        Assert.Equal(0, result.ExitCode);
-        fixture.VmCreated = true;
+        CliLifecycleFixture.AssertCompleted(result, $"create {fixture.VmName}", "Running");
     }
 
     [Fact]
-    public async Task _3_vmList()
+    public async Task Stage03_VmList()
     {
-        if (SkipWhenPrerequisite())
-        {
-            return;
-        }
-
         var result = await fixture.RunAsync(new VmListOptions(), output.WriteLine);
 
-        Assert.Equal(0, result.ExitCode);
-        AssertVmState(result, "Running");
+        CliLifecycleFixture.AssertSucceeded(result);
+        Assert.Equal("Running", CliLifecycleFixture.FindVmState(result, fixture.VmName));
     }
 
     [Fact]
-    public async Task _4_vmStart()
+    public async Task Stage04_VmStart()
     {
-        if (SkipWhenPrerequisite())
-        {
-            return;
-        }
-
         var result = await fixture.RunAsync(new VmStartOptions { Name = fixture.VmName }, output.WriteLine);
 
-        Assert.Equal(0, result.ExitCode);
+        CliLifecycleFixture.AssertCompleted(result, $"start {fixture.VmName}", "Running");
     }
 
     [Fact]
-    public async Task _5_vmExec()
+    public async Task Stage05_VmExec()
     {
-        if (SkipWhenPrerequisite())
-        {
-            return;
-        }
-
         var echo = await fixture.RunAsync(new VmExecOptions
         {
             Name = fixture.VmName,
             Command = "echo cbx-exec-$((20+22))"
         }, output.WriteLine);
-        Assert.Equal(0, echo.ExitCode);
+        CliLifecycleFixture.AssertSucceeded(echo);
         Assert.Contains("cbx-exec-42", echo.Lines);
 
         var release = await fixture.RunAsync(new VmExecOptions
@@ -134,7 +99,7 @@ public sealed class CliLifecycleTests
             Name = fixture.VmName,
             Command = ". /etc/os-release && test \"$VERSION_ID\" = \"26.10\""
         }, output.WriteLine);
-        Assert.Equal(0, release.ExitCode);
+        CliLifecycleFixture.AssertSucceeded(release);
 
         // Claude wird per cloud-init nachinstalliert und kann kurz nach dem Boot noch fehlen.
         for (var attempt = 1; attempt <= 6; attempt++)
@@ -157,79 +122,45 @@ public sealed class CliLifecycleTests
     }
 
     [Fact]
-    public void _6_vmConnect()
+    public async Task Stage06_VmConnect()
     {
-        if (SkipWhenPrerequisite())
-        {
-            return;
-        }
-
-        using var session = new VmService().OpenConsole(fixture.VmName, output.WriteLine);
-
-        session.SendCommand("echo cbx-connect-$((20+22))", "cbx-connect-42", SessionTimeout);
-        session.SendCommand("echo user=$(id -un)", "user=ubuntu", SessionTimeout);
-    }
-
-    [Fact]
-    public async Task _7_vmConnectSsh()
-    {
-        if (SkipWhenPrerequisite())
-        {
-            return;
-        }
-
         var publicKey = fixture.EnsureSshKey().Trim();
         var install = await fixture.RunAsync(new VmExecOptions
         {
             Name = fixture.VmName,
             Command = "mkdir -p ~/.ssh && chmod 700 ~/.ssh"
-                + $" && echo '{publicKey}' >> ~/.ssh/authorized_keys"
+                + $" && (grep -qxF '{publicKey}' ~/.ssh/authorized_keys 2>/dev/null"
+                + $" || echo '{publicKey}' >> ~/.ssh/authorized_keys)"
                 + " && chmod 600 ~/.ssh/authorized_keys"
         }, output.WriteLine);
-        Assert.Equal(0, install.ExitCode);
+        CliLifecycleFixture.AssertSucceeded(install);
 
         using var session = await OpenSshSessionAsync();
 
         // Gemeinsamer Shell-Status: cd wirkt auf den folgenden Befehl.
         session.SendLine("cd /tmp");
         session.SendCommand("echo cwd=$(pwd)", "cwd=/tmp", SessionTimeout);
-        session.SendCommand("echo cbx-ssh-$((20+22))", "cbx-ssh-42", SessionTimeout);
+        session.SendCommand("echo cbx-connect-$((20+22))", "cbx-connect-42", SessionTimeout);
+        session.SendCommand("echo user=$(id -un)", "user=ubuntu", SessionTimeout);
         session.Exit();
     }
 
     [Fact]
-    public async Task _8_vmStop()
+    public async Task Stage07_VmStop()
     {
-        if (SkipWhenPrerequisite())
-        {
-            return;
-        }
-
         var stop = await fixture.RunAsync(new VmStopOptions { Name = fixture.VmName }, output.WriteLine);
-        Assert.Equal(0, stop.ExitCode);
 
-        var list = await fixture.RunAsync(new VmListOptions(), output.WriteLine);
-        Assert.Equal(0, list.ExitCode);
-        AssertVmState(list, "Stopped");
+        CliLifecycleFixture.AssertCompleted(stop, $"stop {fixture.VmName}", "Stopped");
     }
 
     [Fact]
-    public async Task _9_vmDelete()
+    public async Task Stage08_VmDelete()
     {
-        if (SkipWhenPrerequisite())
-        {
-            return;
-        }
-
         var delete = await fixture.RunAsync(
             new VmDeleteOptions { Name = fixture.VmName, Purge = true },
             output.WriteLine);
-        Assert.Equal(0, delete.ExitCode);
-        fixture.VmCleanupRequired = false;
 
-        var list = await fixture.RunAsync(new VmListOptions(), output.WriteLine);
-        Assert.Equal(0, list.ExitCode);
-        Assert.DoesNotContain(list.Lines, line => VmColumns(line)?.Name == fixture.VmName);
+        CliLifecycleFixture.AssertCompleted(delete, $"delete {fixture.VmName} --purge", "nicht vorhanden");
     }
 
     private async Task<VmSshSession> OpenSshSessionAsync()
@@ -247,45 +178,5 @@ public sealed class CliLifecycleTests
                 await Task.Delay(TimeSpan.FromSeconds(5));
             }
         }
-    }
-
-    private void AssertVmState(CliRunResult list, string expectedState)
-    {
-        var row = list.Lines.Select(VmColumns).FirstOrDefault(columns => columns?.Name == fixture.VmName);
-        Assert.True(row is not null, $"VM '{fixture.VmName}' fehlt in vm-list.");
-        Assert.Equal(expectedState, row.Value.State);
-    }
-
-    private static (string Name, string State)? VmColumns(string line)
-    {
-        var columns = line.Split(' ', StringSplitOptions.RemoveEmptyEntries);
-        return columns.Length >= 2 ? (columns[0], columns[1]) : null;
-    }
-
-    private bool SkipWhenUnavailable()
-    {
-        if (!fixture.ShouldSkip())
-        {
-            return false;
-        }
-
-        output.WriteLine(fixture.SkipReason);
-        return true;
-    }
-
-    private bool SkipWhenPrerequisite()
-    {
-        if (SkipWhenUnavailable())
-        {
-            return true;
-        }
-
-        if (fixture.VmCreated)
-        {
-            return false;
-        }
-
-        output.WriteLine("Lifecycle-Stufe übersprungen — _2_vmCreate war nicht erfolgreich.");
-        return true;
     }
 }

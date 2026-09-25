@@ -1,6 +1,7 @@
 using System.Text.RegularExpressions;
 using YamlDotNet.Core;
 using YamlDotNet.RepresentationModel;
+using CoreBridge.Core.Multipass;
 using CoreBridge.Core.Vm;
 
 namespace CoreBridge.Core.Images;

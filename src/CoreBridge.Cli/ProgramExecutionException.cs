@@ -1,19 +1,20 @@
 namespace CoreBridge.Cli;
 
 /// <summary>
-/// Signals that a command completed unsuccessfully after producing its normal
-/// output. The exception is thrown from the execution stream so callers can
-/// handle it at the application boundary instead of receiving an error string
-/// as if it were a normal message.
+/// Einziger Fehlertyp, den <see cref="Program.Run"/> für erwartete Fehler wirft.
+/// <see cref="Exception.Message"/> ist bereits die fertige Meldung für den
+/// Benutzer und <see cref="ExitCode"/> der Exit-Code des Prozesses — der
+/// Aufrufer gibt beides nur noch aus. Die ursprüngliche Ursache bleibt als
+/// <see cref="Exception.InnerException"/> erhalten.
 /// </summary>
 public sealed class ProgramExecutionException : Exception
 {
-    public ProgramExecutionException(int exitCode, string message)
-        : base(message)
+    public ProgramExecutionException(int exitCode, string message, Exception? innerException = null)
+        : base(message, innerException)
     {
         ExitCode = exitCode;
     }
 
-    /// <summary>The process or command exit code represented by this failure.</summary>
+    /// <summary>Exit-Code des Prozesses für diesen Fehler.</summary>
     public int ExitCode { get; }
 }

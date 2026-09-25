@@ -1,6 +1,6 @@
 using System.Text.RegularExpressions;
 
-namespace CoreBridge.Core.Vm;
+namespace CoreBridge.Core.Multipass;
 
 /// <summary>
 /// Entfernt das Log-Rauschen der gRPC/absl-Bibliotheken aus multipass-stderr

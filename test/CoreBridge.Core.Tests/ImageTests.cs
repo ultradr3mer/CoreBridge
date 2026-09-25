@@ -1,6 +1,7 @@
 using System.Net;
 using CoreBridge.Core.Config;
 using CoreBridge.Core.Images;
+using CoreBridge.Core.Multipass;
 using CoreBridge.Core.Vm;
 using YamlDotNet.RepresentationModel;
 

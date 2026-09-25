@@ -1,4 +1,5 @@
 using System.Text.Json;
+using CoreBridge.Core.Multipass;
 
 namespace CoreBridge.Core.Vm;
 

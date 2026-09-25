@@ -2,6 +2,7 @@ using System.Net.Http;
 using System.Security.Cryptography;
 using System.Text;
 using CoreBridge.Core.Config;
+using CoreBridge.Core.Multipass;
 using CoreBridge.Core.Vm;
 
 namespace CoreBridge.Core.Images;

@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Text;
+using CoreBridge.Core.Multipass;
 
 namespace CoreBridge.Core.Vm;
 

@@ -1,6 +1,6 @@
 using System.Text.Json;
 
-namespace CoreBridge.Core.Vm;
+namespace CoreBridge.Core.Multipass;
 
 public static class MultipassVersion
 {

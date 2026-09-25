@@ -1,6 +1,6 @@
 using System.Diagnostics;
 
-namespace CoreBridge.Core.Vm;
+namespace CoreBridge.Core.Multipass;
 
 public class MultipassCli
 {
@@ -17,6 +17,26 @@ public class MultipassCli
     }
 
     public virtual MultipassRunResult Run(IReadOnlyList<string> args, int timeoutMs = 30_000, string? exePath = null)
+    {
+        return RunCore(args, TimeSpan.FromMilliseconds(timeoutMs), () => false, exePath);
+    }
+
+    /// <summary>
+    /// Wie <see cref="Run"/>, wartet aber in Abschnitten von <paramref name="slice"/>:
+    /// Ist der Prozess danach noch nicht fertig, entscheidet <paramref name="keepWaiting"/>,
+    /// ob ein weiterer Abschnitt gewartet wird. Bei <c>false</c> wird der Prozess
+    /// beendet und <see cref="MultipassTimeoutException"/> geworfen.
+    /// </summary>
+    public virtual MultipassRunResult RunWithExtensions(
+        IReadOnlyList<string> args,
+        TimeSpan slice,
+        Func<bool> keepWaiting,
+        string? exePath = null)
+    {
+        return RunCore(args, slice, keepWaiting, exePath);
+    }
+
+    private MultipassRunResult RunCore(IReadOnlyList<string> args, TimeSpan slice, Func<bool> keepWaiting, string? exePath)
     {
         var binary = exePath ?? _locate() ?? throw new MultipassNotFoundException();
         var startInfo = new ProcessStartInfo
@@ -48,12 +68,19 @@ public class MultipassCli
         var stdOutTask = process.StandardOutput.ReadToEndAsync();
         var stdErrTask = process.StandardError.ReadToEndAsync();
 
-        if (!process.WaitForExit(timeoutMs))
+        var slices = 0;
+        while (!process.WaitForExit(slice))
         {
+            slices++;
+            if (keepWaiting())
+            {
+                continue;
+            }
+
             TryKill(process);
             throw new MultipassTimeoutException(
                 string.Join(' ', args),
-                timeoutMs,
+                (int)(slice.TotalMilliseconds * slices),
                 stdOutTask.GetAwaiter().GetResult(),
                 stdErrTask.GetAwaiter().GetResult());
         }
