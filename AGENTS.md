@@ -34,8 +34,8 @@ ein Ergebnis.
 - Neues Standardmodell: `ubuntu-classic-2610-amd64-dangerous.model`
   (`https://raw.githubusercontent.com/canonical/models/main/ubuntu-classic-2610-amd64-dangerous.model`).
 - Runtime-Image für normale VMs und Profile: `daily:26.10`.
-- `26.04` in `Images:Build:Image` bleibt ausschließlich das Werkzeug-Image
-  der klassischen Ubuntu-Bau-VM; es ist kein Fallback für die Ziel-Runtime.
+- `26.04` ist kein aktives CoreBridge-Image und kein Fallback für die
+  Ziel-Runtime; der aktive Classic-Workflow verwendet `daily:26.10`.
 - `core26` und die alten Core-Messungen bleiben historische Experimentdaten,
   keine Defaults für neue Implementierungen oder Tests.
 - `image-configure` erzeugt ein Profil; `vm-create --image <profil>` löst
@@ -61,11 +61,10 @@ ein Ergebnis.
   erstellt ausschließlich im Gast den Benutzer-Symlink und die `.profile`-Belegung.
   Die frühere Core-26-Evidenz mit vendorierten Runtime-Bibliotheken bleibt
   historisch und ist kein Host-Bootstrap-Verfahren des aktuellen Workflows.
-- Custom-Image (T11) ist **deprecated und wird nicht unterstützt**: Der
-  Kompatibilitätspfad `image-build` bleibt vorerst verborgen erhalten, damit
-  historische Profile lesbar bleiben. T11 belegt keinen erfolgreichen Import
-  unter Windows (file://-Mangling; HTTP wurde zu HTTPS mit SSL-Fehler). Die
-  obsolen Host-Skripte wurden entfernt.
+- T11 bleibt als historische Custom-Image-Evidenz erhalten, ist aber kein
+  aktiver CoreBridge-Workflow. Die fehlgeschlagenen Importversuche bleiben im
+  Experiment-Log; der aktive Classic-Workflow verwendet ausschließlich
+  Runtime-Profil plus Cloud-init.
 - T01–T10 sind implementiert und gelaufen; alle Messwerte in `EXPERIMENT_LOG.md`
   (volle Rohdaten unter `experiment-data/`). Kernaussagen: launch core26 kalt
   88,5 s / warm 58,2 s; exec-Roundtrip ~130 ms mit sauberer Exit-Code-Weitergabe;
@@ -78,15 +77,11 @@ ein Ergebnis.
   dem Papierkorb übernehmen kann (T03-Rerun würde es klären).
 - Multipass 1.16.3 liegt im **User-PATH** (`C:\Program Files\Multipass\bin`), NICHT
   machine-weit → Locator-Stufe 2 (PATH) greift bereits.
-- **Custom-Image-Pipeline als CLI-Verbs (25.09.2026):**
+- **Classic-Profil-Pipeline als CLI-Verbs (25.09.2026):**
   - `cb image-configure --name <n> [-c claude,dotnet,opencode,python] [--model-url <url>] [--runtime-image <image>]`
     lädt/validiert das Classic-Modell
-    (`ubuntu-classic-2610-amd64-dangerous.model`), schreibt `<n>.build.json`
+    (`ubuntu-classic-2610-amd64-dangerous.model`), schreibt `<n>.profile.json`
     mit Runtime `daily:26.10` und erzeugt cloud-init für Gast-Komponenten.
-  - `cb image-build --name <n>` bleibt nur als versteckter, deprecated
-    Kompatibilitätspfad für historische T11-Daten erhalten. `26.04` ist dabei
-    ausschließlich das Werkzeug-Image dieser nicht unterstützten Bau-VM; ein
-    erfolgreicher Windows-Import ist nicht nachgewiesen.
   - Komponentendefinitionen (Pakete, optionale Store-Snaps, Benutzer und
     Cloud-init-Skripte) stehen in `src/CoreBridge.Cli/appsettings.json`;
     komponentenspezifische Symlinks, Umgebungsvariablen und Bibliotheks-
@@ -100,12 +95,12 @@ ein Ergebnis.
   (a) Classic-26.10-Edge: Modell- und Runtime-Inputs können sich bewegen;
   `image-configure` validiert und persistiert den jeweils geladenen
   Modell-Digest. `pinned` versus `managed-stable` für Claude ist noch offen.
-  (b) Custom-Image-Import bleibt ungelöst; `image-build` ist bis zu einer
-    ausdrücklichen neuen Entscheidung deprecated.
+  (b) Custom-Image-Build/Import ist kein aktiver Workflow mehr; T11 bleibt
+    ausschließlich historische Experiment-Evidenz.
   (c) `opencode`/`python` und der .NET-Snap bleiben als Classic-Gast-
   Provisionierung zu validieren; die alte Core-spezifische Begründung darf
   nicht übertragen werden.
-  (d) `cbx-t11-build2` und alte `cbx-*`-VMs können im Papierkorb liegen;
+  (d) Historische `cbx-t11-build2` und alte `cbx-*`-VMs können im Papierkorb liegen;
   Purge bleibt tabu.
 - **Hyper-V-VM-Gruppe**: `scripts/group-vms.ps1` hält cbx-*-VMs (Multipass
   benennt Hyper-V-VMs wie Instanzen) in einer VMCollection-Gruppe (Default
@@ -129,8 +124,10 @@ ein Ergebnis.
   `F:\source\SandboxBridge\src\SandboxBridge.Tui\AGENTS.md` ansehen.
 - `test/CoreBridge.Core.Tests` — Unit-Tests; jedes Projekt bekommt ein eigenes
   Testprojekt.
-- `test/CoreBridge.Cli.Tests` — Prozessbasierte CLI-/Lifecycle-Tests; der
-  öffentliche VM-Lifecycle läuft ausschließlich über diese Verben.
+- `test/CoreBridge.Cli.Tests` — CLI-/Contract- und Lifecycle-Tests; der
+  öffentliche VM-Lifecycle läuft ausschließlich über `Program.Run` und die
+  registrierten Optionsklassen. `Program.Run` liefert `ProgramExecution`
+  (`IAsyncEnumerable<string>`); Tests capturen keine Console-Streams.
 - `test/Multipass.Experiments` — reproduzierbare historische Experimente, keine
   klassischen Tests.
 - `net10.0`, SDK via `global.json` gepinnt. Config in CLI und TUI aus derselben

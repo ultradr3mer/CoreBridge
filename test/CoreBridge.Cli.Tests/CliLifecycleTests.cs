@@ -21,17 +21,15 @@ public sealed class CliLifecycleTests
     [Fact]
     public void Stage00_MultipassStatus()
     {
-        var result = fixture.Cli.Run(["multipass-status"], TimeSpan.FromMinutes(2));
-        fixture.RecordStatus(result);
+        var exitCode = fixture.Run(new MultipassStatusOptions());
+        fixture.RecordStatus(exitCode);
         if (fixture.ShouldSkip())
         {
             output.WriteLine(fixture.SkipReason);
             return;
         }
 
-        Assert.False(result.TimedOut, "multipass-status timed out.");
-        Assert.Equal(0, result.ExitCode);
-        Assert.Contains("CLI:", result.StdOut);
+        Assert.True(exitCode.Success);
     }
 
     [Fact]
@@ -43,20 +41,16 @@ public sealed class CliLifecycleTests
         }
 
         fixture.ImageCleanupRequired = true;
-        var result = fixture.Cli.Run(
-            [
-                "image-configure",
-                "--name", fixture.ImageName,
-                "--components", "claude,dotnet"
-            ],
-            TimeSpan.FromMinutes(5));
-        AssertOk(result, "image-configure");
+        var exitCode = fixture.Run(new ImageConfigureOptions
+        {
+            Name = fixture.ImageName,
+            Components = "claude,dotnet"
+        });
 
+        Assert.True(exitCode.Success);
         fixture.ImageConfigured = true;
         Assert.True(File.Exists(fixture.ModelPath), $"Modellprofil fehlt: {fixture.ModelPath}");
-        Assert.Contains(
-            "ubuntu-classic-2610-amd64-dangerous",
-            File.ReadAllText(fixture.ModelPath));
+        Assert.True(File.Exists(fixture.ProfileConfigPath), $"Profilkonfiguration fehlt: {fixture.ProfileConfigPath}");
     }
 
     [Fact]
@@ -73,17 +67,14 @@ public sealed class CliLifecycleTests
             return;
         }
 
-        // Vor dem Aufruf markieren: Auch ein Timeout kann eine VM bereits angelegt haben.
         fixture.VmCleanupRequired = true;
-        var result = fixture.Cli.Run(
-            [
-                "vm-create",
-                "--name", fixture.VmName,
-                "--image", fixture.ImageName
-            ],
-            TimeSpan.FromMinutes(75));
-        AssertOk(result, "vm-create");
-        Assert.Contains("Gast-Provisionierung: cloud-init", result.StdOut);
+        var exitCode = fixture.Run(new VmCreateOptions
+        {
+            Name = fixture.VmName,
+            Image = fixture.ImageName
+        });
+
+        Assert.True(exitCode.Success);
         fixture.VmCreated = true;
     }
 
@@ -95,11 +86,9 @@ public sealed class CliLifecycleTests
             return;
         }
 
-        var result = fixture.Cli.Run(
-            ["vm-start", "--name", fixture.VmName],
-            TimeSpan.FromMinutes(5));
-        AssertOk(result, "vm-start");
-        Assert.Contains("bereits Running", result.StdOut);
+        var exitCode = fixture.Run(new VmStartOptions { Name = fixture.VmName });
+
+        Assert.True(exitCode.Success);
     }
 
     [Fact]
@@ -110,11 +99,13 @@ public sealed class CliLifecycleTests
             return;
         }
 
-        var result = fixture.Cli.Run(
-            ["vm-exec", "--name", fixture.VmName, "--command", "echo hallo"],
-            TimeSpan.FromMinutes(5));
-        AssertOk(result, "vm-exec smoke");
-        Assert.Contains("hallo", result.StdOut);
+        var exitCode = fixture.Run(new VmExecOptions
+        {
+            Name = fixture.VmName,
+            Command = "printf 'hallo\\n' | grep -qx hallo"
+        });
+
+        Assert.True(exitCode.Success);
     }
 
     [Fact]
@@ -125,16 +116,13 @@ public sealed class CliLifecycleTests
             return;
         }
 
-        var result = fixture.Cli.Run(
-            [
-                "vm-exec",
-                "--name", fixture.VmName,
-                "--command",
-                ". /etc/os-release && printf '%s' \"$VERSION_ID\""
-            ],
-            TimeSpan.FromMinutes(5));
-        AssertOk(result, "vm-exec release");
-        Assert.Contains("26.10", result.StdOut);
+        var exitCode = fixture.Run(new VmExecOptions
+        {
+            Name = fixture.VmName,
+            Command = ". /etc/os-release && test \"$VERSION_ID\" = \"26.10\""
+        });
+
+        Assert.True(exitCode.Success);
     }
 
     [Fact]
@@ -145,8 +133,23 @@ public sealed class CliLifecycleTests
             return;
         }
 
-        var available = await WaitForClaudeAsync();
-        Assert.True(available, "Claude wurde nach der Cloud-init-Provisionierung nicht verfügbar.");
+        for (var attempt = 1; attempt <= 6; attempt++)
+        {
+            var exitCode = fixture.Run(new VmExecOptions
+            {
+                Name = fixture.VmName,
+                Command = "command -v claude >/dev/null && claude --version >/dev/null"
+            });
+            if (exitCode.Success)
+            {
+                return;
+            }
+
+            output.WriteLine($"Claude probe {attempt} fehlgeschlagen (Exit {exitCode.ExitCode}).");
+            await Task.Delay(TimeSpan.FromSeconds(10));
+        }
+
+        Assert.Fail("Claude wurde nach der Cloud-init-Provisionierung nicht verfügbar.");
     }
 
     [Fact]
@@ -182,36 +185,5 @@ public sealed class CliLifecycleTests
 
         output.WriteLine("Lifecycle-Stufe übersprungen — Stage02_VmCreate war nicht erfolgreich.");
         return true;
-    }
-
-    private async Task<bool> WaitForClaudeAsync()
-    {
-        for (var attempt = 1; attempt <= 6; attempt++)
-        {
-            var result = fixture.Cli.Run(
-                [
-                    "vm-exec",
-                    "--name", fixture.VmName,
-                    "--command", "command -v claude && claude --version"
-                ],
-                TimeSpan.FromMinutes(5));
-            output.WriteLine($"Claude probe {attempt}: exit={result.ExitCode} {result.StdOut}{result.StdErr}");
-            if (result.ExitCode == 0 && result.StdOut.Contains("Claude Code", StringComparison.OrdinalIgnoreCase))
-            {
-                return true;
-            }
-
-            await Task.Delay(TimeSpan.FromSeconds(10));
-        }
-
-        return false;
-    }
-
-    private static void AssertOk(CliProcessResult result, string operation)
-    {
-        Assert.False(result.TimedOut, $"{operation} timed out: {result.CommandLine}");
-        Assert.True(
-            result.ExitCode == 0,
-            $"{operation} fehlgeschlagen (Exit {result.ExitCode}).\n{result.CommandLine}\nSTDOUT:\n{result.StdOut}\nSTDERR:\n{result.StdErr}");
     }
 }

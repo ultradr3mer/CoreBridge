@@ -11,8 +11,7 @@ Die aktive Zielbasis ist **klassisches Ubuntu 26.10 Edge**:
 
 - Modell: `ubuntu-classic-2610-amd64-dangerous.model`
 - Multipass-Runtime: `daily:26.10`
-- `26.04` gehört nur zum versteckten, deprecated Kompatibilitätspfad
-  `image-build`; es ist keine Ziel-Runtime und kein Fallback.
+- `26.04` ist kein aktives CoreBridge-Image und keine Ziel-Runtime.
 - Claude wird nicht über den Core-only `claude-code`-Snap provisioniert.
   `scripts/components/install-claude.sh` ist eine Gast-Datei, die in die
   generierte cloud-init-YAML eingebettet und dort per `runcmd` ausgeführt wird.
@@ -177,12 +176,11 @@ Aktueller Test- und Konfigurationsstand:
   separate Stufen aus; der frühere direkte Servicefluss ist entfernt. Ein
   Collection-Fixture besitzt eindeutige Namen und einen temporären StoreRoot und
   verifiziert das Cleanup ohne `--purge`.
-- `ImageBuildConfig` speichert Komponenten, Snaps, Runtime, Cloud-init-Dateiname,
+- `ImageProfileConfig` speichert Komponenten, Snaps, Runtime, Cloud-init-Dateiname,
   Modell-ID und Modell-Digest. Gast-Skriptinhalte werden config-getrieben
   bei `image-configure` in die YAML geschrieben.
-- `image-build` ist deprecated und nicht unterstützt. Es übergibt ausschließlich
-  `--snap <name>` an `ubuntu-image`; ein in cloud-init konfiguriertes `--classic`
-  kann verloren gehen. T11 belegt außerdem keinen erfolgreichen Windows-Import.
+- T11 bleibt als historische Custom-Image-Evidenz im Experiment-Log; ein
+  Image-Build-/Importpfad ist nicht mehr aktiv.
 - Das Basis-Modell wird von einem beweglichen `main`-Branch geladen und auf
   Classic-Identität geprüft; Modell-ID und SHA-256 werden im Profil
   protokolliert.
@@ -475,7 +473,7 @@ historische Core-Evidenz.
 
 Snap-Kommandos werden als YAML-Argumentlisten serialisiert, beispielsweise
 `[snap, install, snap-name, --classic]`. Der doppelte Snap-Installationsfall
-betrifft nur den deprecated Custom-Image-Bautpfad. Store-Snaps brauchen für
+betraf nur den historischen Custom-Image-Bauweg. Store-Snaps brauchen für
 reproduzierbare Builds weiterhin eine explizite Channel-/Revision-Policy.
 
 ### 3.10 Netzwerk, Ownership und Secrets
@@ -546,7 +544,7 @@ Lokale Quellen:
 | Binary über `write_files` | technisch möglich, ungeeignet für ~238 MB | aufwendig | **Nein** |
 | Core-only Host-Transfer | für Classic unnötig | gut, aber nicht mehr aktiv | **Veraltet** |
 | CoreBridge-eigener Snap | unnötig | möglich | Nur für breitere Paketstrategie neu bewerten |
-| Custom Image | nicht aktiv | gut mit exakten Revisionen | deprecated; Windows-Import nicht verifiziert |
+| Custom Image | nicht aktiv | gut mit exakten Revisionen | historischer T11-Bauweg; kein aktiver Import |
 | Gestoppte Template-VM + `clone` | gut | gut bei unveränderlicher, protokollierter Vorlage | **Spätere Optimierung nach T12/T13** |
 
 ### 4.1 Warum kein eigenes `.deb` auf Classic Ubuntu
@@ -754,8 +752,7 @@ können.
 - **Aktiv:** klassisches Ubuntu 26.10 Edge.
 - Modell: `ubuntu-classic-2610-amd64-dangerous.model`.
 - Multipass-Runtime: `daily:26.10`.
-- `26.04` wird ausschließlich im versteckten, deprecated `image-build`
-  als Werkzeug-Image verwendet.
+- `26.04` ist kein aktives CoreBridge-Image und keine Ziel-Runtime.
 - Die alten Core-26-Aussagen bleiben historische Experimente und werden nicht
   auf Classic übertragen.
 
@@ -863,8 +860,8 @@ Experimente:
 3. Classic-Edge-Messungen für Latenz, Cloud-init-Health und Komponenten-
    Postconditions; historische Core-Messungen dürfen nicht als Classic-Werte
    verwendet werden.
-4. Import eines gebauten Classic-`.img` unter Windows; T11 hat keinen
-   erfolgreichen Lauf nachgewiesen, `image-build` bleibt deprecated.
+4. T11 bleibt als historische Custom-Image-Evidenz; ein aktiver Build-/Import-
+   pfad ist nicht vorgesehen.
 
 ## 11. Quellen
 

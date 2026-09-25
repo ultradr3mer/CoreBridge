@@ -1,10 +1,59 @@
-﻿using CommandLine;
+﻿using System.Runtime.CompilerServices;
+using System.Text;
+using CommandLine;
 using CoreBridge.Core.Config;
 using CoreBridge.Core.Images;
 using CoreBridge.Core.Vm;
 using Microsoft.Extensions.Configuration;
 
 namespace CoreBridge.Cli;
+
+/// <summary>
+/// Native asynchronous result of a command dispatched through
+/// <see cref="Program.Run"/>. Enumeration yields output lines without touching
+/// the application's console streams.
+/// </summary>
+public sealed class ProgramExecution : IAsyncEnumerable<string>
+{
+    private readonly string[] lines;
+
+    public ProgramExecution(int exitCode, string output = "", string error = "")
+    {
+        ExitCode = exitCode;
+        Error = error;
+        lines = string.IsNullOrEmpty(output)
+            ? []
+            : output.Replace("\r\n", "\n").TrimEnd('\n').Split('\n');
+    }
+
+    public int ExitCode { get; }
+
+    public string Error { get; }
+
+    public bool Success => ExitCode == 0;
+
+    public static ProgramExecution Ok(string output = "", string error = "") => new(0, output, error);
+
+    public static ProgramExecution Failure(int exitCode, string output = "", string error = "") =>
+        new(exitCode, output, error);
+
+    public IAsyncEnumerator<string> GetAsyncEnumerator(
+        CancellationToken cancellationToken = default)
+    {
+        return Enumerate(cancellationToken).GetAsyncEnumerator(cancellationToken);
+    }
+
+    private async IAsyncEnumerable<string> Enumerate(
+        [EnumeratorCancellation] CancellationToken cancellationToken)
+    {
+        foreach (var line in lines)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            yield return line;
+            await Task.Yield();
+        }
+    }
+}
 
 public static class Program
 {
@@ -26,7 +75,6 @@ public static class Program
         typeof(VmPutOptions),
         typeof(VmGetOptions),
         typeof(ImageConfigureOptions),
-        typeof(ImageBuildOptions),
         typeof(ImageListOptions),
         typeof(ImageDeleteOptions)
     ];
@@ -35,8 +83,8 @@ public static class Program
     /// Leitsatz 6: CLI und TUI lesen dieselbe Config-Quelle. Reihenfolge:
     /// appsettings.json → appsettings.{Environment}.json (Env DOTNET_ENVIRONMENT,
     /// Default Development) → appsettings.local.json (gitignored) → Env-Variablen
-    /// (Doppelter Unterstrich, z. B. Images__Build__VmName). Keine Passwörter
-    /// in der Config — Secrets laufen über die CORE_BRIDGE_*_PASSWORD-Env-Kette.
+    /// (Doppelter Unterstrich, z. B. Images__StoreRoot). Keine Passwörter in der
+    /// Config — Secrets laufen über die CORE_BRIDGE_*_PASSWORD-Env-Kette.
     /// </summary>
     private static AppConfig LoadConfig()
     {
@@ -57,25 +105,37 @@ public static class Program
     /// Parst nur die CLI und führt danach genau einen Dispatcher aus. Parsefehler
     /// und Hilfe-/Versionsfehler werden hier auf Exit-Codes abgebildet.
     /// </summary>
-    public static int Main(string[] args)
+    public static async Task<int> Main(string[] args)
     {
         var config = LoadConfig();
-        return Parser.Default
+        var result = Parser.Default
             .ParseArguments(args, RegisteredOptionTypes.ToArray())
             .MapResult(
                 (object options) => Run(config, (IOptions)options),
                 errors => errors.Any(error => error.Tag is ErrorType.HelpRequestedError
                     or ErrorType.VersionRequestedError
                     or ErrorType.HelpVerbRequestedError)
-                    ? 0
-                    : 1);
+                    ? ProgramExecution.Ok()
+                    : ProgramExecution.Failure(1));
+
+        await foreach (var line in result)
+        {
+            Console.WriteLine(line);
+        }
+
+        if (!string.IsNullOrWhiteSpace(result.Error))
+        {
+            Console.Error.WriteLine(result.Error.TrimEnd());
+        }
+
+        return result.ExitCode;
     }
 
     /// <summary>
     /// Einziger Kommando-Dispatcher nach dem Parsen. Services werden aus dem
     /// übergebenen Config erzeugt; es gibt keine statischen Vm-/Config-Zustände.
     /// </summary>
-    public static int Run(AppConfig config, IOptions options)
+    public static ProgramExecution Run(AppConfig config, IOptions options)
     {
         ArgumentNullException.ThrowIfNull(config);
         ArgumentNullException.ThrowIfNull(options);
@@ -88,7 +148,7 @@ public static class Program
         });
     }
 
-    private static int Dispatch(AppConfig config, VmService vms, IOptions options)
+    private static ProgramExecution Dispatch(AppConfig config, VmService vms, IOptions options)
     {
         return options switch
         {
@@ -101,18 +161,17 @@ public static class Program
                 $"delete {o.Name}{(o.Purge ? " --purge" : string.Empty)}",
                 () => vms.Delete(o.Name, o.Purge)),
             VmExecOptions o => Report(vms.Exec(o.Name, o.Command, o.TimeoutSeconds * 1000)),
-            VmConnectOptions o => vms.Connect(o.Name),
+            VmConnectOptions o => RunVmConnect(vms, o),
             VmPutOptions o => RunVmPut(vms, o),
             VmGetOptions o => RunVmGet(vms, o),
-            ImageConfigureOptions o => RunImageConfigure(config, vms, o),
-            ImageBuildOptions o => RunImageBuild(config, vms, o),
-            ImageListOptions => RunImageList(config, vms),
-            ImageDeleteOptions o => RunImageDelete(config, vms, o),
+            ImageConfigureOptions o => RunImageConfigure(config, o),
+            ImageListOptions => RunImageList(config),
+            ImageDeleteOptions o => RunImageDelete(config, o),
             _ => throw new MultipassException($"Unbekannter CLI-Options-Typ: {options.GetType().Name}")
         };
     }
 
-    private static int Guard(Func<int> action)
+    private static ProgramExecution Guard(Func<ProgramExecution> action)
     {
         try
         {
@@ -120,80 +179,70 @@ public static class Program
         }
         catch (MultipassException exception)
         {
-            Console.Error.WriteLine(exception.Message);
-            return 1;
+            return ProgramExecution.Failure(1, error: exception.Message);
         }
         catch (System.Text.Json.JsonException exception)
         {
-            Console.Error.WriteLine($"Unerwartete multipass-Antwort (kein JSON): {exception.Message}");
-            return 1;
+            return ProgramExecution.Failure(
+                1,
+                error: $"Unerwartete Multipass-Antwort (kein JSON): {exception.Message}");
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
         {
-            Console.Error.WriteLine($"CLI-I/O-Fehler: {exception.Message}");
-            return 1;
+            return ProgramExecution.Failure(1, error: $"CLI-I/O-Fehler: {exception.Message}");
         }
     }
 
-    private static int Report(MultipassRunResult result)
+    private static ProgramExecution Report(MultipassRunResult result)
     {
-        if (!string.IsNullOrWhiteSpace(result.StdOut))
-        {
-            Console.WriteLine(result.StdOut.TrimEnd());
-        }
-
-        if (!string.IsNullOrWhiteSpace(result.StdErr))
-        {
-            Console.Error.WriteLine(result.StdErr.TrimEnd());
-        }
-
-        return result.ExitCode;
+        return new ProgramExecution(result.ExitCode, result.StdOut, result.StdErr);
     }
 
-    private static int RunMultipassStatus()
+    private static ProgramExecution RunMultipassStatus()
     {
         var report = Doctor.Check();
         if (!report.Found)
         {
-            Console.WriteLine("Multipass nicht gefunden.");
-            Console.WriteLine();
+            var output = new StringBuilder("Multipass nicht gefunden.\n\n");
             foreach (var hint in report.Hints)
             {
-                Console.WriteLine($"  - {hint}");
+                output.AppendLine($"  - {hint}");
             }
 
-            return 1;
+            return ProgramExecution.Failure(1, output.ToString());
         }
 
-        Console.WriteLine($"Binary:  {report.BinaryPath}");
-        Console.WriteLine($"CLI:     {report.ClientVersion ?? "unbekannt"}");
-        Console.WriteLine($"Daemon:  {report.DaemonVersion ?? "keine Antwort"}");
+        var lines = new StringBuilder()
+            .AppendLine($"Binary:  {report.BinaryPath}")
+            .AppendLine($"CLI:     {report.ClientVersion ?? "unbekannt"}")
+            .AppendLine($"Daemon:  {report.DaemonVersion ?? "keine Antwort"}");
+        var error = string.Empty;
         if (report.Error is not null)
         {
-            Console.WriteLine();
-            Console.WriteLine($"Hinweis: {report.Error}");
+            lines.AppendLine()
+                .AppendLine($"Hinweis: {report.Error}");
             if (report.RawVersionOutput is not null)
             {
-                Console.WriteLine(report.RawVersionOutput.TrimEnd());
+                error = report.RawVersionOutput.TrimEnd();
             }
         }
 
-        return 0;
+        return ProgramExecution.Ok(lines.ToString(), error);
     }
 
-    private static int RunVmList(VmService vms)
+    private static ProgramExecution RunVmList(VmService vms)
     {
-        var vmsList = vms.List();
-        Console.WriteLine($"{"Name",-30} {"State",-10} IPv4");
-        foreach (var vm in vmsList)
+        var lines = new StringBuilder()
+            .AppendLine($"{"Name",-30} {"State",-10} IPv4");
+        foreach (var vm in vms.List())
         {
-            Console.WriteLine($"{vm.Name,-30} {vm.State ?? "?",-10} {string.Join(", ", vm.Ipv4)}");
+            lines.AppendLine($"{vm.Name,-30} {vm.State ?? "?",-10} {string.Join(", ", vm.Ipv4)}");
         }
 
-        return 0;
+        return ProgramExecution.Ok(lines.ToString());
     }
 
-    private static int RunVmCreate(AppConfig config, VmService vms, VmCreateOptions options)
+    private static ProgramExecution RunVmCreate(AppConfig config, VmService vms, VmCreateOptions options)
     {
         var requestedImage = string.IsNullOrWhiteSpace(options.Image)
             ? config.Images.DefaultRuntimeImage
@@ -202,11 +251,12 @@ public static class Program
         var launchImage = profile?.RuntimeImage ?? requestedImage;
         var cloudInit = options.CloudInit ?? profile?.CloudInitPath;
 
-        Console.WriteLine(
-            $"Lege VM `{options.Name}` an (Image: {requestedImage}"
-            + (profile is null ? string.Empty : $" → Runtime: {launchImage}")
-            + $"{(options.Disk is null ? string.Empty : $", Disk: {options.Disk}")}"
-            + $"{(cloudInit is null ? string.Empty : ", cloud-init")}) ...");
+        var lines = new StringBuilder()
+            .AppendLine(
+                $"Lege VM `{options.Name}` an (Image: {requestedImage}"
+                + (profile is null ? string.Empty : $" → Runtime: {launchImage}")
+                + $"{(options.Disk is null ? string.Empty : $", Disk: {options.Disk}")}"
+                + $"{(cloudInit is null ? string.Empty : ", cloud-init")}) ...");
         var result = vms.Create(options.Name, launchImage, options.Disk, cloudInitPath: cloudInit);
         if (result.ExitCode != 0)
         {
@@ -215,15 +265,23 @@ public static class Program
 
         if (profile is not null)
         {
-            Console.WriteLine($"Image-Profil: {profile.Name} (Runtime: {profile.RuntimeImage})");
-            Console.WriteLine("Gast-Provisionierung: cloud-init");
+            lines.AppendLine($"Image-Profil: {profile.Name} (Runtime: {profile.RuntimeImage})")
+                .AppendLine("Gast-Provisionierung: cloud-init");
         }
 
-        Console.WriteLine($"OK — {result.DurationMs / 1000.0:F1} s");
-        return 0;
+        lines.Append($"OK — {result.DurationMs / 1000.0:F1} s");
+        return ProgramExecution.Ok(lines.ToString());
     }
 
-    private static int RunVmStart(VmService vms, VmStartOptions options)
+    private static ProgramExecution RunVmConnect(VmService vms, VmConnectOptions options)
+    {
+        var exitCode = vms.Connect(options.Name);
+        return exitCode == 0
+            ? ProgramExecution.Ok()
+            : ProgramExecution.Failure(exitCode, error: $"vm-connect fehlgeschlagen (Exit {exitCode}).");
+    }
+
+    private static ProgramExecution RunVmStart(VmService vms, VmStartOptions options)
     {
         var existing = vms.List().FirstOrDefault(vm =>
             string.Equals(vm.Name, options.Name, StringComparison.OrdinalIgnoreCase));
@@ -231,44 +289,40 @@ public static class Program
             && !existing.IsDeleted
             && string.Equals(existing.State, "Running", StringComparison.OrdinalIgnoreCase))
         {
-            Console.WriteLine($"start {options.Name}: bereits Running — OK");
-            return 0;
+            return ProgramExecution.Ok($"start {options.Name}: bereits Running — OK");
         }
 
         return RunSimpleVmCommand($"start {options.Name}", () => vms.Start(options.Name));
     }
 
-    private static int RunSimpleVmCommand(string label, Func<MultipassRunResult> action)
+    private static ProgramExecution RunSimpleVmCommand(string label, Func<MultipassRunResult> action)
     {
         var result = action();
         if (result.ExitCode == 0)
         {
-            Console.WriteLine($"{label}: OK ({result.DurationMs / 1000.0:F1} s)");
-            return 0;
+            return ProgramExecution.Ok($"{label}: OK ({result.DurationMs / 1000.0:F1} s)");
         }
 
         return Report(result);
     }
 
-    private static int RunVmPut(VmService vms, VmPutOptions options)
+    private static ProgramExecution RunVmPut(VmService vms, VmPutOptions options)
     {
         if (!File.Exists(options.Source))
         {
-            Console.Error.WriteLine($"Quelldatei fehlt: {options.Source}");
-            return 1;
+            return ProgramExecution.Failure(1, error: $"Quelldatei fehlt: {options.Source}");
         }
 
         var result = vms.Put(options.Source, options.Name, options.Destination);
         if (result.ExitCode == 0)
         {
-            Console.WriteLine($"transfer: OK ({result.DurationMs / 1000.0:F1} s)");
-            return 0;
+            return ProgramExecution.Ok($"transfer: OK ({result.DurationMs / 1000.0:F1} s)");
         }
 
         return Report(result);
     }
 
-    private static int RunVmGet(VmService vms, VmGetOptions options)
+    private static ProgramExecution RunVmGet(VmService vms, VmGetOptions options)
     {
         var targetDirectory = Path.GetDirectoryName(Path.GetFullPath(options.Destination));
         if (!string.IsNullOrEmpty(targetDirectory) && !Directory.Exists(targetDirectory))
@@ -280,107 +334,68 @@ public static class Program
         if (File.Exists(options.Destination))
         {
             var megaBytes = new FileInfo(options.Destination).Length / (1024.0 * 1024.0);
-            Console.WriteLine($"transfer: OK — {megaBytes:N0} MB ({result.DurationMs / 1000.0:F1} s)");
-            if (result.ExitCode != 0)
-            {
-                Console.WriteLine($"Hinweis: Exit-Code {result.ExitCode} — {result.StdErr.Trim()}");
-            }
-
-            return 0;
+            var error = result.ExitCode == 0
+                ? string.Empty
+                : $"Hinweis: Exit-Code {result.ExitCode} — {result.StdErr.Trim()}";
+            return ProgramExecution.Ok($"transfer: OK — {megaBytes:N0} MB ({result.DurationMs / 1000.0:F1} s)", error);
         }
 
         return Report(result);
     }
 
-    private static int RunImageConfigure(AppConfig config, VmService vms, ImageConfigureOptions options)
+    private static ProgramExecution RunImageConfigure(AppConfig config, ImageConfigureOptions options)
     {
         var components = options.Components.Split(',', StringSplitOptions.RemoveEmptyEntries);
-        var images = new ImageService(config.Images, vms);
+        var images = new ImageService(config.Images);
         var result = images.Configure(
             options.Name,
             components,
             options.ModelUrl,
-            options.BuildTo,
-            options.Force,
-            options.RuntimeImage);
+            force: options.Force,
+            runtimeImage: options.RuntimeImage);
 
-        Console.WriteLine($"Image '{result.Name}' konfiguriert.");
-        Console.WriteLine($"  Modell:       {result.ModelPath} (Canonical dangerous, unverändert signiert)");
-        Console.WriteLine($"  Config:       {result.ConfigPath}");
-        Console.WriteLine($"  Runtime-Image: {result.RuntimeImage}");
-        Console.WriteLine($"  Snaps:        {(result.Snaps.Length == 0 ? "keine" : string.Join(", ", result.Snaps))}");
+        var lines = new StringBuilder()
+            .AppendLine($"Image '{result.Name}' konfiguriert.")
+            .AppendLine($"  Modell:       {result.ModelPath} (Canonical dangerous, unverändert signiert)")
+            .AppendLine($"  Config:       {result.ConfigPath}")
+            .AppendLine($"  Runtime-Image: {result.RuntimeImage}")
+            .AppendLine($"  Snaps:        {(result.Snaps.Length == 0 ? "keine" : string.Join(", ", result.Snaps))}");
         if (result.CloudInitPath is null)
         {
-            Console.WriteLine("  cloud-init: nicht nötig (keine Gast-Provisionierung).");
+            lines.AppendLine("  cloud-init: nicht nötig (keine Gast-Provisionierung).");
         }
         else
         {
-            Console.WriteLine($"  cloud-init: {result.CloudInitPath}");
+            lines.AppendLine($"  cloud-init: {result.CloudInitPath}");
         }
 
-        Console.WriteLine();
-        Console.WriteLine($"VM starten: cb vm-create --name <vm> --image {result.Name}");
-        return 0;
+        lines.AppendLine()
+            .Append($"VM starten: cb vm-create --name <vm> --image {result.Name}");
+        return ProgramExecution.Ok(lines.ToString());
     }
 
-    private static int RunImageList(AppConfig config, VmService vms)
+    private static ProgramExecution RunImageList(AppConfig config)
     {
-        var images = new ImageService(config.Images, vms);
-        var entries = images.List();
+        var entries = new ImageService(config.Images).List();
         if (entries.Count == 0)
         {
-            Console.WriteLine("Keine konfigurierten Images.");
-            return 0;
+            return ProgramExecution.Ok("Keine konfigurierten Classic-Profile.");
         }
 
-        Console.WriteLine($"{"Name",-20} {"Komponenten",-28} Image");
+        var lines = new StringBuilder()
+            .AppendLine($"{"Name",-20} {"Komponenten",-28} Snaps");
         foreach (var entry in entries)
         {
-            Console.WriteLine(
-                $"{entry.Name,-20} {string.Join(",", entry.Components),-28} {(entry.HasImage ? $"{entry.ImageBytes / (1024.0 * 1024.0):N0} MB" : "-")}");
+            lines.AppendLine(
+                $"{entry.Name,-20} {string.Join(",", entry.Components),-28} {string.Join(",", entry.Snaps)}");
         }
 
-        return 0;
+        return ProgramExecution.Ok(lines.ToString());
     }
 
-    private static int RunImageDelete(AppConfig config, VmService vms, ImageDeleteOptions options)
+    private static ProgramExecution RunImageDelete(AppConfig config, ImageDeleteOptions options)
     {
-        var images = new ImageService(config.Images, vms);
-        var result = images.Delete(options.Name);
-        if (result.ModelDir is not null)
-        {
-            Console.WriteLine($"Konfiguration gelöscht: {result.ModelDir}");
-        }
-
-        if (result.ImageFile is not null)
-        {
-            Console.WriteLine($"Image gelöscht:       {result.ImageFile}");
-        }
-
-        return 0;
-    }
-
-    private static int RunImageBuild(AppConfig config, VmService vms, ImageBuildOptions options)
-    {
-        var images = new ImageService(config.Images, vms);
-        var buildVm = options.BuildVmName ?? config.Images.Build.VmName;
-        Console.Error.WriteLine(
-            "WARNUNG: image-build ist deprecated und wird nicht unterstützt. "
-            + "T11 hat keinen erfolgreichen Windows-Import nachgewiesen; der aktive Workflow ist "
-            + "image-configure + vm-create --image <profil>.");
-        Console.WriteLine($"Baue Image '{options.Name}' in Bau-VM '{buildVm}' (ubuntu-image + --snap) ...");
-        var result = images.Build(
-            options.Name,
-            options.BuildVmName,
-            options.BuildImage,
-            options.Disk,
-            options.TimeoutSeconds,
-            options.Destination);
-
-        var megaBytes = new FileInfo(result.ImagePath).Length / (1024.0 * 1024.0);
-        Console.WriteLine($"OK — {result.ImagePath} ({megaBytes:N0} MB, {result.DurationMs / 1000.0:F1} s)");
-        Console.Error.WriteLine(
-            "Der Import dieser .img-Datei unter Windows bleibt ungelöst; T11 enthält keinen erfolgreichen Importlauf.");
-        return 0;
+        var result = new ImageService(config.Images).Delete(options.Name);
+        return ProgramExecution.Ok($"Konfiguration gelöscht: {result.ModelDir}");
     }
 }

@@ -51,10 +51,8 @@ binding repository instruction file for future work.
 
 ## Image build
 
-- [x] Deprecate `image-build`; keep it only as a hidden, unsupported T11
-      compatibility path.
-- [x] Keep `ImageService.Build`, `Program`, and `Options.cs` consistent with
-      that decision.
+- [x] Remove the `image-build` CLI verb and its dispatch path.
+- [x] Remove `ImageService.Build` and `ImageBuildResult`.
 - [x] Remove the obsolete `bootstrap-agent-vm.ps1` and
       `build-coreimage.ps1` host scripts.
 

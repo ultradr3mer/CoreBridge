@@ -78,17 +78,13 @@ Classic-Profile (Ubuntu-26.10-Edge mit cloud-init-basierter Gast-Provisionierung
 
 | Befehl | Zweck |
 |---|---|
-| `image-configure -n <name> [-c claude,dotnet,opencode,python] [--model-url <url>] [--runtime-image <image>] [-b <deprecated-build-to>] [-f/--force]` | Erzeugt ein Classic-Profil (Standardmodell `ubuntu-classic-2610-amd64-dangerous.model`, Runtime `daily:26.10`) und persistiert die Gast-cloud-init |
-| `image-list` | Listet konfigurierte Classic-Profile (Komponenten, Snaps, optionale Legacy-`.img`) |
-| `image-delete -n <name>` | Löscht ein Classic-Profil und eine optionale Legacy-`.img` |
+| `image-configure -n <name> [-c claude,dotnet,opencode,python] [--model-url <url>] [--runtime-image <image>] [-f/--force]` | Erzeugt ein Classic-Profil (Standardmodell `ubuntu-classic-2610-amd64-dangerous.model`, Runtime `daily:26.10`) und persistiert die Gast-cloud-init |
+| `image-list` | Listet konfigurierte Classic-Profile (Komponenten und Snaps) |
+| `image-delete -n <name>` | Löscht ein Classic-Profil (Modell, Profilkonfiguration und cloud-init) |
 
-`image-build` ist ein **versteckter, deprecated und nicht unterstützter
-Kompatibilitätspfad** für historische T11-Daten. Er baut weiterhin über
-`ubuntu-image`, aber T11 hat keinen erfolgreichen Import der fertigen `.img`
-unter Windows nachgewiesen: `file://` wird fehlerhaft umgeschrieben und ein
-lokaler HTTP-Server wurde von Multipass auf HTTPS mit SSL-Fehler umgestellt.
-Aktive Workflows verwenden ausschließlich Runtime-Profil plus Cloud-init.
-Siehe `EXPERIMENT_LOG.md` (T11) und `IMPLEMENTATION_PLAN.md` §10.
+T11 bleibt als historische Custom-Image-Evidenz in `EXPERIMENT_LOG.md`.
+Der aktive Workflow verwendet ausschließlich Runtime-Profile plus Cloud-init;
+eigenes Image-Bauen und Windows-Import sind nicht Bestandteil von CoreBridge.
 
 `--help` bzw. `<verb> --help` zeigt die aktuelle Referenz direkt aus dem Code
 (CommandLineParser generiert sie aus den `[Verb]`/`[Option]`-Attributen in
@@ -104,9 +100,8 @@ CLI liest `config.Get<AppConfig>()` aus (Reihenfolge, letztes gewinnt):
 
 Wichtige Einstellungen (`src/CoreBridge.Cli/appsettings.json`):
 
-- `Images:StoreRoot` — wohin `image-configure` (und der deprecated
-  Kompatibilitätspfad `image-build`) Modelle,
-  cloud-init und `.img`-Dateien ablegen (Development: `artifacts`)
+- `Images:StoreRoot` — wohin `image-configure` Modelle, Profilkonfigurationen
+  und cloud-init ablegt (Development: `artifacts`)
 - `Images:DefaultModelUrl` — Standardmodell
   `ubuntu-classic-2610-amd64-dangerous.model`
 - `Images:DefaultRuntimeImage` — Standard-Runtime `daily:26.10`
@@ -116,9 +111,6 @@ Wichtige Einstellungen (`src/CoreBridge.Cli/appsettings.json`):
   Bibliotheks-Setup liegen im jeweiligen Gast-Skript; Claude wird standardmäßig
   über eine eingebettete cloud-init-Datei provisioniert, nicht über einen
   Core-Snap.
-- `Images:Build` — Defaults nur für den versteckten, deprecated
-  Kompatibilitätspfad `image-build`. `26.04` ist dort nur das Werkzeug-Image
-  der Bau-VM, niemals eine Ziel-Runtime oder ein Fallback.
 
 **Keine Passwörter in der Config** — Secrets laufen über die Env-Kette
 `CORE_BRIDGE_[ALL,<NAME>,...]_PASSWORD` (Sync-Feature, noch nicht
@@ -135,14 +127,15 @@ dotnet test test/Multipass.Experiments                  # historische Experiment
 ```
 
 - `test/CoreBridge.Cli.Tests` → `CliLifecycleTests` — der öffentliche
-  CLI-first-Lifecycle als deterministisch geordnete, separate Stufen:
-  `multipass-status` → `image-configure` → `vm-create --image <profil>` →
-  `vm-start` → `vm-exec` → Claude-Postcondition → Cleanup. Ein gemeinsames
-  Collection-Fixture besitzt eindeutige `cbx-cli-*`-Namen, setzt Flags vor
-  jedem möglicherweise teilweisen Schreibvorgang und verifiziert `state=Deleted`
-  sowie die Profilentfernung. Es wird nie `--purge` verwendet. `vm-connect`
-  bleibt ein echter Terminalbefehl; dafür existieren schnelle
-  Prozessvertrags-Tests (`vm-connect --help`).
+  CLI-first-Lifecycle als deterministisch geordnete, separate Stufen. Die
+  Stufen verwenden ausschließlich `Program.Run(AppConfig, IOptions)` mit
+  synthetischer Konfiguration und temporärem StoreRoot; der native
+  `ProgramExecution`-Rückgabewert ist ein `IAsyncEnumerable<string>`. Die Tests
+  starten keinen CLI-Kindprozess und capturen keine Console-Ausgabe.
+  `multipass-status` →
+  `image-configure` → `vm-create --image <profil>` → `vm-start` → `vm-exec` →
+  Claude-Postcondition → Cleanup. Ein gemeinsames Collection-Fixture besitzt
+  eindeutige `cbx-cli-*`-Namen und cleanup ohne `--purge`.
 - Der Integrationstest verwendet `DOTNET_ENVIRONMENT=Development` und
   überschreibt `Images:StoreRoot` für seinen Collection-Fixture-Lauf mit einem
   eindeutigen temporären Verzeichnis. Temporäre Dateien für den
@@ -178,7 +171,7 @@ src/
                       dem NuGet-Paket CommandLineParser)
 test/
   CoreBridge.Core.Tests   Unit-Tests für Core/Image-Profil/Cloud-init
-  CoreBridge.Cli.Tests    Prozessbasierte CLI-/Lifecycle-Tests
+  CoreBridge.Cli.Tests    CLI-Contract- und Lifecycle-Tests via Program.Run
   Multipass.Experiments   reproduzierbare historische Experimente
 scripts/               cb-Shortcut, Cloud-init-Gastskripte, Hyper-V-Gruppierung
 ```
@@ -192,12 +185,12 @@ eine TUI noch keinen Mehrwert gebracht hätte.
 ## Status
 
 Phase D (siehe `IMPLEMENTATION_PLAN.md` §10): VM-Lifecycle, Datei-transfer
-und die Classic-26.10-Edge-Image-Pipeline sind implementiert. `image-configure`
+und die Classic-26.10-Edge-Profil-Pipeline sind implementiert. `image-configure`
 schreibt ein launchbares Profil; `vm-create --image <profil>` startet
 `daily:26.10` und übergibt die cloud-init, die Claude und die übrigen
-Gast-Komponenten installiert. Die spätere Autobridge bleibt offen.
-`image-build` bleibt nur als deprecated, nicht unterstützter Kompatibilitätspfad
-für T11 erhalten. Aktueller Stand im Detail: `AGENTS.md` → „Aktueller Stand“.
+Gast-Komponenten installiert. Die spätere Autobridge bleibt offen. T11 bleibt
+als historische Custom-Image-Evidenz erhalten; ein aktiver Image-Build-Pfad
+existiert nicht. Aktueller Stand im Detail: `AGENTS.md` → „Aktueller Stand“.
 
 ## Weiterführende Dokumentation
 

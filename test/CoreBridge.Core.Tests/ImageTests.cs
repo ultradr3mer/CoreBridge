@@ -437,40 +437,34 @@ public class ImageServiceConfigureGuardTests
 [Collection("ImageStore")]
 public class ImageServiceListDeleteTests
 {
-    private static void SeedStore(TempDirectory store, string name, string[] components, string[] snaps, bool withImage)
+    private static void SeedStore(TempDirectory store, string name, string[] components, string[] snaps)
     {
         ImageStore.Initialize(store);
         var dir = ImageStore.ModelDir(name);
         Directory.CreateDirectory(dir);
-        var buildConfig = new ImageBuildConfig(
+        var profileConfig = new ImageProfileConfig(
             name,
             "https://example.invalid/ubuntu-classic-2610-amd64-dangerous.model",
             components,
-            snaps,
-            withImage ? ImageStore.ImageFile(name) : null);
-        File.WriteAllText(ImageStore.ConfigFile(name), buildConfig.ToJson());
-        if (withImage)
-        {
-            Directory.CreateDirectory(ImageStore.ImagesRoot);
-            File.WriteAllText(ImageStore.ImageFile(name), new string('x', 1024));
-        }
+            snaps);
+        File.WriteAllText(ImageStore.ConfigFile(name), profileConfig.ToJson());
     }
 
     [Fact]
-    public void List_LiefertKonfigurierteImages()
+    public void List_LiefertKonfigurierteProfile()
     {
         using var store = new TempDirectory();
-        SeedStore(store, "alpha", ["claude"], [], withImage: false);
-        SeedStore(store, "beta", ["dotnet"], ["dotnet-sdk-100"], withImage: true);
+        SeedStore(store, "alpha", ["claude"], []);
+        SeedStore(store, "beta", ["dotnet"], ["dotnet-sdk-100"]);
 
         var entries = new ImageService(new ImagesConfig()).List();
 
         Assert.Equal(2, entries.Count);
         Assert.Equal("alpha", entries[0].Name);
-        Assert.False(entries[0].HasImage);
+        Assert.Equal(["claude"], entries[0].Components);
+        Assert.Empty(entries[0].Snaps);
         Assert.Equal("beta", entries[1].Name);
-        Assert.True(entries[1].HasImage);
-        Assert.Equal(1024, entries[1].ImageBytes);
+        Assert.Equal(["dotnet-sdk-100"], entries[1].Snaps);
     }
 
     [Fact]
@@ -483,17 +477,15 @@ public class ImageServiceListDeleteTests
     }
 
     [Fact]
-    public void Delete_EntferntKonfigurationUndImage()
+    public void Delete_EntferntProfilkonfiguration()
     {
         using var store = new TempDirectory();
-        SeedStore(store, "agent", ["claude"], [], withImage: true);
+        SeedStore(store, "agent", ["claude"], []);
 
         var result = new ImageService(new ImagesConfig()).Delete("agent");
 
         Assert.Equal(ImageStore.ModelDir("agent"), result.ModelDir);
-        Assert.Equal(ImageStore.ImageFile("agent"), result.ImageFile);
         Assert.False(Directory.Exists(result.ModelDir));
-        Assert.False(File.Exists(result.ImageFile));
     }
 
     [Fact]
@@ -506,12 +498,12 @@ public class ImageServiceListDeleteTests
     }
 }
 
-public class ImageBuildConfigTests
+public class ImageProfileConfigTests
 {
     [Fact]
     public void Json_RoundtripErhaeltAlleFelder()
     {
-        var config = new ImageBuildConfig(
+        var config = new ImageProfileConfig(
             "agent",
             "https://example.invalid/ubuntu-classic-2610-amd64-dangerous.model",
             ["claude", "dotnet"],
@@ -521,7 +513,7 @@ public class ImageBuildConfigTests
             ModelId: "ubuntu-classic-2610-amd64-dangerous",
             ModelSha256: "abc123");
 
-        var roundtrip = ImageBuildConfig.FromJson(config.ToJson());
+        var roundtrip = ImageProfileConfig.FromJson(config.ToJson());
 
         Assert.Equal(config.Name, roundtrip.Name);
         Assert.Equal(config.BaseModelUrl, roundtrip.BaseModelUrl);

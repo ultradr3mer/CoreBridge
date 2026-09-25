@@ -43,44 +43,16 @@ public sealed class ImageConfigureOptions : IOptions
     [Option("runtime-image", HelpText = "Runtime-Image für das erzeugte Profil (Standard: Config Images:DefaultRuntimeImage).")]
     public string? RuntimeImage { get; set; }
 
-    [Option('b', "build-to", HelpText = "DEPRECATED: Zielpfad der .img für den nicht unterstützten Kompatibilitätspfad image-build (Standard: <StoreRoot>\\images\\<name>.img).")]
-    public string? BuildTo { get; set; }
-
     [Option('f', "force", HelpText = "Existierende Konfiguration überschreiben (sonst Fehler, wenn das Image schon konfiguriert ist).")]
     public bool Force { get; set; }
 }
 
-[Verb(
-    "image-build",
-    Hidden = true,
-    HelpText = "DEPRECATED, UNSUPPORTED: verborgener Kompatibilitätspfad zum Bau eines Custom-Images; der Windows-Import ist nicht verifiziert.")]
-public sealed class ImageBuildOptions : IOptions
-{
-    [Option('n', "name", Required = true, HelpText = "DEPRECATED, UNSUPPORTED: Name des Images (muss mit image-configure konfiguriert sein).")]
-    public string Name { get; set; } = string.Empty;
-
-    [Option("build-vm", HelpText = "Name der Bau-VM (klassisches Ubuntu; wird bei Bedarf angelegt). Standard: Config Images:Build:VmName.")]
-    public string? BuildVmName { get; set; }
-
-    [Option("build-image", HelpText = "Katalog-Image der Bau-VM. Standard: Config Images:Build:Image.")]
-    public string? BuildImage { get; set; }
-
-    [Option('d', "disk", HelpText = "Disk-Größe der Bau-VM. Standard: Config Images:Build:Disk.")]
-    public string? Disk { get; set; }
-
-    [Option('t', "timeout", HelpText = "Timeout für den ubuntu-image-Lauf in Sekunden. Standard: Config Images:Build:TimeoutSeconds.")]
-    public int? TimeoutSeconds { get; set; }
-
-    [Option('o', "destination", HelpText = "Lokaler Zielpfad der .img (Standard: %LOCALAPPDATA%\\CoreBridge\\images\\<name>.img).")]
-    public string? Destination { get; set; }
-}
-
-[Verb("image-list", HelpText = "Listet konfigurierte Classic-Profile (Komponenten, Snaps, optionale Legacy-.img).")]
+[Verb("image-list", HelpText = "Listet konfigurierte Classic-Profile (Komponenten und Snaps).")]
 public sealed class ImageListOptions : IOptions
 {
 }
 
-[Verb("image-delete", HelpText = "Löscht ein Classic-Profil (Modell/cloud-init/Config) und eine optionale Legacy-.img.")]
+[Verb("image-delete", HelpText = "Löscht ein Classic-Profil (Modell, Profilkonfiguration und cloud-init).")]
 public sealed class ImageDeleteOptions : IOptions
 {
     [Option('n', "name", Required = true, HelpText = "Name des Images (aus image-list).")]

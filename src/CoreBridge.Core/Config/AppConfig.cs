@@ -28,26 +28,13 @@ public sealed record ImagesConfig
     public string DefaultRuntimeImage { get; init; } = "daily:26.10";
 
     /// <summary>
-    /// Wurzel für Modell-/Config-/cloud-init-/Image-Dateien. Absoluter Pfad oder
+    /// Wurzel für Modell-/Profil-/cloud-init-Dateien. Absoluter Pfad oder
     /// relativ zur Repo-Wurzel (Ordner, der CoreBridge.slnx enthält). Leer =
     /// Repo-Wurzel/artifacts.
     /// </summary>
     public string? StoreRoot { get; init; }
 
-    public ImageBuildDefaultsConfig Build { get; init; } = new();
-
     public Dictionary<string, ComponentConfig> Components { get; init; } = new(StringComparer.OrdinalIgnoreCase);
-}
-
-public sealed record ImageBuildDefaultsConfig
-{
-    public string VmName { get; init; } = "cbx-t11-build2";
-
-    public string Image { get; init; } = "26.04";
-
-    public string Disk { get; init; } = "20G";
-
-    public int TimeoutSeconds { get; init; } = 1800;
 }
 
 /// <summary>

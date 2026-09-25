@@ -10,7 +10,7 @@ The active target is Classic Ubuntu 26.10 Edge:
 
 - model: `ubuntu-classic-2610-amd64-dangerous.model`
 - runtime: `daily:26.10`
-- `26.04` is only the deprecated/unsupported image-build tool VM
+- `26.04` is not an active CoreBridge image or runtime fallback
 
 Canonical flow:
 
@@ -48,7 +48,7 @@ host-side component installers.
 
 ### 2. Configured image profiles
 
-- [x] Persist `RuntimeImage` (`daily:26.10`) in the image build config.
+- [x] Persist `RuntimeImage` (`daily:26.10`) in the image profile config.
 - [x] Generate and persist the cloud-init filename.
 - [x] Resolve a configured image name in `vm-create`; never pass the profile
   name unchanged to Multipass.
@@ -59,15 +59,14 @@ host-side component installers.
   the host.
 - [x] Parse and validate the generated cloud-init subset before persisting it.
 
-### 3. Process-level CLI tests
+### 3. CLI contract and lifecycle tests
 
 - [x] Add `test/CoreBridge.Cli.Tests` to `CoreBridge.slnx`.
-- [x] Reference the built CLI and locate its DLL/appsettings beside the test
-  assembly.
-- [x] Add a `CliRunner` that starts `dotnet CoreBridge.Cli.dll`, captures
-  stdout/stderr/exit code, and enforces timeouts.
-- [x] Run child processes with `DOTNET_ENVIRONMENT=Development`; lifecycle
-  runs override `Images:StoreRoot` with a unique temporary directory.
+- [x] Exercise the public dispatcher through `Program.Run(AppConfig, IOptions)`.
+- [x] Use synthetic configuration and unique temporary store roots in tests.
+- [x] Return a native `ProgramExecution` (`IAsyncEnumerable<string>`) from
+  `Program.Run`; keep console handling in the application boundary and do not
+  capture stdout or stderr in tests.
 - [x] Use unique `cbx-cli-*` names and delete without `--purge`.
 - [x] Replace the direct `VmCycleTests` service calls with deterministically
   ordered CLI lifecycle stages and authoritative fixture cleanup.

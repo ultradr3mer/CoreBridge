@@ -1,3 +1,7 @@
+using CoreBridge.Cli;
+using CoreBridge.Core.Config;
+using CoreBridge.Core.Images;
+
 namespace CoreBridge.Cli.Tests;
 
 internal sealed record CliLifecycleCleanupReport(bool Success, string Diagnostics)
@@ -6,20 +10,46 @@ internal sealed record CliLifecycleCleanupReport(bool Success, string Diagnostic
 }
 
 /// <summary>
-/// Gemeinsamer, serialisierter Zustand für die nummerierten Integrationstest-Stufen.
-/// Das Fixture besitzt genau ein temporäres Profil und höchstens eine VM und
-/// räumt beide auch nach einem teilweise fehlgeschlagenen Stage-Lauf auf.
+/// Gemeinsamer, serialisierter Zustand für die nummerierten Integrationstufen.
+/// Der Fixture ruft ausschließlich den öffentlichen <see cref="Program.Run"/>-
+/// Dispatcher auf; es startet keinen CLI-Kindprozess und capturt keinen Output.
 /// </summary>
 public sealed class CliLifecycleFixture : IDisposable
 {
     private readonly TempDirectory store;
-    private readonly CliRunner cli;
+    private readonly AppConfig config;
     private bool disposed;
 
     public CliLifecycleFixture()
     {
         store = new TempDirectory();
-        cli = new CliRunner(store.Path);
+        config = new AppConfig
+        {
+            Images = new ImagesConfig
+            {
+                StoreRoot = store.Path,
+                Components = new Dictionary<string, ComponentConfig>(StringComparer.OrdinalIgnoreCase)
+                {
+                    ["claude"] = new()
+                    {
+                        Script = "scripts/components/install-claude.sh",
+                        InstallPath = "/usr/local/sbin/corebridge-install-claude",
+                        Packages = ["bash", "ca-certificates", "curl", "sudo"],
+                        PackageUpdate = true,
+                        InstallUser = "ubuntu"
+                    },
+                    ["dotnet"] = new()
+                    {
+                        Snap = "dotnet-sdk-100",
+                        Classic = true,
+                        Script = "scripts/components/install-dotnet.sh",
+                        InstallPath = "/usr/local/sbin/corebridge-install-dotnet",
+                        InstallUser = "ubuntu"
+                    }
+                }
+            }
+        };
+
         var suffix = $"{Environment.ProcessId}-{Guid.NewGuid():N}"[..20];
         ImageName = $"cbx-cli-img-{suffix}";
         VmName = $"cbx-cli-vm-{suffix}";
@@ -29,9 +59,9 @@ public sealed class CliLifecycleFixture : IDisposable
 
     public string VmName { get; }
 
-    internal CliRunner Cli => cli;
+    internal string ModelPath => Path.Combine(store.Path, "models", ImageName, ImageName + ".model");
 
-    internal string ModelPath => Path.Combine(cli.StoreRoot, "models", ImageName, ImageName + ".model");
+    internal string ProfileConfigPath => Path.Combine(store.Path, "models", ImageName, ImageName + ".profile.json");
 
     internal bool MultipassAvailable { get; private set; }
 
@@ -45,12 +75,15 @@ public sealed class CliLifecycleFixture : IDisposable
 
     internal bool VmCleanupRequired { get; set; }
 
-    internal void RecordStatus(CliProcessResult result)
+    internal ProgramExecution Run(IOptions options)
     {
-        MultipassAvailable = result.ExitCode == 0 && !result.TimedOut;
-        SkipReason = MultipassAvailable
-            ? null
-            : "CLI-Integration übersprungen — multipass-status: " + result.StdErr.Trim();
+        return Program.Run(config, options);
+    }
+
+    internal void RecordStatus(ProgramExecution result)
+    {
+        MultipassAvailable = result.Success;
+        SkipReason = MultipassAvailable ? null : "CLI-Integration übersprungen — multipass-status fehlgeschlagen.";
     }
 
     internal bool ShouldSkip()
@@ -64,60 +97,30 @@ public sealed class CliLifecycleFixture : IDisposable
 
         if (VmCleanupRequired)
         {
-            var before = cli.Run(["vm-list"], TimeSpan.FromMinutes(2));
-            if (before.TimedOut || before.ExitCode != 0)
+            var delete = Run(new VmDeleteOptions { Name = VmName });
+            if (!delete.Success)
             {
-                failures.Add("vm-list vor Cleanup fehlgeschlagen: " + Describe(before));
+                failures.Add($"vm-delete '{VmName}' fehlgeschlagen (Exit {delete.ExitCode}).");
             }
             else
             {
-                var state = FindVmState(before.StdOut, VmName);
-                if (state is null)
-                {
-                    VmCleanupRequired = false;
-                }
-                else if (string.Equals(state, "Deleted", StringComparison.OrdinalIgnoreCase))
-                {
-                    VmCleanupRequired = false;
-                }
-                else
-                {
-                    var delete = cli.Run(["vm-delete", "--name", VmName], TimeSpan.FromMinutes(5));
-                    if (delete.TimedOut || delete.ExitCode != 0)
-                    {
-                        failures.Add("vm-delete fehlgeschlagen: " + Describe(delete));
-                    }
-                    else
-                    {
-                        var after = cli.Run(["vm-list"], TimeSpan.FromMinutes(2));
-                        var finalState = after.ExitCode == 0 ? FindVmState(after.StdOut, VmName) : null;
-                        if (!string.Equals(finalState, "Deleted", StringComparison.OrdinalIgnoreCase))
-                        {
-                            failures.Add(
-                                $"VM '{VmName}' wurde nicht als Deleted verifiziert: {Describe(after)}");
-                        }
-                        else
-                        {
-                            VmCleanupRequired = false;
-                        }
-                    }
-                }
+                VmCleanupRequired = false;
             }
         }
 
         if (ImageCleanupRequired)
         {
-            var modelDirectory = Path.Combine(cli.StoreRoot, "models", ImageName);
+            var modelDirectory = Path.Combine(store.Path, "models", ImageName);
             if (!Directory.Exists(modelDirectory))
             {
                 ImageCleanupRequired = false;
             }
             else
             {
-                var delete = cli.Run(["image-delete", "--name", ImageName], TimeSpan.FromMinutes(2));
-                if (delete.TimedOut || delete.ExitCode != 0)
+                var delete = Run(new ImageDeleteOptions { Name = ImageName });
+                if (!delete.Success)
                 {
-                    failures.Add("image-delete fehlgeschlagen: " + Describe(delete));
+                    failures.Add($"image-delete '{ImageName}' fehlgeschlagen (Exit {delete.ExitCode}).");
                 }
                 else if (Directory.Exists(modelDirectory))
                 {
@@ -150,7 +153,6 @@ public sealed class CliLifecycleFixture : IDisposable
         }
         finally
         {
-            cli.Dispose();
             store.Dispose();
         }
 
@@ -158,25 +160,5 @@ public sealed class CliLifecycleFixture : IDisposable
         {
             throw new InvalidOperationException("Lifecycle-Cleanup fehlgeschlagen:" + Environment.NewLine + report.Diagnostics);
         }
-    }
-
-    private static string? FindVmState(string output, string name)
-    {
-        using var reader = new StringReader(output);
-        while (reader.ReadLine() is { } line)
-        {
-            var columns = line.Split(' ', StringSplitOptions.RemoveEmptyEntries);
-            if (columns.Length >= 2 && string.Equals(columns[0], name, StringComparison.OrdinalIgnoreCase))
-            {
-                return columns[1];
-            }
-        }
-
-        return null;
-    }
-
-    private static string Describe(CliProcessResult result)
-    {
-        return $"exit={result.ExitCode}, timeout={result.TimedOut}, stdout={result.StdOut.Trim()}, stderr={result.StdErr.Trim()}";
     }
 }

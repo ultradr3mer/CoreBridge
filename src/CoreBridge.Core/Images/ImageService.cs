@@ -14,35 +14,26 @@ public sealed record ImageConfigureResult(
     string[] Snaps,
     string RuntimeImage);
 
-/// <summary>Ergebnis des deprecated Custom-Image-Kompatibilitätspfads.</summary>
-public sealed record ImageBuildResult(string Name, string ImagePath, long DurationMs, string BuildVmName);
-
 public sealed record ImageListEntry(
     string Name,
     string[] Components,
-    string[] Snaps,
-    bool HasImage,
-    long ImageBytes);
+    string[] Snaps);
 
-public sealed record ImageDeleteResult(string Name, string? ModelDir, string? ImageFile);
+public sealed record ImageDeleteResult(string Name, string? ModelDir);
 
 /// <summary>
-/// Profil-Pipeline: `Configure` lädt/validiert das Classic-Modell und schreibt
-/// Build-Config + generierte cloud-init. `Build` ist nur ein deprecated
-/// Kompatibilitätspfad für historische T11-Experimente; der aktive Classic-
-/// Workflow startet die Runtime und provisioniert den Gast über cloud-init.
-/// Alle Komponenten-Definitionen und Defaults kommen aus der AppConfig.
+/// Classic-Profil-Pipeline: `Configure` lädt/validiert das Modell und schreibt
+/// Profilkonfiguration sowie generierte cloud-init. Der aktive Workflow startet
+/// die Runtime und provisioniert den Gast über cloud-init.
 /// </summary>
 public sealed class ImageService
 {
     private readonly ImagesConfig _config;
-    private readonly VmService _vms;
     private readonly HttpClient _http;
 
-    public ImageService(ImagesConfig config, VmService? vms = null, HttpClient? http = null)
+    public ImageService(ImagesConfig config, HttpClient? http = null)
     {
         _config = config;
-        _vms = vms ?? new VmService();
         _http = http ?? new HttpClient();
     }
 
@@ -50,7 +41,6 @@ public sealed class ImageService
         string name,
         string[] components,
         string? baseUrl = null,
-        string? buildTo = null,
         bool force = false,
         string? runtimeImage = null)
     {
@@ -132,17 +122,16 @@ public sealed class ImageService
         File.WriteAllText(ImageStore.ModelFile(name), model);
 
         var cloudInitFile = cloudInitPath is null ? null : Path.GetFileName(cloudInitPath);
-        var buildConfig = new ImageBuildConfig(
+        var profileConfig = new ImageProfileConfig(
             name,
             url,
             trimmed,
             snaps,
-            buildTo,
             resolvedRuntimeImage,
             cloudInitFile,
             ModelId: descriptor.Model,
             ModelSha256: modelSha256);
-        File.WriteAllText(ImageStore.ConfigFile(name), buildConfig.ToJson());
+        File.WriteAllText(ImageStore.ConfigFile(name), profileConfig.ToJson());
 
         return new ImageConfigureResult(
             name,
@@ -151,89 +140,6 @@ public sealed class ImageService
             cloudInitPath,
             snaps,
             resolvedRuntimeImage);
-    }
-
-    /// <summary>
-    /// Deprecated und nicht unterstützt: Baut weiterhin ein Ubuntu-Core-Image für
-    /// historische T11-Experimente. Der Windows-Import ist nicht verifiziert; der
-    /// aktive Classic-Workflow verwendet Runtime-Profil plus Cloud-init.
-    /// </summary>
-    public ImageBuildResult Build(
-        string name,
-        string? buildVmName = null,
-        string? buildImage = null,
-        string? disk = null,
-        int? timeoutSeconds = null,
-        string? destination = null)
-    {
-        var vmName = buildVmName ?? _config.Build.VmName;
-        var image = buildImage ?? _config.Build.Image;
-        var diskSize = disk ?? _config.Build.Disk;
-        var timeout = (timeoutSeconds ?? _config.Build.TimeoutSeconds) * 1000;
-
-        var configPath = ImageStore.ConfigFile(name);
-        if (!File.Exists(configPath))
-        {
-            throw new MultipassException(
-                $"Keine Build-Konfiguration für '{name}': {configPath} — zuerst `image-configure --name {name}` ausführen.");
-        }
-
-        var buildConfig = ImageBuildConfig.FromJson(File.ReadAllText(configPath));
-        var modelPath = ImageStore.ModelFile(name);
-        if (!File.Exists(modelPath))
-        {
-            throw new MultipassException($"Modell-Datei fehlt: {modelPath} — `image-configure --name {name}` erneut ausführen.");
-        }
-
-        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
-
-        var existing = _vms.List().FirstOrDefault(v => v.Name == vmName);
-        if (existing is { State: "Deleted" })
-        {
-            throw new MultipassException(
-                $"Bau-VM '{vmName}' liegt gelöscht im Multipass-Papierkorb — Namen nicht wiederverwendbar. Einen anderen --build-vm-Namen wählen; kein blindes Purge.");
-        }
-
-        if (existing is null)
-        {
-            var created = _vms.Create(vmName, image, diskSize);
-            EnsureSuccess(created, $"vm-create {vmName}");
-        }
-
-        var install = _vms.Exec(
-            vmName,
-            "snap list ubuntu-image >/dev/null 2>&1 || sudo snap install ubuntu-image --classic 2>&1 | tail -1");
-        EnsureSuccess(install, "snap install ubuntu-image");
-
-        var put = _vms.Put(modelPath, vmName, "model.model");
-        EnsureSuccess(put, "transfer Modell -> Bau-VM");
-
-        var snapArgs = string.Join(" ", buildConfig.Snaps.Select(s => $"--snap {s}"));
-        var buildCommand =
-            "sudo rm -rf ~/imgout && mkdir ~/imgout && "
-            + $"sudo ubuntu-image snap ~/model.model {snapArgs} -O ~/imgout 2>&1 | tail -2 && ls -lh ~/imgout/ | head -3";
-        var build = _vms.Exec(vmName, buildCommand, timeout);
-        if (build.ExitCode != 0)
-        {
-            throw new MultipassException(
-                $"ubuntu-image fehlgeschlagen (exit {build.ExitCode}): {Tail(build.StdOut, 10)} / {Tail(build.StdErr, 10)}");
-        }
-
-        var imagePath = destination ?? buildConfig.BuildTo ?? ImageStore.ImageFile(name);
-        var imageDir = Path.GetDirectoryName(Path.GetFullPath(imagePath));
-        if (!string.IsNullOrEmpty(imageDir))
-        {
-            Directory.CreateDirectory(imageDir);
-        }
-
-        var get = _vms.Get(vmName, "/home/ubuntu/imgout/pc.img", imagePath);
-        if (!File.Exists(imagePath))
-        {
-            throw new MultipassException(
-                $"Image-Transfer fehlgeschlagen (exit {get.ExitCode}): {Tail(get.StdErr, 10)}");
-        }
-
-        return new ImageBuildResult(name, imagePath, stopwatch.ElapsedMilliseconds, vmName);
     }
 
     public IReadOnlyList<ImageListEntry> List()
@@ -253,24 +159,20 @@ public sealed class ImageService
                 continue;
             }
 
-            ImageBuildConfig buildConfig;
+            ImageProfileConfig profileConfig;
             try
             {
-                buildConfig = ImageBuildConfig.FromJson(File.ReadAllText(configPath));
+                profileConfig = ImageProfileConfig.FromJson(File.ReadAllText(configPath));
             }
-            catch (Exception exception) when (exception is IOException or System.Text.Json.JsonException)
+            catch (Exception exception) when (exception is IOException or System.Text.Json.JsonException or InvalidDataException)
             {
-                throw new MultipassException($"Build-Config von '{name}' ist unlesbar: {configPath}", exception);
+                throw new MultipassException($"Profilkonfiguration von '{name}' ist unlesbar: {configPath}", exception);
             }
 
-            var imagePath = buildConfig.BuildTo ?? ImageStore.ImageFile(name);
-            var fileInfo = new FileInfo(imagePath);
             entries.Add(new ImageListEntry(
                 name,
-                buildConfig.Components,
-                buildConfig.Snaps,
-                fileInfo.Exists,
-                fileInfo.Exists ? fileInfo.Length : 0));
+                profileConfig.Components,
+                profileConfig.Snaps));
         }
 
         return entries;
@@ -284,50 +186,12 @@ public sealed class ImageService
         }
 
         var modelDir = ImageStore.ModelDir(name);
-        var configPath = ImageStore.ConfigFile(name);
-        var imagePath = File.Exists(configPath)
-            ? ImageBuildConfig.FromJson(File.ReadAllText(configPath)).BuildTo ?? ImageStore.ImageFile(name)
-            : ImageStore.ImageFile(name);
-
-        string? deletedModelDir = null;
-        string? deletedImage = null;
-        if (Directory.Exists(modelDir))
+        if (!Directory.Exists(modelDir))
         {
-            Directory.Delete(modelDir, recursive: true);
-            deletedModelDir = modelDir;
+            throw new MultipassException($"Für '{name}' existiert kein konfiguriertes Classic-Profil.");
         }
 
-        if (File.Exists(imagePath))
-        {
-            File.Delete(imagePath);
-            deletedImage = imagePath;
-        }
-
-        if (deletedModelDir is null && deletedImage is null)
-        {
-            throw new MultipassException($"Für '{name}' existiert weder eine Konfiguration noch ein Image.");
-        }
-
-        return new ImageDeleteResult(name, deletedModelDir, deletedImage);
-    }
-
-    private void EnsureSuccess(MultipassRunResult result, string label)
-    {
-        if (result.ExitCode != 0)
-        {
-            throw new MultipassException(
-                $"{label} fehlgeschlagen (exit {result.ExitCode}): {Tail(result.StdErr, 10)} / {Tail(result.StdOut, 10)}");
-        }
-    }
-
-    private static string Tail(string text, int lines)
-    {
-        if (string.IsNullOrWhiteSpace(text))
-        {
-            return string.Empty;
-        }
-
-        var parts = text.TrimEnd().Split('\n');
-        return string.Join(" | ", parts.Skip(Math.Max(0, parts.Length - lines))).Trim();
+        Directory.Delete(modelDir, recursive: true);
+        return new ImageDeleteResult(name, modelDir);
     }
 }

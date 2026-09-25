@@ -34,10 +34,10 @@ public static class ImageProfileResolver
             return null;
         }
 
-        ImageBuildConfig buildConfig;
+        ImageProfileConfig profileConfig;
         try
         {
-            buildConfig = ImageBuildConfig.FromJson(File.ReadAllText(configPath));
+            profileConfig = ImageProfileConfig.FromJson(File.ReadAllText(configPath));
         }
         catch (Exception exception) when (exception is IOException or System.Text.Json.JsonException or InvalidDataException)
         {
@@ -45,25 +45,25 @@ public static class ImageProfileResolver
                 $"Image-Profil '{requestedImage}' ist unlesbar: {configPath}", exception);
         }
 
-        if (buildConfig.SchemaVersion < 3
-            || string.IsNullOrWhiteSpace(buildConfig.ModelId)
-            || string.IsNullOrWhiteSpace(buildConfig.ModelSha256))
+        if (profileConfig.SchemaVersion < 3
+            || string.IsNullOrWhiteSpace(profileConfig.ModelId)
+            || string.IsNullOrWhiteSpace(profileConfig.ModelSha256))
         {
             throw new MultipassException(
                 $"Image-Profil '{requestedImage}' stammt vor dem Classic-Profil-Schema. " +
                 "Bitte image-delete und image-configure erneut ausführen.");
         }
 
-        var runtimeImage = string.IsNullOrWhiteSpace(buildConfig.RuntimeImage)
+        var runtimeImage = string.IsNullOrWhiteSpace(profileConfig.RuntimeImage)
             ? config.DefaultRuntimeImage
-            : buildConfig.RuntimeImage.Trim();
+            : profileConfig.RuntimeImage.Trim();
         if (string.IsNullOrWhiteSpace(runtimeImage))
         {
             throw new MultipassException(
                 $"Image-Profil '{requestedImage}' enthält kein gültiges Runtime-Image.");
         }
 
-        var cloudInitPath = ResolveCloudInit(requestedImage, buildConfig, configPath, explicitCloudInit);
+        var cloudInitPath = ResolveCloudInit(requestedImage, profileConfig, configPath, explicitCloudInit);
 
         return new ImageProfile(
             requestedImage,
@@ -73,7 +73,7 @@ public static class ImageProfileResolver
 
     private static string? ResolveCloudInit(
         string name,
-        ImageBuildConfig buildConfig,
+        ImageProfileConfig profileConfig,
         string configPath,
         string? explicitCloudInit)
     {
@@ -83,11 +83,11 @@ public static class ImageProfileResolver
         }
 
         string? candidate = null;
-        if (!string.IsNullOrWhiteSpace(buildConfig.CloudInitFile))
+        if (!string.IsNullOrWhiteSpace(profileConfig.CloudInitFile))
         {
-            candidate = Path.IsPathRooted(buildConfig.CloudInitFile)
-                ? buildConfig.CloudInitFile
-                : Path.Combine(Path.GetDirectoryName(configPath)!, buildConfig.CloudInitFile);
+            candidate = Path.IsPathRooted(profileConfig.CloudInitFile)
+                ? profileConfig.CloudInitFile
+                : Path.Combine(Path.GetDirectoryName(configPath)!, profileConfig.CloudInitFile);
         }
         else
         {

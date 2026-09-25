@@ -62,7 +62,7 @@ public class ImageProfileResolverTests
         Directory.CreateDirectory(modelDir);
         File.WriteAllText(ImageStore.CloudInitFile("agent"), "#cloud-config\n");
 
-        var config = new ImageBuildConfig(
+        var config = new ImageProfileConfig(
             "agent",
             "https://example.invalid/ubuntu-classic-2610-amd64-dangerous.model",
             ["claude", "dotnet"],
@@ -91,7 +91,7 @@ public class ImageProfileResolverTests
         Directory.CreateDirectory(modelDir);
         File.WriteAllText(ImageStore.CloudInitFile("agent"), "#cloud-config\n");
 
-        var config = new ImageBuildConfig(
+        var config = new ImageProfileConfig(
             "agent",
             "https://example.invalid/model",
             ["dotnet"],
@@ -130,7 +130,7 @@ public class ImageProfileResolverTests
         Directory.CreateDirectory(ImageStore.ModelDir("legacy"));
         File.WriteAllText(
             ImageStore.ConfigFile("legacy"),
-            new ImageBuildConfig(
+            new ImageProfileConfig(
                 "legacy",
                 "https://example.invalid/core.model",
                 ["dotnet"],
