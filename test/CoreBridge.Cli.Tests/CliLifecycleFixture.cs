@@ -6,15 +6,13 @@ using CoreBridge.Core.Images;
 
 namespace CoreBridge.Cli.Tests;
 
-internal sealed record CliLifecycleCleanupReport(bool Success, string Diagnostics)
-{
-    public static CliLifecycleCleanupReport Ok() => new(true, "Keine Lifecycle-Ressourcen offen.");
-}
-
 internal sealed record CliRunResult(int ExitCode, IReadOnlyList<string> Lines);
 
 /// <summary>
-/// Gemeinsamer, serialisierter Zustand für die nummerierten Integrationstufen.
+/// Gemeinsame Namen, Config und Temp-Store der Lifecycle-Stufen — aber kein
+/// Fortschrittszustand: jede Stufe stellt ihre Voraussetzungen selbst her
+/// (<see cref="EnsureImageAsync"/>, <see cref="EnsureVmAsync"/>) und prüft dabei
+/// den echten Zustand (Profildatei, vm-list), damit sie einzeln lauffähig ist.
 /// CLI-Kommandos laufen ausschließlich über den öffentlichen
 /// <see cref="Program.Run"/>-Dispatcher (kein CLI-Kindprozess). Nur die
 /// interaktiven Verbindungen (vm-connect, SSH) gehen direkt über die
@@ -68,18 +66,6 @@ public sealed class CliLifecycleFixture : IDisposable
     internal string ModelPath => Path.Combine(store.Path, "models", ImageName, ImageName + ".model");
 
     internal string ProfileConfigPath => Path.Combine(store.Path, "models", ImageName, ImageName + ".profile.json");
-
-    internal bool MultipassAvailable { get; private set; }
-
-    internal string? SkipReason { get; private set; }
-
-    internal bool ImageConfigured { get; set; }
-
-    internal bool VmCreated { get; set; }
-
-    internal bool ImageCleanupRequired { get; set; }
-
-    internal bool VmCleanupRequired { get; set; }
 
     internal string SshPrivateKeyPath => Path.Combine(store.Path, "ssh", "id_rsa");
 
@@ -149,62 +135,91 @@ public sealed class CliLifecycleFixture : IDisposable
         }
     }
 
-    internal void RecordStatus(int exitCode)
+    /// <summary>Wie <see cref="RunAsync"/>, wirft aber bei Exit ≠ 0.</summary>
+    internal async Task<CliRunResult> RunCheckedAsync(IOptions options, Action<string> log)
     {
-        MultipassAvailable = exitCode == 0;
-        SkipReason = MultipassAvailable ? null : "CLI-Integration übersprungen — multipass-status fehlgeschlagen.";
-    }
-
-    internal bool ShouldSkip()
-    {
-        return !MultipassAvailable;
-    }
-
-    internal async Task<CliLifecycleCleanupReport> CleanupAsync(Action<string> log)
-    {
-        var failures = new List<string>();
-
-        if (VmCleanupRequired)
+        var result = await RunAsync(options, log);
+        if (result.ExitCode != 0)
         {
-            var exitCode = (await RunAsync(new VmDeleteOptions { Name = VmName, Purge = true }, log)).ExitCode;
-            if (exitCode != 0)
-            {
-                failures.Add($"vm-delete '{VmName}' fehlgeschlagen (Exit {exitCode}).");
-            }
-            else
-            {
-                VmCleanupRequired = false;
-            }
+            throw new InvalidOperationException(
+                $"{options.GetType().Name} fehlgeschlagen (Exit {result.ExitCode}) — Details im Log.");
         }
 
-        if (ImageCleanupRequired)
+        return result;
+    }
+
+    /// <summary>State der Test-VM laut vm-list, <c>null</c> wenn sie nicht existiert.</summary>
+    internal async Task<string?> QueryVmStateAsync(Action<string> log)
+    {
+        var list = await RunCheckedAsync(new VmListOptions(), log);
+        return FindVmState(list, VmName);
+    }
+
+    internal static string? FindVmState(CliRunResult list, string vmName)
+    {
+        return list.Lines
+            .Select(line => line.Split(' ', StringSplitOptions.RemoveEmptyEntries))
+            .Where(columns => columns.Length >= 2 && columns[0] == vmName)
+            .Select(columns => columns[1])
+            .FirstOrDefault();
+    }
+
+    /// <summary>Konfiguriert das Test-Image, falls seine Profildatei noch fehlt.</summary>
+    internal async Task EnsureImageAsync(Action<string> log)
+    {
+        if (File.Exists(ProfileConfigPath))
         {
-            var modelDirectory = Path.Combine(store.Path, "models", ImageName);
-            if (!Directory.Exists(modelDirectory))
-            {
-                ImageCleanupRequired = false;
-            }
-            else
-            {
-                var exitCode = (await RunAsync(new ImageDeleteOptions { Name = ImageName }, log)).ExitCode;
-                if (exitCode != 0)
-                {
-                    failures.Add($"image-delete '{ImageName}' fehlgeschlagen (Exit {exitCode}).");
-                }
-                else if (Directory.Exists(modelDirectory))
-                {
-                    failures.Add($"Image-Profil '{ImageName}' existiert nach image-delete weiterhin.");
-                }
-                else
-                {
-                    ImageCleanupRequired = false;
-                }
-            }
+            return;
         }
 
-        return failures.Count == 0
-            ? CliLifecycleCleanupReport.Ok()
-            : new CliLifecycleCleanupReport(false, string.Join(Environment.NewLine, failures));
+        await RunCheckedAsync(new ImageConfigureOptions { Name = ImageName, Components = "claude,dotnet" }, log);
+    }
+
+    /// <summary>Entfernt die Test-VM endgültig, falls sie existiert (auch aus dem Papierkorb).</summary>
+    internal async Task EnsureVmAbsentAsync(Action<string> log)
+    {
+        if (await QueryVmStateAsync(log) is not null)
+        {
+            await RunCheckedAsync(new VmDeleteOptions { Name = VmName, Purge = true }, log);
+        }
+    }
+
+    /// <summary>
+    /// Stellt sicher, dass die Test-VM existiert (legt Image und VM bei Bedarf an)
+    /// und — mit <paramref name="running"/> — läuft.
+    /// </summary>
+    internal async Task EnsureVmAsync(Action<string> log, bool running = true)
+    {
+        var state = await QueryVmStateAsync(log);
+        if (state == "Deleted")
+        {
+            await RunCheckedAsync(new VmDeleteOptions { Name = VmName, Purge = true }, log);
+            state = null;
+        }
+
+        if (state is null)
+        {
+            await EnsureImageAsync(log);
+            await RunCheckedAsync(new VmCreateOptions { Name = VmName, Image = ImageName }, log);
+            return;
+        }
+
+        if (running && state != "Running")
+        {
+            await RunCheckedAsync(new VmStartOptions { Name = VmName }, log);
+        }
+    }
+
+    /// <summary>Räumt anhand des echten Zustands auf: VM laut vm-list, Image laut Modellverzeichnis.</summary>
+    internal async Task CleanupAsync(Action<string> log)
+    {
+        await EnsureVmAbsentAsync(log);
+
+        var modelDirectory = Path.Combine(store.Path, "models", ImageName);
+        if (Directory.Exists(modelDirectory))
+        {
+            await RunCheckedAsync(new ImageDeleteOptions { Name = ImageName }, log);
+        }
     }
 
     public void Dispose()
@@ -215,23 +230,22 @@ public sealed class CliLifecycleFixture : IDisposable
         }
 
         disposed = true;
-        // Kein ITestOutputHelper beim Dispose — die Meldungen gehen in die Diagnose.
+        // Kein ITestOutputHelper beim Dispose — die Meldungen gehen in die Exception.
         var log = new List<string>();
-        CliLifecycleCleanupReport report;
         try
         {
-            report = CleanupAsync(log.Add).GetAwaiter().GetResult();
+            CleanupAsync(log.Add).GetAwaiter().GetResult();
+        }
+        catch (Exception exception)
+        {
+            throw new InvalidOperationException(string.Join(
+                Environment.NewLine,
+                ["Lifecycle-Cleanup fehlgeschlagen:", exception.Message, "Log:", .. log]),
+                exception);
         }
         finally
         {
             store.Dispose();
-        }
-
-        if (!report.Success)
-        {
-            throw new InvalidOperationException(string.Join(
-                Environment.NewLine,
-                ["Lifecycle-Cleanup fehlgeschlagen:", report.Diagnostics, "Log:", .. log]));
         }
     }
 }
