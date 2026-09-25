@@ -3,7 +3,7 @@ namespace CoreBridge.Core.Config;
 /// <summary>
 /// Wurzel der CoreBridge-Konfiguration (Leitsatz 6: CLI und TUI lesen dieselbe Quelle).
 /// Keine Passwörter hier — Secrets laufen ausschließlich über die Env-Kette
-/// `CORE_BRIDGE_[ALL,<NAME>,...]_PASSWORD`.
+/// `CORE_BRIDGE_[ALL,&lt;NAME&gt;,...]_PASSWORD`.
 /// </summary>
 public sealed record AppConfig
 {
@@ -26,6 +26,7 @@ public sealed record ImagesConfig
     /// <c>daily:26.10</c> verfügbar.
     /// </summary>
     public string DefaultRuntimeImage { get; init; } = "daily:26.10";
+
     /// <summary>
     /// Wurzel für Modell-/Config-/cloud-init-/Image-Dateien. Absoluter Pfad oder
     /// relativ zur Repo-Wurzel (Ordner, der CoreBridge.slnx enthält). Leer =
@@ -50,57 +51,58 @@ public sealed record ImageBuildDefaultsConfig
 }
 
 /// <summary>
-/// Eine Image-Komponente. Snap und Cloud-Init-Eigenschaften beschreiben die
-/// Provisionierung im Gast. Ein optionales <see cref="CloudInitScript"/> wird
-/// als Gast-Datei in die generierte cloud-init-YAML eingebettet; es wird nie
-/// vom Host als Installationsschritt gestartet.
+/// Eine Classic-Gastkomponente. Die Komponente beschreibt Pakete, Benutzer und
+/// ein optionales Gast-Skript. Das Skript wird als Datei in cloud-init eingebettet
+/// und erst im Gast ausgeführt; der Host führt es nicht separat aus.
 /// </summary>
 public sealed record ComponentConfig
 {
-    /// <summary>Optionaler Store-Snap für die Custom-Image-Pipeline.</summary>
+    /// <summary>Optionales Store-Snap für Komponenten, die weiterhin einen Snap benötigen.</summary>
     public string? Snap { get; init; }
-
-    /// <summary>
-    /// Repo-relatives Shell-Skript, dessen Inhalt als ausführbare Datei in
-    /// cloud-init geschrieben wird. Der Pfad selbst wird nicht ausgeführt.
-    /// </summary>
-    public string? CloudInitScript { get; init; }
-
-    /// <summary>Zielpfad des eingebetteten Skripts im Gast.</summary>
-    public string? CloudInitInstallPath { get; init; }
-
-    /// <summary>Pakete, die cloud-init vor der Ausführung des Skripts installiert.</summary>
-    public string[] CloudInitPackages { get; init; } = [];
 
     /// <summary>Snap mit classic confinement — <c>snap install --classic</c>.</summary>
     public bool Classic { get; init; }
 
-    /// <summary>"quelle|ziel" — absolute Pfade, z. B. /snap/bin/x|/home/ubuntu/.local/bin/x.</summary>
-    public string[] Symlinks { get; init; } = [];
+    /// <summary>Relatives oder absolutes Shell-Skript, dessen Inhalt in die Gast-cloud-init eingebettet wird.</summary>
+    public string? Script { get; init; }
 
-    /// <summary>"KEY=value"-Zeilen, die an /home/ubuntu/.profile angehängt werden.</summary>
-    public string[] ProfileExports { get; init; } = [];
+    /// <summary>Absoluter Unix-Pfad des eingebetteten Skripts im Gast.</summary>
+    public string? InstallPath { get; init; }
 
-    public VendoredLibsConfig? VendoredLibs { get; init; }
+    /// <summary>Pakete, die cloud-init für diese Komponente installieren soll.</summary>
+    public string[] Packages { get; init; } = [];
+
+    /// <summary>Fordert ein Update der Paketquellen an.</summary>
+    public bool PackageUpdate { get; init; }
+
+    /// <summary>Fordert ein VM-weites Paket-Upgrade an; standardmäßig deaktiviert.</summary>
+    public bool PackageUpgrade { get; init; }
+
+    /// <summaryBenutzer, die diese Komponente im Gast benötigt.</summary>
+    public CloudInitUserConfig[] Users { get; init; } = [];
+
+    /// <summary>Benutzer, als der das Skript installiert bzw. seine Postconditions ausführt.</summary>
+    public string InstallUser { get; init; } = "ubuntu";
 
     public bool NeedsCloudInit =>
         !string.IsNullOrWhiteSpace(Snap) ||
-        !string.IsNullOrWhiteSpace(CloudInitScript) ||
-        CloudInitPackages.Length > 0 ||
-        Symlinks.Length > 0 ||
-        ProfileExports.Length > 0 ||
-        VendoredLibs is not null;
+        !string.IsNullOrWhiteSpace(Script) ||
+        Packages.Length > 0 ||
+        PackageUpdate ||
+        PackageUpgrade ||
+        Users.Length > 0;
 }
 
-public sealed record VendoredLibsConfig
+/// <summary>Ein Benutzer-Datensatz für die globale cloud-init-Sektion <c>users</c>.</summary>
+public sealed record CloudInitUserConfig
 {
-    /// <summary>Binary, dessen ldd die Fehlenden Libs meldet (Guard: nur vendoren, wenn nötig).</summary>
-    public required string LddTarget { get; init; }
+    public required string Name { get; init; }
 
-    public required string[] Packages { get; init; } = [];
+    public string? Sudo { get; init; }
 
-    /// <summary>Glob innerhalb des entpackten deb, z. B. "usr/lib/x86_64-linux-gnu/*.so.*".</summary>
-    public string ExtractGlob { get; init; } = "usr/lib/x86_64-linux-gnu/*.so.*";
+    public string Shell { get; init; } = "/bin/bash";
 
-    public required string Destination { get; init; }
+    public string[] Groups { get; init; } = [];
+
+    public bool LockPassword { get; init; } = true;
 }

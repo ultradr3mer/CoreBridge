@@ -56,22 +56,16 @@ ein Ergebnis.
   `. $PROFILE` nötig).
 - Claude Code lief historisch als Native-Binary in einer core26-VM (kein
   npm/curl nötig); das ist keine aktive Classic-Installationsanweisung.
-- **.NET SDK 10 auf core26** (historische Core-Evidenz, inkl. `dotnet new/run` + NuGet-Restore):
-  `snap install dotnet-sdk-100` (classic Snap — geht auf Core 26 DOCH), Symlink
-  nach `~/.local/bin` (/usr/local ist read-only), vendored Runtime-Libs aus
-  Ubuntu-debs nach `~/.local/lib` + `LD_LIBRARY_PATH`, `DOTNET_ROOT` in
-  `~/.profile`. Reproduzierbar: `scripts/bootstrap-agent-vm.ps1 -VmName <vm>`.
-  Lib-Vendoring ist ldd-getrieben (nur wenn `ldd dotnet` „not found“ meldet) und
-  läuft komplett auf der Ziel-VM selbst (`apt-get download` ohne root, kein
-  Umweg mehr über Build-VM/Host; `BuildVmName`-Parameter entfallen):
-  Kandidaten `libunwind8 libicu78 libbrotli1 libgssapi-krb5-2 libssl3t64
-  zlib1g` — `libc6`/`libgcc-s1`/`libstdc++6` bewusst NICHT (Basissystem,
-  ABI-Risiko), `ca-certificates`/`tzdata` sind keine `.so` (gehören nicht nach
-  `~/.local/lib`).
-- Custom-Image (T11): Bau komplett lokal bewiesen (`scripts/build-coreimage.ps1`,
-  Canonical-dangerous-Modell, kein Ubuntu One). Import nach Multipass unter Windows
-  BLOCKIERT (multipass 1.16.3: file://-Client-Mangling + erzwungenes https) —
-  Auswege: https-Workaround (Zertifikat) oder Upstream-Bugfix.
+- **.NET SDK auf Classic Ubuntu:** Die aktive Komponente `dotnet` installiert
+  den Store-Snap `dotnet-sdk-100 --classic`; `scripts/components/install-dotnet.sh`
+  erstellt ausschließlich im Gast den Benutzer-Symlink und die `.profile`-Belegung.
+  Die frühere Core-26-Evidenz mit vendorierten Runtime-Bibliotheken bleibt
+  historisch und ist kein Host-Bootstrap-Verfahren des aktuellen Workflows.
+- Custom-Image (T11) ist **deprecated und wird nicht unterstützt**: Der
+  Kompatibilitätspfad `image-build` bleibt vorerst verborgen erhalten, damit
+  historische Profile lesbar bleiben. T11 belegt keinen erfolgreichen Import
+  unter Windows (file://-Mangling; HTTP wurde zu HTTPS mit SSL-Fehler). Die
+  obsolen Host-Skripte wurden entfernt.
 - T01–T10 sind implementiert und gelaufen; alle Messwerte in `EXPERIMENT_LOG.md`
   (volle Rohdaten unter `experiment-data/`). Kernaussagen: launch core26 kalt
   88,5 s / warm 58,2 s; exec-Roundtrip ~130 ms mit sauberer Exit-Code-Weitergabe;
@@ -89,21 +83,25 @@ ein Ergebnis.
     lädt/validiert das Classic-Modell
     (`ubuntu-classic-2610-amd64-dangerous.model`), schreibt `<n>.build.json`
     mit Runtime `daily:26.10` und erzeugt cloud-init für Gast-Komponenten.
-  - `cb image-build --name <n>` backt weiterhin Store-Snaps in der
-    26.04-Bau-VM; der Import des fertigen `.img` unter Windows bleibt offen.
-  - Komponentendefinitionen (Pakete, Snap-Name, Cloud-init-Skript,
-    Symlinks, `.profile`-Exports, vendored Libs) stehen in
-    `src/CoreBridge.Cli/appsettings.json`; neue Komponenten benötigen keinen
-    Host-Code.
+  - `cb image-build --name <n>` bleibt nur als versteckter, deprecated
+    Kompatibilitätspfad für historische T11-Daten erhalten. `26.04` ist dabei
+    ausschließlich das Werkzeug-Image dieser nicht unterstützten Bau-VM; ein
+    erfolgreicher Windows-Import ist nicht nachgewiesen.
+  - Komponentendefinitionen (Pakete, optionale Store-Snaps, Benutzer und
+    Cloud-init-Skripte) stehen in `src/CoreBridge.Cli/appsettings.json`;
+    komponentenspezifische Symlinks, Umgebungsvariablen und Bibliotheks-
+    Einrichtung gehören in das jeweilige Gast-Skript. Neue Komponenten
+    benötigen keinen Host-Code. `ImageCloudInit` aggregiert Pakete und Benutzer,
+    rendert Skripte/Snaps deterministisch und parst/validiert das erzeugte
+    cloud-init-Subset vor dem Persistieren.
   - Claude wird als `scripts/components/install-claude.sh` in die generierte
     cloud-init-YAML eingebettet und per `runcmd` im Gast ausgeführt.
-  - `bootstrap-agent-vm.ps1` ist kein notwendiger Schritt des öffentlichen
-    CLI-first-Workflows.
 - **WIP/offene Fäden (25.09.2026):**
   (a) Classic-26.10-Edge: Modell- und Runtime-Inputs können sich bewegen;
   `image-configure` validiert und persistiert den jeweils geladenen
   Modell-Digest. `pinned` versus `managed-stable` für Claude ist noch offen.
-  (b) Custom-Image-Import: https-Workaround oder Upstream-Bugfix bleibt offen.
+  (b) Custom-Image-Import bleibt ungelöst; `image-build` ist bis zu einer
+    ausdrücklichen neuen Entscheidung deprecated.
   (c) `opencode`/`python` und der .NET-Snap bleiben als Classic-Gast-
   Provisionierung zu validieren; die alte Core-spezifische Begründung darf
   nicht übertragen werden.
@@ -124,6 +122,8 @@ ein Ergebnis.
   `System.Text.Json`, Timeout → Kill + Exception).
 - `src/CoreBridge.Cli` — Parser + Ausgabe; einziges Projekt mit dem NuGet-Paket
   CommandLineParser 2.9.1.
+- `src/CoreBridge.Core` verwendet YamlDotNet ausschließlich zur internen
+  Parse-/Schema-Prüfung des von `ImageCloudInit` erzeugten cloud-init-Subsets.
 - `src/CoreBridge.Tui` — erst in Phase D. Terminal.Gui v2 ist eine komplette
   Neuschreibung (v1-Beispiele kompilieren nicht) — dann Patterns aus
   `F:\source\SandboxBridge\src\SandboxBridge.Tui\AGENTS.md` ansehen.

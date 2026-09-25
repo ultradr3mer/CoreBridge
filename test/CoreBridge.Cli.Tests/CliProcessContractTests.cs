@@ -1,6 +1,7 @@
 using CoreBridge.Cli;
 using CoreBridge.Core.Config;
 using CoreBridge.Core.Images;
+using CommandLine;
 
 namespace CoreBridge.Cli.Tests;
 
@@ -59,6 +60,30 @@ public sealed class CliProcessContractTests
 
         Assert.Equal(0, result.ExitCode);
         Assert.Contains("--name", result.StdOut + result.StdErr);
+    }
+
+    [Fact]
+    public void ImageBuildMetadatenKennzeichnenDeprecatedUndUnsupported()
+    {
+        var verb = Assert.IsType<VerbAttribute>(
+            Assert.Single(typeof(ImageBuildOptions).GetCustomAttributes(typeof(VerbAttribute), inherit: true)));
+        var nameOption = Assert.IsType<OptionAttribute>(
+            Assert.Single(typeof(ImageBuildOptions).GetProperty("Name")!
+                .GetCustomAttributes(typeof(OptionAttribute), inherit: true)));
+
+        Assert.Contains("DEPRECATED", verb.HelpText);
+        Assert.Contains("UNSUPPORTED", verb.HelpText);
+        Assert.Contains("DEPRECATED", nameOption.HelpText);
+        Assert.Contains("UNSUPPORTED", nameOption.HelpText);
+    }
+
+    [Fact]
+    public void ImageBuildVerbBleibtVersteckt()
+    {
+        var attribute = Assert.IsType<VerbAttribute>(
+            Assert.Single(typeof(ImageBuildOptions).GetCustomAttributes(typeof(VerbAttribute), inherit: true)));
+
+        Assert.True(attribute.Hidden);
     }
 
     [Fact]

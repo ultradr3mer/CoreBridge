@@ -10,7 +10,7 @@ The active target is Classic Ubuntu 26.10 Edge:
 
 - model: `ubuntu-classic-2610-amd64-dangerous.model`
 - runtime: `daily:26.10`
-- `26.04` is only the image-build tool VM
+- `26.04` is only the deprecated/unsupported image-build tool VM
 
 Canonical flow:
 
@@ -35,7 +35,7 @@ host-side component installers.
 ### 1. Options and dispatch
 
 - [x] Add the `IOptions` marker interface.
-- [x] Make every options/verb class in `Verbs.cs` implement `IOptions`.
+- [x] Make every options/verb class in `Options.cs` implement `IOptions`.
 - [x] Centralize registered option types and test the invariant.
 - [x] Keep `Program.Main` limited to configuration, parsing, and parser-error
   mapping.
@@ -57,6 +57,7 @@ host-side component installers.
 - [x] Validate the Classic model identity and persist its model ID/SHA-256.
 - [x] Embed component guest scripts in cloud-init; do not execute them from
   the host.
+- [x] Parse and validate the generated cloud-init subset before persisting it.
 
 ### 3. Process-level CLI tests
 
@@ -65,11 +66,11 @@ host-side component installers.
   assembly.
 - [x] Add a `CliRunner` that starts `dotnet CoreBridge.Cli.dll`, captures
   stdout/stderr/exit code, and enforces timeouts.
-- [x] Run child processes with `DOTNET_ENVIRONMENT=Development`, using
-  `appsettings.Development.json` (`Images:StoreRoot=artifacts`).
+- [x] Run child processes with `DOTNET_ENVIRONMENT=Development`; lifecycle
+  runs override `Images:StoreRoot` with a unique temporary directory.
 - [x] Use unique `cbx-cli-*` names and delete without `--purge`.
-- [x] Replace the direct `VmCycleTests` service calls with the ordered CLI
-  lifecycle test.
+- [x] Replace the direct `VmCycleTests` service calls with deterministically
+  ordered CLI lifecycle stages and authoritative fixture cleanup.
 - [x] Skip cleanly when `multipass-status` reports no Multipass installation.
 - [x] Test the public `vm-connect` contract separately because it requires a
   real TTY.
@@ -84,7 +85,7 @@ host-side component installers.
 - [x] Update README/AGENTS/plan documentation for Classic 26.10 Edge and
   cloud-init-only guest provisioning.
 - [x] Run fast unit/contract tests separately from the real CLI integration
-  cycle.
+  stages.
 - [x] Run the real cycle only through `dotnet test`; never invoke
   `multipass` directly from the agent shell.
 - [ ] Record additional Classic-Edge experiment results in
@@ -98,7 +99,8 @@ host-side component installers.
 - [x] The README sequence works without a host installer script.
 - [x] `vm-create --image <configured-name>` performs guest configuration via
   cloud-init.
-- [x] CLI lifecycle tests call only CLI verbs.
+- [x] CLI lifecycle stages call only CLI verbs, use a unique store root, and
+  verify exact-name cleanup without purge.
 - [x] Tests verify Claude is available without knowing its guest-script path.
 - [x] No purge is used by the CLI integration cycle.
 

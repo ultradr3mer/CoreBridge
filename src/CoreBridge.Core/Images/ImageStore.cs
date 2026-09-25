@@ -67,9 +67,9 @@ public static class ImageStore
     public static string ImageFile(string name) => Path.Combine(ImagesRoot, $"{name}.img");
 
     /// <summary>
-    /// Löst einen konfigurierten repo-relativen Pfad auf. Eingebettete Gast-Skripte
-    /// und optionale Testressourcen werden dadurch unabhängig vom Arbeitsverzeichnis
-    /// des aufrufenden Prozesses gefunden.
+    /// Löst einen konfigurierten relativen oder absoluten Pfad auf. Relative
+    /// Eingebettete Gast-Skripte und optionale Testressourcen werden dadurch
+    /// unabhängig vom Arbeitsverzeichnis des aufrufenden Prozesses gefunden.
     /// </summary>
     public static string ResolvePath(string path)
     {

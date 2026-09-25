@@ -6,7 +6,8 @@ namespace CoreBridge.Core.Tests;
 /// <summary>
 /// Session-API mit einem Fake-Shell-Prozess (pwsh) statt Multipass — gleicher
 /// Mechanismus (Pipes, Pumpen, WaitFor), kein VM-Zugriff nötig. Die echte
-/// VM-Shell wird im Integrations-Zyklus (CreateDeleteCycleTests) abgedeckt.
+/// VM-Shell wird durch die nummerierten Stufen in `CliLifecycleTests`
+/// im CLI-Testprojekt abgedeckt.
 /// </summary>
 public class VmConsoleSessionTests
 {

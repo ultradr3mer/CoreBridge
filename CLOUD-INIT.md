@@ -11,7 +11,8 @@ Die aktive Zielbasis ist **klassisches Ubuntu 26.10 Edge**:
 
 - Modell: `ubuntu-classic-2610-amd64-dangerous.model`
 - Multipass-Runtime: `daily:26.10`
-- `26.04` bleibt nur das Werkzeug-Image der Image-Bau-VM.
+- `26.04` gehört nur zum versteckten, deprecated Kompatibilitätspfad
+  `image-build`; es ist keine Ziel-Runtime und kein Fallback.
 - Claude wird nicht über den Core-only `claude-code`-Snap provisioniert.
   `scripts/components/install-claude.sh` ist eine Gast-Datei, die in die
   generierte cloud-init-YAML eingebettet und dort per `runcmd` ausgeführt wird.
@@ -28,8 +29,9 @@ Die Provisionierung ist bewusst getrennt:
    Agent-Provisionierung; der Postcondition-Befehl muss explizit geprüft
    werden.
 
-Cloud-init bleibt für Gast-Komponenten zuständig (Snaps, Symlinks,
-`.profile`-Exports und optionale Bibliotheken). Ein großes Binary wird nicht
+Cloud-init bleibt für Pakete, Benutzer, eingebettete Komponenten-Skripte und
+optionale Store-Snaps zuständig. Symlinks, Umgebungsvariablen und Bibliotheks-
+Einrichtung gehören in das jeweilige Gast-Skript. Ein großes Binary wird nicht
 in YAML eingebettet.
 
 ## 2. Vorhandener Claude-Code-Pfad
@@ -40,18 +42,21 @@ Die aktuelle Komponentenddefinition ist:
 
 ```json
 "claude": {
-  "CloudInitScript": "scripts/components/install-claude.sh",
-  "CloudInitInstallPath": "/usr/local/sbin/corebridge-install-claude",
-  "CloudInitPackages": ["bash", "curl", "ca-certificates"]
+  "Script": "scripts/components/install-claude.sh",
+  "InstallPath": "/usr/local/sbin/corebridge-install-claude",
+  "Packages": ["bash", "ca-certificates", "curl", "sudo"],
+  "PackageUpdate": true,
+  "PackageUpgrade": false,
+  "InstallUser": "ubuntu"
 }
 ```
 
 Quelle: `src/CoreBridge.Cli/appsettings.json`.
 
 `ImageCloudInit` liest die Skriptquelle, schreibt sie mit `write_files` als
-`/usr/local/sbin/corebridge-install-claude` und ruft sie über `runcmd` auf.
-Der Host führt das Skript nicht aus; es gibt im aktuellen Classic-Workflow
-keine Host-Installationsphase.
+konfigurierten absoluten Unix-Pfad und ruft sie über `runcmd` auf. Der Host führt
+das Skript nicht aus; es gibt im aktuellen Classic-Workflow keine
+Host-Installationsphase.
 
 ### 2.2 Aktueller Ablauf des eingebetteten Skripts
 
@@ -162,38 +167,30 @@ Host-Transfer-Pipeline ist nicht mehr Teil des öffentlichen Workflows.
 
 ### 2.6 Tests und Bildkonfiguration
 
-Aktuell muss die Test- und Konfigurationslage mitgeplant werden:
+Aktueller Test- und Konfigurationsstand:
 
-- `ImageTests` prüft nur per `Assert.Contains`, ob der erzeugte Text bestimmte
-  Strings enthält. Das beweist weder valides YAML noch ein gültiges
-  cloud-init-Schema.
-- `CoreBridge.Cli.Tests` führt den öffentlichen CLI-Lifecycle aus; der frühere
-  direkte `VmCycleTests`-Servicefluss ist entfernt.
-- Der Integrationstest erwartet jedes Mal die Ausgabe
-  `Prüfsumme bestätigt`. Ein korrekt idempotenter zweiter Lauf, der früh
-  zurückkehrt, würde diesen Test dadurch fehlschlagen.
-- Die Debug/Release-Auswahl im Test wirkt vertauscht: Für eine Test-Assembly
-  unter `Release` wird `Debug` an das Script übergeben, für `Debug` dagegen
-  `Release`.
-- Es werden weder Rerun/Upgrade noch unterbrochene Übertragung, Installations-
-  rollback, Autoupdate-Policy oder postinstallierter Binary-Hash getestet.
+- `ImageCloudInit.Generate` parst das erzeugte Dokument selbst und prüft das
+  erzeugte cloud-init-Subset (Pakete, Benutzer, Snap-Argumentlisten,
+  `write_files` und `runcmd`) vor dem Persistieren. Die Core-Tests parsen
+  dieselbe YAML-Struktur semantisch und prüfen Reihenfolge/Deduplizierung.
+- `CoreBridge.Cli.Tests` führt den öffentlichen CLI-Lifecycle als geordnete,
+  separate Stufen aus; der frühere direkte Servicefluss ist entfernt. Ein
+  Collection-Fixture besitzt eindeutige Namen und einen temporären StoreRoot und
+  verifiziert das Cleanup ohne `--purge`.
 - `ImageBuildConfig` speichert Komponenten, Snaps, Runtime, Cloud-init-Dateiname,
   Modell-ID und Modell-Digest. Gast-Skriptinhalte werden config-getrieben
   bei `image-configure` in die YAML geschrieben.
-- `image-build` übergibt ausschließlich `--snap <name>` an `ubuntu-image`.
-  Ein in cloud-init konfiguriertes `--classic` kann dadurch beim Custom-Image-
-  Build verloren gehen.
+- `image-build` ist deprecated und nicht unterstützt. Es übergibt ausschließlich
+  `--snap <name>` an `ubuntu-image`; ein in cloud-init konfiguriertes `--classic`
+  kann verloren gehen. T11 belegt außerdem keinen erfolgreichen Windows-Import.
 - Das Basis-Modell wird von einem beweglichen `main`-Branch geladen und auf
   Classic-Identität geprüft; Modell-ID und SHA-256 werden im Profil
   protokolliert.
-- `--force` kann bei einer Neukonfiguration ohne cloud-init-Bedararf eine alte
-  generierte `cloud-init.yaml` stehen lassen. `vm-create --image <name>`
-  leitet diese alte Datei später automatisch ab und verwendet sie erneut.
-  Configure muss den Store-Zustand transaktional aktualisieren oder veraltete
-  Nebendateien gezielt entfernen.
+- `--force` entfernt eine nicht mehr benötigte alte generierte `cloud-init.yaml`,
+  damit `vm-create --image <name>` kein veraltetes Profil wiederverwendet.
 
-Diese Punkte gehören in den späteren Implementierungsplan, auch wenn nur
-`CLOUD-INIT.md` geändert wird.
+Weiterhin offen sind Rerun-/Upgrade-Semantik, unterbrochene Übertragung,
+Installationsrollback, Autoupdate-Policy und postinstallierte Binär-Digests.
 
 ## 3. Was die lokale cloud-init-Dokumentation bestätigt
 
@@ -289,25 +286,21 @@ oder `write_files` gesetzt, sondern durch die Modulliste der Base Config, etwa
 `[runcmd, once]`. Module wie `write_files`, `snap` und `runcmd` sind in der
 Referenz Ubuntu-Base standardmäßig per-instance.
 
-Aktuelle Schwächen in `ImageCloudInit`:
+Der aktive `ImageCloudInit`-Vertrag ist:
 
-1. `.profile` wird mit `append: true` verändert. Wiederholte Ausführung kann
-   Exporte duplizieren.
-2. Für `.profile` wird kein expliziter Modus angegeben.
-3. Konfigurationswerte werden als rohe skalare YAML-Strings ausgegeben.
-   Kommas, Doppelpunkte, `#`, Anführungszeichen und mehrzeilige Shell-Syntax
-   müssen zuverlässig serialisiert oder explizit als `/bin/sh -c` übergeben
-   werden.
-4. `chown -R ubuntu:ubuntu /home/ubuntu` ist zu breit. Es kann Rechte fremder,
-   später hinzugefügter Dateien verändern.
-5. Mehrere Befehle der Lib-Vendoring-Pipeline werden über Shell-Operatoren,
-   Schleifen und Variablen erzeugt. Dafür braucht es eine explizite, getestete
-   Shell-Argumentstruktur.
-6. `apt-get download` und anschließende `cp`-Fehler werden mit `|| echo` bzw.
-   `2>/dev/null` teilweise verschluckt. Der letzte Cleanup-Befehl kann trotz
-   unvollständiger Bibliotheken erfolgreich laufen.
-7. Console-Ausgabe und ein erfolgreicher `launch` sind kein verlässlicher
-   Maschinenvertrag für erfolgreiches Provisioning.
+1. Skripte werden als `write_files` eingebettet; `.profile`-Exporte und
+   Symlinks werden nicht mehr generisch aus Konfigurationsfeldern gerendert.
+2. `runcmd` besteht ausschließlich aus argv-ähnlichen
+   `[Skriptpfad, Benutzer]`-Argumentlisten. Es gibt kein gemeinsames
+   `exit 0`, das nachfolgende Stufen überspringen könnte.
+3. Konfigurationswerte werden YAML-sicher quotiert; Pfade werden vor dem
+   Rendern normalisiert und validiert.
+4. Das erzeugte Dokument wird geparst und gegen das erzeugte cloud-init-Subset
+   validiert, bevor es gespeichert wird.
+5. Komponentenspezifische Dateiänderungen liegen im jeweiligen Gast-Skript und
+   dort als getesteter, idempotenter Vertrag.
+6. Console-Ausgabe und ein erfolgreicher `launch` bleiben kein
+   Provisioning-Erfolgsvertrag; Postconditions werden separat geprüft.
 
 ### 3.4 `packages`
 
@@ -328,11 +321,10 @@ Lokale Quellen:
 - `../cloud-init/doc/rtd/reference/yaml_examples/package_update_upgrade.rst`
 - `../cloud-init/doc/examples/cloud-config-install-packages.txt`
 
-Der heutige CoreBridge-Weg `apt-get download` → `dpkg -x` → Dateien nach
-`~/.local/lib` kopieren ist ein eigener Mechanismus. `dpkg -x` entpackt nur
-Dateien; es führt keine normale Paketinstallation, Dependency-Auflösung oder
-Maintainer-Scripts aus. Das ist für bewusst vendorierte Bibliotheken brauchbar,
-aber kein Claude-Paketvertrag.
+Der frühere Core-26-Weg `apt-get download` → `dpkg -x` → Dateien nach
+`~/.local/lib` kopieren ist historische Evidenz und kein aktiver Classic-
+Provisionierungsschritt. `dpkg -x` entpackt nur Dateien; es führt keine normale
+Paketinstallation, Dependency-Auflösung oder Maintainer-Scripts aus.
 
 ### 3.5 Snap- und Paketbeispiele
 
@@ -343,7 +335,7 @@ eindeutig. Die aktuell erzeugte Form ist valide:
 ```yaml
 snap:
   commands:
-    - snap install opencode --classic
+    - [snap, install, opencode, --classic]
 ```
 
 Wichtige Verträge:
@@ -460,10 +452,9 @@ Lokale Quellen:
 - `../cloud-init/doc/rtd/howto/debugging.rst`
 - `../cloud-init/doc/rtd/reference/cli.rst`
 
-### 3.9 Konkrete Defekte im aktuellen `runcmd`
+### 3.9 Frühere `runcmd`-Befunde — im aktiven Renderer behoben
 
-Die How-to- und Modulquellen bestätigen zwei zusätzliche Probleme, die über
-allgemeine Robustheit hinausgehen:
+Die How-to- und Modulquellen bestätigen die frühere Fehlerklasse:
 
 1. Das Zielverzeichnis `/home/ubuntu/.local/lib` für vendored Libraries wird
    nicht explizit angelegt. `cp` kann deshalb auf einer frischen VM fehlschlagen.
@@ -473,24 +464,19 @@ allgemeine Robustheit hinausgehen:
    ldd ... | grep -q "not found" || exit 0
    ```
 
-   beendet das gemeinsame `runcmd`-Shellskript, wenn keine Bibliothek fehlt.
-   Dadurch werden alle danach erzeugten Befehle, einschließlich des
-   Ownership-Fixes, übersprungen.
+   beendete das gemeinsame `runcmd`-Shellskript, wenn keine Bibliothek fehlt.
+   Dadurch wurden nachfolgende Stufen übersprungen.
 
-Zusätzlich fehlen:
+Der aktive Classic-Renderer erzeugt stattdessen ausschließlich einzelne
+`[Skriptpfad, Benutzer]`-Argumentlisten und betreibt kein generisches
+Vendoring im gemeinsamen `runcmd`. Das Dotnet-Skript prüft seine
+`ldd`-Postcondition selbst. Die damalige Provider-/Vendor-Pipeline bleibt
+historische Core-Evidenz.
 
-- eine abschließende `ldd`-Postcondition,
-- eine Prüfung, ob alle erwarteten `.deb`-Dateien und extrahierten Libraries
-  vorhanden sind,
-- fail-fast-Semantik für den kompletten Vendor-Block,
-- eine Erklärung der doppelten Snap-Installation: Ein Custom Image baut
-  konfigurierte Snaps bereits mit `ubuntu-image --snap` ein, während das beim
-  Start automatisch abgeleitete cloud-config dieselben Snaps nochmals installiert.
-
-Snap-Kommandos sollten als YAML-Argumentliste, beispielsweise
-`[install, snap-name, --classic]`, statt als roher Shell-String serialisiert
-werden. Store-Snaps brauchen außerdem eine explizite Channel-/Revision-Policy,
-wenn Builds reproduzierbar sein sollen.
+Snap-Kommandos werden als YAML-Argumentlisten serialisiert, beispielsweise
+`[snap, install, snap-name, --classic]`. Der doppelte Snap-Installationsfall
+betrifft nur den deprecated Custom-Image-Bautpfad. Store-Snaps brauchen für
+reproduzierbare Builds weiterhin eine explizite Channel-/Revision-Policy.
 
 ### 3.10 Netzwerk, Ownership und Secrets
 
@@ -515,11 +501,11 @@ wenn Builds reproduzierbar sein sollen.
 Gast-Skript verwendet deshalb explizit `sudo -u ubuntu -H bash -lc`, damit
 Claude im Benutzer-Home und mit korrekter PATH-Umgebung installiert wird.
 
-`ImageCloudInit` ist an `/home/ubuntu` gekoppelt. Das entspricht dem aktuellen
-Ubuntu-Base, ist aber kein vertraglich erkannter Default User. Ein Custom Model
-mit anderem Default User würde sämtliche Pfade, Profile und Ownership-Annahmen
-brechen. Eine zukünftige Config sollte den Benutzer explizit als Teil des
-Komponentenplans modellieren.
+`ImageCloudInit` rendert den Ausführungsbenutzer jetzt explizit über
+`InstallUser`; die aktiven Classic-Komponenten verwenden `ubuntu`. Benutzer-
+definitionen werden in einem gemeinsamen `users`-Block aggregiert und bei
+Konflikten abgewiesen. Das Base-Image muss den gewählten Benutzer bereits
+bereitstellen oder die Komponente muss ihn über `Users` mitdefinieren.
 
 Das Weglassen eines `users`-Blocks ist momentan richtig, weil der vorhandene
 Default User und seine SSH-Anbindung erhalten bleiben. Falls später ein
@@ -560,7 +546,7 @@ Lokale Quellen:
 | Binary über `write_files` | technisch möglich, ungeeignet für ~238 MB | aufwendig | **Nein** |
 | Core-only Host-Transfer | für Classic unnötig | gut, aber nicht mehr aktiv | **Veraltet** |
 | CoreBridge-eigener Snap | unnötig | möglich | Nur für breitere Paketstrategie neu bewerten |
-| Custom Image | langfristig gut | gut mit exakten Revisionen | Windows-Import blockiert aktuell |
+| Custom Image | nicht aktiv | gut mit exakten Revisionen | deprecated; Windows-Import nicht verifiziert |
 | Gestoppte Template-VM + `clone` | gut | gut bei unveränderlicher, protokollierter Vorlage | **Spätere Optimierung nach T12/T13** |
 
 ### 4.1 Warum kein eigenes `.deb` auf Classic Ubuntu
@@ -768,7 +754,8 @@ können.
 - **Aktiv:** klassisches Ubuntu 26.10 Edge.
 - Modell: `ubuntu-classic-2610-amd64-dangerous.model`.
 - Multipass-Runtime: `daily:26.10`.
-- `26.04` wird ausschließlich als Werkzeug-Image der Build-VM verwendet.
+- `26.04` wird ausschließlich im versteckten, deprecated `image-build`
+  als Werkzeug-Image verwendet.
 - Die alten Core-26-Aussagen bleiben historische Experimente und werden nicht
   auf Classic übertragen.
 
@@ -876,7 +863,8 @@ Experimente:
 3. Classic-Edge-Messungen für Latenz, Cloud-init-Health und Komponenten-
    Postconditions; historische Core-Messungen dürfen nicht als Classic-Werte
    verwendet werden.
-4. Import eines gebauten Classic-`.img` über den Windows-https-Workaround.
+4. Import eines gebauten Classic-`.img` unter Windows; T11 hat keinen
+   erfolgreichen Lauf nachgewiesen, `image-build` bleibt deprecated.
 
 ## 11. Quellen
 

@@ -1,11 +1,19 @@
 #!/bin/bash
 set -Eeuo pipefail
 
-sudo -u ubuntu -H bash -lc \
-  'curl -fsSL https://claude.ai/install.sh | bash -s stable'
+install_user="${1:-ubuntu}"
+user_home="$(getent passwd "$install_user" | cut -d: -f6)"
+if [[ -z "$user_home" ]]; then
+    echo "Claude-Benutzer '$install_user' hat kein Home-Verzeichnis." >&2
+    exit 1
+fi
 
-sudo -u ubuntu -H bash -lc 'claude --version'
-ln -sfn /home/ubuntu/.local/bin/claude /usr/local/bin/claude
+sudo -u "$install_user" -H bash -lc \
+    'curl -fsSL https://claude.ai/install.sh | bash -s stable'
 
-mkdir -p /var/lib/corebridge
+sudo -u "$install_user" -H bash -lc 'claude --version'
+install -d /usr/local/bin
+ln -sfn "$user_home/.local/bin/claude" /usr/local/bin/claude
+
+install -d /var/lib/corebridge
 touch /var/lib/corebridge/claude.ready

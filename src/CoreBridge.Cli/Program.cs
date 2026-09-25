@@ -364,6 +364,10 @@ public static class Program
     {
         var images = new ImageService(config.Images, vms);
         var buildVm = options.BuildVmName ?? config.Images.Build.VmName;
+        Console.Error.WriteLine(
+            "WARNUNG: image-build ist deprecated und wird nicht unterstützt. "
+            + "T11 hat keinen erfolgreichen Windows-Import nachgewiesen; der aktive Workflow ist "
+            + "image-configure + vm-create --image <profil>.");
         Console.WriteLine($"Baue Image '{options.Name}' in Bau-VM '{buildVm}' (ubuntu-image + --snap) ...");
         var result = images.Build(
             options.Name,
@@ -375,7 +379,8 @@ public static class Program
 
         var megaBytes = new FileInfo(result.ImagePath).Length / (1024.0 * 1024.0);
         Console.WriteLine($"OK — {result.ImagePath} ({megaBytes:N0} MB, {result.DurationMs / 1000.0:F1} s)");
-        Console.WriteLine("Hinweis: Import via `multipass launch <url>` — unter Windows NICHT via file:// (multipass 1.16.3 Bug), sondern https:// (siehe EXPERIMENT_LOG T11).");
+        Console.Error.WriteLine(
+            "Der Import dieser .img-Datei unter Windows bleibt ungelöst; T11 enthält keinen erfolgreichen Importlauf.");
         return 0;
     }
 }

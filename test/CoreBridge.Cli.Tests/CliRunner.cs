@@ -9,17 +9,21 @@ namespace CoreBridge.Cli.Tests;
 internal sealed class CliRunner : IDisposable
 {
     private readonly string _storeRoot;
+    private readonly string? _storeRootOverride;
     private readonly string _tempRoot;
     private readonly string _repositoryRoot;
     private readonly string _cliDll;
 
-    public CliRunner() 
+    public CliRunner(string? storeRootOverride = null)
     {
         _repositoryRoot = FindRepositoryRoot();
-        // Bewusst die Development-Konfiguration verwenden: StoreRoot=artifacts
-        // wird relativ zur Repo-Wurzel aufgelöst, nicht in einen isolierten
-        // Test-Root umgebogen.
-        _storeRoot = Path.Combine(_repositoryRoot, "artifacts");
+        // Ohne Override bleibt die Development-Konfiguration maßgeblich. Der
+        // Lifecycle-Test überlädt den StoreRoot dagegen mit einem eindeutigen
+        // temporären Verzeichnis, damit parallele Läufe nichts gemeinsam benutzen.
+        _storeRoot = storeRootOverride is null
+            ? Path.Combine(_repositoryRoot, "artifacts")
+            : Path.GetFullPath(storeRootOverride);
+        _storeRootOverride = storeRootOverride is null ? null : _storeRoot;
         _tempRoot = Path.Combine(Path.GetTempPath(), "corebridge-cli-tests", "temp-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(_storeRoot);
         Directory.CreateDirectory(_tempRoot);
@@ -48,6 +52,11 @@ internal sealed class CliRunner : IDisposable
         }
 
         startInfo.Environment["DOTNET_ENVIRONMENT"] = "Development";
+        if (_storeRootOverride is not null)
+        {
+            startInfo.Environment["Images__StoreRoot"] = _storeRootOverride;
+        }
+
         startInfo.Environment["TEMP"] = _tempRoot;
         startInfo.Environment["TMP"] = _tempRoot;
 
@@ -133,8 +142,8 @@ internal sealed class CliRunner : IDisposable
 
     public void Dispose()
     {
-        // Der Development-StoreRoot ist repositoryweit und wird nicht vom
-        // Testrunner gelöscht; image-delete entfernt nur das Testprofil.
+        // Ein expliziter StoreRoot gehört dem Collection-Fixture und wird dort
+        // vollständig entfernt. Der Default-StoreRoot im Repository bleibt unberührt.
         TryDelete(_tempRoot);
     }
 

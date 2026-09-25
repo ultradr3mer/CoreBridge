@@ -2,102 +2,196 @@ using Xunit.Abstractions;
 
 namespace CoreBridge.Cli.Tests;
 
+[Collection(CliLifecycleCollection.Name)]
+[TestCaseOrderer(
+    "CoreBridge.Cli.Tests.LifecycleTestCaseOrderer",
+    "CoreBridge.Cli.Tests")]
 [Trait("Category", "Integration")]
 public sealed class CliLifecycleTests
 {
+    private readonly CliLifecycleFixture fixture;
     private readonly ITestOutputHelper output;
 
-    public CliLifecycleTests(ITestOutputHelper output)
+    public CliLifecycleTests(CliLifecycleFixture fixture, ITestOutputHelper output)
     {
+        this.fixture = fixture;
         this.output = output;
     }
 
     [Fact]
-    public async Task KonfiguriertesClassicProfilLaeuftVollstaendigUeberCli()
-    {//TODO THIS NEEDS TO SEPERATE LIKE INTEGRATION TEST DID - ONE COMMAND PER TEST!
-        using var cli = new CliRunner();
-        var status = cli.Run(["multipass-status"], TimeSpan.FromMinutes(2));
-        if (status.ExitCode != 0)
+    public void Stage00_MultipassStatus()
+    {
+        var result = fixture.Cli.Run(["multipass-status"], TimeSpan.FromMinutes(2));
+        fixture.RecordStatus(result);
+        if (fixture.ShouldSkip())
         {
-            output.WriteLine("CLI-Integration übersprungen — multipass-status: " + status.StdErr);
+            output.WriteLine(fixture.SkipReason);
             return;
         }
 
-        var suffix = $"{Environment.ProcessId}-{Guid.NewGuid():N}"[..20];
-        var imageName = $"cbx-cli-img-{suffix}";
-        var vmName = $"cbx-cli-vm-{suffix}";
-        var imageConfigured = false;
-
-        try
-        {
-            var configure = cli.Run(
-                [
-                    "image-configure",
-                    "--name", imageName,
-                    "--components", "claude,dotnet"
-                ],
-                TimeSpan.FromMinutes(5));
-            AssertOk(configure, "image-configure");
-            imageConfigured = true;
-            Assert.Contains("ubuntu-classic-2610-amd64-dangerous", File.ReadAllText(
-                Path.Combine(cli.StoreRoot, "models", imageName, imageName + ".model")));
-
-            var create = cli.Run(
-                [
-                    "vm-create",
-                    "--name", vmName,
-                    "--image", imageName
-                ],
-                TimeSpan.FromMinutes(75));
-            AssertOk(create, "vm-create");
-            Assert.Contains("Gast-Provisionierung: cloud-init", create.StdOut);
-
-            var start = cli.Run(["vm-start", "--name", vmName], TimeSpan.FromMinutes(5));
-            AssertOk(start, "vm-start");
-            Assert.Contains("bereits Running", start.StdOut);
-
-            var echo = cli.Run(
-                ["vm-exec", "--name", vmName, "--command", "echo hallo"],
-                TimeSpan.FromMinutes(5));
-            AssertOk(echo, "vm-exec echo");
-            Assert.Contains("hallo", echo.StdOut);
-
-            var release = cli.Run(
-                [
-                    "vm-exec",
-                    "--name", vmName,
-                    "--command",
-                    ". /etc/os-release && printf '%s' \"$VERSION_ID\""
-                ],
-                TimeSpan.FromMinutes(5));
-            AssertOk(release, "vm-exec release");
-            Assert.Contains("26.10", release.StdOut);
-
-            var claude = await WaitForClaudeAsync(cli, vmName);
-            Assert.True(claude, "Claude wurde nach der Cloud-init-Provisionierung nicht verfügbar.");
-        }
-        finally
-        {
-            // ausschließlich der exakt erzeugte Name, niemals --purge/all
-            var delete = cli.Run(["vm-delete", "--name", vmName], TimeSpan.FromMinutes(5));
-            output.WriteLine($"cleanup vm-delete exit={delete.ExitCode}: {delete.StdOut}{delete.StdErr}");
-
-            if (imageConfigured)
-            {
-                var imageDelete = cli.Run(["image-delete", "--name", imageName], TimeSpan.FromMinutes(2));
-                output.WriteLine($"cleanup image-delete exit={imageDelete.ExitCode}: {imageDelete.StdOut}{imageDelete.StdErr}");
-            }
-        }
+        Assert.False(result.TimedOut, "multipass-status timed out.");
+        Assert.Equal(0, result.ExitCode);
+        Assert.Contains("CLI:", result.StdOut);
     }
 
-    private async Task<bool> WaitForClaudeAsync(CliRunner cli, string vmName)
+    [Fact]
+    public void Stage01_ImageConfigure()
+    {
+        if (SkipWhenUnavailable())
+        {
+            return;
+        }
+
+        fixture.ImageCleanupRequired = true;
+        var result = fixture.Cli.Run(
+            [
+                "image-configure",
+                "--name", fixture.ImageName,
+                "--components", "claude,dotnet"
+            ],
+            TimeSpan.FromMinutes(5));
+        AssertOk(result, "image-configure");
+
+        fixture.ImageConfigured = true;
+        Assert.True(File.Exists(fixture.ModelPath), $"Modellprofil fehlt: {fixture.ModelPath}");
+        Assert.Contains(
+            "ubuntu-classic-2610-amd64-dangerous",
+            File.ReadAllText(fixture.ModelPath));
+    }
+
+    [Fact]
+    public void Stage02_VmCreate()
+    {
+        if (SkipWhenUnavailable())
+        {
+            return;
+        }
+
+        if (!fixture.ImageConfigured)
+        {
+            output.WriteLine("Stage02_VmCreate übersprungen — Stage01 hat kein Profil erzeugt.");
+            return;
+        }
+
+        // Vor dem Aufruf markieren: Auch ein Timeout kann eine VM bereits angelegt haben.
+        fixture.VmCleanupRequired = true;
+        var result = fixture.Cli.Run(
+            [
+                "vm-create",
+                "--name", fixture.VmName,
+                "--image", fixture.ImageName
+            ],
+            TimeSpan.FromMinutes(75));
+        AssertOk(result, "vm-create");
+        Assert.Contains("Gast-Provisionierung: cloud-init", result.StdOut);
+        fixture.VmCreated = true;
+    }
+
+    [Fact]
+    public void Stage03_VmStartIdempotent()
+    {
+        if (SkipWhenPrerequisite())
+        {
+            return;
+        }
+
+        var result = fixture.Cli.Run(
+            ["vm-start", "--name", fixture.VmName],
+            TimeSpan.FromMinutes(5));
+        AssertOk(result, "vm-start");
+        Assert.Contains("bereits Running", result.StdOut);
+    }
+
+    [Fact]
+    public void Stage04_VmExecSmoke()
+    {
+        if (SkipWhenPrerequisite())
+        {
+            return;
+        }
+
+        var result = fixture.Cli.Run(
+            ["vm-exec", "--name", fixture.VmName, "--command", "echo hallo"],
+            TimeSpan.FromMinutes(5));
+        AssertOk(result, "vm-exec smoke");
+        Assert.Contains("hallo", result.StdOut);
+    }
+
+    [Fact]
+    public void Stage05_VmExecClassicRelease()
+    {
+        if (SkipWhenPrerequisite())
+        {
+            return;
+        }
+
+        var result = fixture.Cli.Run(
+            [
+                "vm-exec",
+                "--name", fixture.VmName,
+                "--command",
+                ". /etc/os-release && printf '%s' \"$VERSION_ID\""
+            ],
+            TimeSpan.FromMinutes(5));
+        AssertOk(result, "vm-exec release");
+        Assert.Contains("26.10", result.StdOut);
+    }
+
+    [Fact]
+    public async Task Stage06_ClaudePostcondition()
+    {
+        if (SkipWhenPrerequisite())
+        {
+            return;
+        }
+
+        var available = await WaitForClaudeAsync();
+        Assert.True(available, "Claude wurde nach der Cloud-init-Provisionierung nicht verfügbar.");
+    }
+
+    [Fact]
+    public void Stage99_Cleanup()
+    {
+        var report = fixture.Cleanup();
+        output.WriteLine(report.Diagnostics);
+        Assert.True(report.Success, report.Diagnostics);
+    }
+
+    private bool SkipWhenUnavailable()
+    {
+        if (!fixture.ShouldSkip())
+        {
+            return false;
+        }
+
+        output.WriteLine(fixture.SkipReason);
+        return true;
+    }
+
+    private bool SkipWhenPrerequisite()
+    {
+        if (SkipWhenUnavailable())
+        {
+            return true;
+        }
+
+        if (fixture.VmCreated)
+        {
+            return false;
+        }
+
+        output.WriteLine("Lifecycle-Stufe übersprungen — Stage02_VmCreate war nicht erfolgreich.");
+        return true;
+    }
+
+    private async Task<bool> WaitForClaudeAsync()
     {
         for (var attempt = 1; attempt <= 6; attempt++)
         {
-            var result = cli.Run(
+            var result = fixture.Cli.Run(
                 [
                     "vm-exec",
-                    "--name", vmName,
+                    "--name", fixture.VmName,
                     "--command", "command -v claude && claude --version"
                 ],
                 TimeSpan.FromMinutes(5));
@@ -113,7 +207,7 @@ public sealed class CliLifecycleTests
         return false;
     }
 
-    private void AssertOk(CliProcessResult result, string operation)
+    private static void AssertOk(CliProcessResult result, string operation)
     {
         Assert.False(result.TimedOut, $"{operation} timed out: {result.CommandLine}");
         Assert.True(

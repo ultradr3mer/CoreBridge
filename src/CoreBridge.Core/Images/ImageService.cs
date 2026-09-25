@@ -14,6 +14,7 @@ public sealed record ImageConfigureResult(
     string[] Snaps,
     string RuntimeImage);
 
+/// <summary>Ergebnis des deprecated Custom-Image-Kompatibilitätspfads.</summary>
 public sealed record ImageBuildResult(string Name, string ImagePath, long DurationMs, string BuildVmName);
 
 public sealed record ImageListEntry(
@@ -26,11 +27,11 @@ public sealed record ImageListEntry(
 public sealed record ImageDeleteResult(string Name, string? ModelDir, string? ImageFile);
 
 /// <summary>
-/// Custom-Image-Pipeline: `Configure` lädt/validiert das Classic-Modell,
-/// schreibt Build-Config + generierte cloud-init unterhalb des konfigurierten
-/// Image-Stores; `Build` backt in einer klassischen Ubuntu-Bau-VM mit
-/// `ubuntu-image --snap` die Store-Snaps ein. Alle Komponenten-Definitionen
-/// und Bau-Defaults kommen aus der AppConfig.
+/// Profil-Pipeline: `Configure` lädt/validiert das Classic-Modell und schreibt
+/// Build-Config + generierte cloud-init. `Build` ist nur ein deprecated
+/// Kompatibilitätspfad für historische T11-Experimente; der aktive Classic-
+/// Workflow startet die Runtime und provisioniert den Gast über cloud-init.
+/// Alle Komponenten-Definitionen und Defaults kommen aus der AppConfig.
 /// </summary>
 public sealed class ImageService
 {
@@ -110,7 +111,6 @@ public sealed class ImageService
 
         var modelSha256 = Convert.ToHexString(
             SHA256.HashData(Encoding.UTF8.GetBytes(model))).ToLowerInvariant();
-        File.WriteAllText(ImageStore.ModelFile(name), model);
 
         string? cloudInitPath = null;
         var generatedCloudInitPath = ImageStore.CloudInitFile(name);
@@ -125,6 +125,11 @@ public sealed class ImageService
             // an einem neuen Profil hängen bleiben.
             File.Delete(generatedCloudInitPath);
         }
+
+        // Erst nach erfolgreicher Validierung der Cloud-init-Ausgabe schreiben:
+        // ein fehlerhaftes Profil darf keine halbfertigen Modell-/YAML-Dateien
+        // hinterlassen.
+        File.WriteAllText(ImageStore.ModelFile(name), model);
 
         var cloudInitFile = cloudInitPath is null ? null : Path.GetFileName(cloudInitPath);
         var buildConfig = new ImageBuildConfig(
@@ -148,82 +153,88 @@ public sealed class ImageService
             resolvedRuntimeImage);
     }
 
-    //public ImageBuildResult Build(
-    //    string name,
-    //    string? buildVmName = null,
-    //    string? buildImage = null,
-    //    string? disk = null,
-    //    int? timeoutSeconds = null,
-    //    string? destination = null)
-    //{
-    //    var vmName = buildVmName ?? _config.Build.VmName;
-    //    var image = buildImage ?? _config.Build.Image;
-    //    var diskSize = disk ?? _config.Build.Disk;
-    //    var timeout = (timeoutSeconds ?? _config.Build.TimeoutSeconds) * 1000;
+    /// <summary>
+    /// Deprecated und nicht unterstützt: Baut weiterhin ein Ubuntu-Core-Image für
+    /// historische T11-Experimente. Der Windows-Import ist nicht verifiziert; der
+    /// aktive Classic-Workflow verwendet Runtime-Profil plus Cloud-init.
+    /// </summary>
+    public ImageBuildResult Build(
+        string name,
+        string? buildVmName = null,
+        string? buildImage = null,
+        string? disk = null,
+        int? timeoutSeconds = null,
+        string? destination = null)
+    {
+        var vmName = buildVmName ?? _config.Build.VmName;
+        var image = buildImage ?? _config.Build.Image;
+        var diskSize = disk ?? _config.Build.Disk;
+        var timeout = (timeoutSeconds ?? _config.Build.TimeoutSeconds) * 1000;
 
-    //    var configPath = ImageStore.ConfigFile(name);
-    //    if (!File.Exists(configPath))
-    //    {
-    //        throw new MultipassException(
-    //            $"Keine Build-Konfiguration für '{name}': {configPath} — zuerst `image-configure --name {name}` ausführen.");
-    //    }
+        var configPath = ImageStore.ConfigFile(name);
+        if (!File.Exists(configPath))
+        {
+            throw new MultipassException(
+                $"Keine Build-Konfiguration für '{name}': {configPath} — zuerst `image-configure --name {name}` ausführen.");
+        }
 
-    //    var buildConfig = ImageBuildConfig.FromJson(File.ReadAllText(configPath));
-    //    var modelPath = ImageStore.ModelFile(name);
-    //    if (!File.Exists(modelPath))
-    //    {
-    //        throw new MultipassException($"Modell-Datei fehlt: {modelPath} — `image-configure --name {name}` erneut ausführen.");
-    //    }
+        var buildConfig = ImageBuildConfig.FromJson(File.ReadAllText(configPath));
+        var modelPath = ImageStore.ModelFile(name);
+        if (!File.Exists(modelPath))
+        {
+            throw new MultipassException($"Modell-Datei fehlt: {modelPath} — `image-configure --name {name}` erneut ausführen.");
+        }
 
-    //    var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
 
-    //    var existing = _vms.List().FirstOrDefault(v => v.Name == vmName);
-    //    if (existing is { State: "Deleted" })
-    //    {
-    //        throw new MultipassException(
-    //            $"Bau-VM '{vmName}' liegt gelöscht im Multipass-Papierkorb — Namen nicht wiederverwendbar. Anderen --build-vm wählen oder manuell purgen.");
-    //    }
+        var existing = _vms.List().FirstOrDefault(v => v.Name == vmName);
+        if (existing is { State: "Deleted" })
+        {
+            throw new MultipassException(
+                $"Bau-VM '{vmName}' liegt gelöscht im Multipass-Papierkorb — Namen nicht wiederverwendbar. Einen anderen --build-vm-Namen wählen; kein blindes Purge.");
+        }
 
-    //    if (existing is null)
-    //    {
-    //        var created = _vms.Create(vmName, image, diskSize);
-    //        EnsureSuccess(created, $"vm-create {vmName}");
-    //    }
+        if (existing is null)
+        {
+            var created = _vms.Create(vmName, image, diskSize);
+            EnsureSuccess(created, $"vm-create {vmName}");
+        }
 
-    //    var install = _vms.Exec(
-    //        vmName,
-    //        "snap list ubuntu-image >/dev/null 2>&1 || sudo snap install ubuntu-image --classic 2>&1 | tail -1");
-    //    EnsureSuccess(install, "snap install ubuntu-image");
+        var install = _vms.Exec(
+            vmName,
+            "snap list ubuntu-image >/dev/null 2>&1 || sudo snap install ubuntu-image --classic 2>&1 | tail -1");
+        EnsureSuccess(install, "snap install ubuntu-image");
 
-    //    var put = _vms.Put(modelPath, vmName, "model.model");
-    //    EnsureSuccess(put, "transfer Modell -> Bau-VM");
+        var put = _vms.Put(modelPath, vmName, "model.model");
+        EnsureSuccess(put, "transfer Modell -> Bau-VM");
 
-    //    var snapArgs = string.Join(" ", buildConfig.Snaps.Select(s => $"--snap {s}"));
-    //    var buildCommand =
-    //        "sudo rm -rf ~/imgout && mkdir ~/imgout && "
-    //        + $"sudo ubuntu-image snap ~/model.model {snapArgs} -O ~/imgout 2>&1 | tail -2 && ls -lh ~/imgout/ | head -3";
-    //    var build = _vms.Exec(vmName, buildCommand, timeout);
-    //    if (build.ExitCode != 0)
-    //    {
-    //        throw new MultipassException(
-    //            $"ubuntu-image fehlgeschlagen (exit {build.ExitCode}): {Tail(build.StdOut, 10)} / {Tail(build.StdErr, 10)}");
-    //    }
+        var snapArgs = string.Join(" ", buildConfig.Snaps.Select(s => $"--snap {s}"));
+        var buildCommand =
+            "sudo rm -rf ~/imgout && mkdir ~/imgout && "
+            + $"sudo ubuntu-image snap ~/model.model {snapArgs} -O ~/imgout 2>&1 | tail -2 && ls -lh ~/imgout/ | head -3";
+        var build = _vms.Exec(vmName, buildCommand, timeout);
+        if (build.ExitCode != 0)
+        {
+            throw new MultipassException(
+                $"ubuntu-image fehlgeschlagen (exit {build.ExitCode}): {Tail(build.StdOut, 10)} / {Tail(build.StdErr, 10)}");
+        }
 
-    //    var imagePath = destination ?? buildConfig.BuildTo ?? ImageStore.ImageFile(name);
-    //    var imageDir = Path.GetDirectoryName(Path.GetFullPath(imagePath));
-    //    if (!string.IsNullOrEmpty(imageDir))
-    //    {
-    //        Directory.CreateDirectory(imageDir);
-    //    }
-    //    var get = _vms.Get(vmName, "/home/ubuntu/imgout/pc.img", imagePath);
-    //    if (!File.Exists(imagePath))
-    //    {
-    //        throw new MultipassException(
-    //            $"Image-Transfer fehlgeschlagen (exit {get.ExitCode}): {Tail(get.StdErr, 10)}");
-    //    }
+        var imagePath = destination ?? buildConfig.BuildTo ?? ImageStore.ImageFile(name);
+        var imageDir = Path.GetDirectoryName(Path.GetFullPath(imagePath));
+        if (!string.IsNullOrEmpty(imageDir))
+        {
+            Directory.CreateDirectory(imageDir);
+        }
 
-    //    return new ImageBuildResult(name, imagePath, stopwatch.ElapsedMilliseconds, vmName);
-    //} # TODO REMOVE DEPRECRATED
+        var get = _vms.Get(vmName, "/home/ubuntu/imgout/pc.img", imagePath);
+        if (!File.Exists(imagePath))
+        {
+            throw new MultipassException(
+                $"Image-Transfer fehlgeschlagen (exit {get.ExitCode}): {Tail(get.StdErr, 10)}");
+        }
+
+        return new ImageBuildResult(name, imagePath, stopwatch.ElapsedMilliseconds, vmName);
+    }
 
     public IReadOnlyList<ImageListEntry> List()
     {

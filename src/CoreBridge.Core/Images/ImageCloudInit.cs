@@ -1,18 +1,18 @@
 using System.Text;
+using System.Text.RegularExpressions;
 using CoreBridge.Core.Config;
 using CoreBridge.Core.Vm;
 
 namespace CoreBridge.Core.Images;
 
 /// <summary>
-/// Erzeugt die cloud-init-YAML für die Provisionierung im Gast.
-/// Komponenten-Skripte werden als Dateien mit <c>write_files</c> eingebettet
-/// und anschließend über <c>runcmd</c> ausgeführt. Der Host führt sie nicht
-/// separat aus.
+/// Erzeugt ausschließlich die cloud-init-YAML für die Gast-Provisionierung.
+/// Das Rendern lädt keine Images, installiert keine Pakete und führt keine
+/// Komponenten auf dem Host aus.
 /// </summary>
 public static class ImageCloudInit
 {
-    private const string Home = "/home/ubuntu";
+    private static readonly Regex SafeUserName = new("^[a-z_][a-z0-9_-]*$", RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
     public static bool NeedsCloudInit(ImagesConfig config, IEnumerable<string> components)
     {
@@ -22,162 +22,296 @@ public static class ImageCloudInit
     public static string Generate(string name, ImagesConfig config, IEnumerable<string> components)
     {
         var selected = ImageComponents.Resolve(config, components);
-        var yaml = new StringBuilder();
-        yaml.AppendLine("#cloud-config");
-        yaml.AppendLine($"# Generiert von `cb image-configure --name {name}`.");
-        yaml.AppendLine("# Gast-Provisionierung; Komponenten-Skripte werden als Dateien eingebettet.");
-
         var packages = selected
-            .SelectMany(component => component.CloudInitPackages)
+            .SelectMany(component => component.Packages)
             .Where(package => !string.IsNullOrWhiteSpace(package))
+            .Select(package => package.Trim())
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToArray();
+
+        ValidateScalarValues(packages, "package");
+        var users = MergeUsers(selected.SelectMany(component => component.Users));
+        var packageUpdate = selected.Any(component => component.PackageUpdate) || packages.Length > 0;
+        var packageUpgrade = selected.Any(component => component.PackageUpgrade);
+        var scripts = selected
+            .Where(component => !string.IsNullOrWhiteSpace(component.Script))
+            .ToArray();
+
+        var yaml = new StringBuilder();
+        yaml.AppendLine("#cloud-config");
+        yaml.AppendLine($"# Generiert von `cb image-configure --name {SafeComment(name)}`.");
+        yaml.AppendLine("# Gast-Provisionierung; Komponenten-Skripte werden als Dateien eingebettet.");
+
+        yaml.AppendLine($"package_update: {packageUpdate.ToString().ToLowerInvariant()}");
+        yaml.AppendLine($"package_upgrade: {packageUpgrade.ToString().ToLowerInvariant()}");
+
         if (packages.Length > 0)
         {
-            yaml.AppendLine("package_update: true");
             yaml.AppendLine("packages:");
             foreach (var package in packages)
             {
-                yaml.AppendLine($"  - {package}");
+                yaml.AppendLine($"  - {YamlQuote(package)}");
             }
         }
 
-        var snaps = selected
-            .Where(component => !string.IsNullOrWhiteSpace(component.Snap))
-            .Select(component => (Snap: component.Snap!, Classic: component.Classic))
-            .DistinctBy(snap => snap.Snap, StringComparer.OrdinalIgnoreCase)
-            .ToArray();
-        if (snaps.Length > 0)
-        {
-            yaml.AppendLine();
-            yaml.AppendLine("snap:");
-            yaml.AppendLine("  commands:");
-            foreach (var (snap, classic) in snaps)
-            {
-                yaml.AppendLine($"    - snap install {snap}{(classic ? " --classic" : string.Empty)}");
-            }
-        }
+        AppendUsers(yaml, users);
+        AppendSnaps(yaml, selected);
+        AppendScripts(yaml, scripts);
+        AppendRunCommands(yaml, scripts);
 
-        var exports = selected.SelectMany(component => component.ProfileExports)
-            .Where(export => !string.IsNullOrWhiteSpace(export))
-            .Distinct(StringComparer.Ordinal)
-            .ToArray();
-        var scripts = selected
-            .Where(component => !string.IsNullOrWhiteSpace(component.CloudInitScript))
-            .ToArray();
-        if (exports.Length > 0 || scripts.Length > 0)
-        {
-            yaml.AppendLine();
-            yaml.AppendLine("write_files:");
-            if (exports.Length > 0)
-            {
-                yaml.AppendLine($"  - path: {Home}/.profile");
-                yaml.AppendLine("    append: true");
-                yaml.AppendLine("    owner: ubuntu:ubuntu");
-                yaml.AppendLine("    content: |");
-                foreach (var export in exports)
-                {
-                    yaml.AppendLine($"      export {export}");
-                }
-            }
-
-            foreach (var component in scripts)
-            {
-                var scriptPath = component.CloudInitScript!;
-                var installPath = component.CloudInitInstallPath;
-                if (string.IsNullOrWhiteSpace(installPath) || !installPath.StartsWith('/'))
-                {
-                    throw new MultipassException(
-                        $"CloudInitInstallPath für '{scriptPath}' muss ein absoluter Unix-Pfad sein.");
-                }
-
-                var sourcePath = ImageStore.ResolvePath(scriptPath);
-                if (!File.Exists(sourcePath))
-                {
-                    throw new MultipassException($"Cloud-init-Skript fehlt: {sourcePath}");
-                }
-
-                yaml.AppendLine($"  - path: {installPath}");
-                yaml.AppendLine("    permissions: \"0755\"");
-                yaml.AppendLine("    owner: root:root");
-                yaml.AppendLine("    content: |");
-                foreach (var line in File.ReadAllText(sourcePath).Replace("\r\n", "\n").Split('\n'))
-                {
-                    yaml.AppendLine($"      {line}");
-                }
-            }
-        }
-
-        var runCmd = new List<string>();
-        foreach (var symlink in selected.SelectMany(component => component.Symlinks).Distinct(StringComparer.Ordinal))
-        {
-            var parts = symlink.Split('|', 2);
-            if (parts.Length != 2)
-            {
-                throw new MultipassException(
-                    $"Ungültiger Symlink in der Config (Format 'quelle|ziel'): {symlink}");
-            }
-
-            var (source, target) = (parts[0], parts[1]);
-            var targetDir = Path.GetDirectoryName(target)?.Replace('\\', '/');
-            if (!string.IsNullOrEmpty(targetDir))
-            {
-                runCmd.Add($"install -d -o ubuntu -g ubuntu {targetDir}");
-            }
-
-            runCmd.Add($"ln -sf {source} {target}");
-            runCmd.Add($"chown -h ubuntu:ubuntu {target}");
-        }
-
-        //foreach (var vendored in selected.Select(component => component.VendoredLibs).Where(value => value is not null))
-        //{
-        //    var packagesText = string.Join(" ", vendored!.Packages.Select(package => $"\"{package}\""));
-        //    runCmd.Add($"install -d -o ubuntu -g ubuntu {vendored.Destination}");
-        //    runCmd.Add(string.Join('\n',
-        //        "set -e",
-        //        $"if ! ldd {vendored.LddTarget} 2>/dev/null | grep -q \"not found\"; then exit 0; fi",
-        //        $"cd {Home} && rm -rf vm-libs && mkdir vm-libs && cd vm-libs",
-        //        $"for p in {packagesText}; do apt-get download \"$p\"; done",
-        //        "for d in *.deb; do dpkg -x \"$d\" \"ex-$d\"; done",
-        //        $"cp ex-*.deb/{vendored.ExtractGlob} {vendored.Destination}/",
-        //        $"chown -R ubuntu:ubuntu {vendored.Destination}",
-        //        $"cd {Home} && rm -rf vm-libs"));
-        //}
-        // TODO CHECK IF CAN BE REMOVED SHOUDL BE DEPRECATED
-        var scriptCommands = scripts
-            .Select(component => component.CloudInitInstallPath!)
-            .ToArray();
-        if (runCmd.Count > 0 || scriptCommands.Length > 0)
-        {
-            yaml.AppendLine();
-            yaml.AppendLine("runcmd:");
-            foreach (var command in runCmd)
-            {
-                AppendRunCommand(yaml, command);
-            }
-
-            foreach (var command in scriptCommands)
-            {
-                yaml.AppendLine($"  - [{command}]");
-            }
-        }
-
-        return yaml.ToString();
+        var rendered = yaml.ToString();
+        CloudInitYamlValidator.Validate(rendered);
+        return rendered;
     }
 
-    private static void AppendRunCommand(StringBuilder yaml, string command)
+    private static void AppendUsers(StringBuilder yaml, IReadOnlyCollection<CloudInitUserConfig> users)
     {
-        if (command.Contains('\n'))
+        if (users.Count == 0)
         {
-            yaml.AppendLine("  - |");
-            foreach (var line in command.Split('\n'))
+            return;
+        }
+
+        yaml.AppendLine();
+        yaml.AppendLine("users:");
+        foreach (var user in users)
+        {
+            yaml.AppendLine($"  - name: {YamlQuote(user.Name)}");
+            if (!string.IsNullOrWhiteSpace(user.Sudo))
             {
-                yaml.AppendLine($"    {line}");
+                yaml.AppendLine($"    sudo: {YamlQuote(user.Sudo.Trim())}");
+            }
+
+            yaml.AppendLine($"    shell: {YamlQuote(user.Shell)}");
+            if (user.Groups.Length > 0)
+            {
+                yaml.Append("    groups: [");
+                yaml.Append(string.Join(", ", user.Groups.Select(YamlQuote)));
+                yaml.AppendLine("]");
+            }
+
+            yaml.AppendLine($"    lock_passwd: {user.LockPassword.ToString().ToLowerInvariant()}");
+        }
+    }
+
+    private static void AppendSnaps(StringBuilder yaml, IReadOnlyCollection<ComponentConfig> components)
+    {
+        var snaps = components
+            .Where(component => !string.IsNullOrWhiteSpace(component.Snap))
+            .Select(component => (Name: component.Snap!.Trim(), Classic: component.Classic))
+            .DistinctBy(snap => snap.Name, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        if (snaps.Length == 0)
+        {
+            return;
+        }
+
+        ValidateScalarValues(snaps.Select(snap => snap.Name), "snap");
+        yaml.AppendLine();
+        yaml.AppendLine("snap:");
+        yaml.AppendLine("  commands:");
+        foreach (var snap in snaps)
+        {
+            yaml.Append("    - [snap, install, ");
+            yaml.Append(YamlQuote(snap.Name));
+            if (snap.Classic)
+            {
+                yaml.Append(", --classic");
+            }
+
+            yaml.AppendLine("]");
+        }
+    }
+
+    private static void AppendScripts(StringBuilder yaml, IReadOnlyCollection<ComponentConfig> scripts)
+    {
+        if (scripts.Count == 0)
+        {
+            return;
+        }
+
+        yaml.AppendLine();
+        yaml.AppendLine("write_files:");
+        foreach (var component in scripts)
+        {
+            var scriptPath = component.Script!;
+            var installPath = component.InstallPath;
+            ValidateInstallPath(installPath, scriptPath);
+            ValidateScriptPath(scriptPath);
+
+            var sourcePath = ImageStore.ResolvePath(scriptPath);
+            if (!File.Exists(sourcePath))
+            {
+                throw new MultipassException($"Cloud-init-Skript fehlt: {sourcePath}");
+            }
+
+            var content = File.ReadAllText(sourcePath).Replace("\r\n", "\n");
+            if (!content.EndsWith('\n'))
+            {
+                content += '\n';
+            }
+
+            yaml.AppendLine($"  - path: {YamlQuote(installPath!)}");
+            yaml.AppendLine("    permissions: '0755'");
+            yaml.AppendLine("    owner: 'root:root'");
+            yaml.AppendLine("    content: |");
+            foreach (var line in content.Split('\n'))
+            {
+                yaml.AppendLine($"      {line}");
             }
         }
-        else
+    }
+
+    private static void AppendRunCommands(StringBuilder yaml, IReadOnlyCollection<ComponentConfig> scripts)
+    {
+        if (scripts.Count == 0)
         {
-            yaml.AppendLine($"  - {command}");
+            return;
         }
+
+        yaml.AppendLine();
+        yaml.AppendLine("runcmd:");
+        foreach (var component in scripts)
+        {
+            var installUser = component.InstallUser;
+            if (string.IsNullOrWhiteSpace(installUser) || !SafeUserName.IsMatch(installUser))
+            {
+                throw new MultipassException(
+                    $"InstallUser für '{component.Script}' ist kein sicherer Unix-Benutzername: '{installUser}'.");
+            }
+
+            yaml.AppendLine($"  - [{YamlQuote(component.InstallPath!)}, {YamlQuote(installUser)}]");
+        }
+    }
+
+    private static CloudInitUserConfig[] MergeUsers(IEnumerable<CloudInitUserConfig> users)
+    {
+        var result = new List<CloudInitUserConfig>();
+        foreach (var group in users.GroupBy(user => user.Name ?? string.Empty, StringComparer.OrdinalIgnoreCase))
+        {
+            if (string.IsNullOrWhiteSpace(group.Key))
+            {
+                throw new MultipassException("Cloud-init-Benutzer benötigt einen Namen.");
+            }
+
+            var first = NormalizeUser(group.First());
+            foreach (var candidate in group.Skip(1))
+            {
+                if (!UsersEqual(first, candidate))
+                {
+                    throw new MultipassException(
+                        $"Benutzer '{group.Key}' wird durch ausgewählte Komponenten unterschiedlich konfiguriert.");
+                }
+            }
+
+            result.Add(first);
+        }
+
+        return result.ToArray();
+    }
+
+    private static CloudInitUserConfig NormalizeUser(CloudInitUserConfig user)
+    {
+        if (!SafeUserName.IsMatch(user.Name))
+        {
+            throw new MultipassException($"Cloud-init-Benutzername ist ungültig: '{user.Name}'.");
+        }
+
+        if (string.IsNullOrWhiteSpace(user.Shell)
+            || !user.Shell.StartsWith('/')
+            || user.Shell.Contains('\r')
+            || user.Shell.Contains('\n'))
+        {
+            throw new MultipassException($"Shell für Benutzer '{user.Name}' muss ein absoluter Unix-Pfad sein.");
+        }
+
+        var groups = user.Groups
+            .Where(group => !string.IsNullOrWhiteSpace(group))
+            .Select(group => group.Trim())
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(group => group, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        foreach (var group in groups)
+        {
+            ValidateScalar(group, "group");
+        }
+
+        return user with
+        {
+            Name = user.Name.Trim(),
+            Sudo = string.IsNullOrWhiteSpace(user.Sudo) ? null : user.Sudo.Trim(),
+            Shell = user.Shell.Trim(),
+            Groups = groups
+        };
+    }
+
+    private static bool UsersEqual(CloudInitUserConfig left, CloudInitUserConfig right)
+    {
+        return string.Equals(left.Name, right.Name, StringComparison.OrdinalIgnoreCase)
+            && string.Equals(left.Sudo, right.Sudo, StringComparison.Ordinal)
+            && string.Equals(left.Shell, right.Shell, StringComparison.Ordinal)
+            && left.LockPassword == right.LockPassword
+            && left.Groups.SequenceEqual(right.Groups, StringComparer.OrdinalIgnoreCase);
+    }
+
+    private static void ValidateInstallPath(string? installPath, string scriptPath)
+    {
+        var segments = installPath?.Split('/').Skip(1).ToArray() ?? [];
+        if (string.IsNullOrWhiteSpace(installPath)
+            || !installPath.StartsWith('/')
+            || installPath.Contains('\\')
+            || installPath.Contains('\r')
+            || installPath.Contains('\n')
+            || segments.Length == 0
+            || segments.Any(segment => string.IsNullOrWhiteSpace(segment) || segment is "." or ".."))
+        {
+            throw new MultipassException(
+                $"InstallPath für '{scriptPath}' muss ein normalisierter absoluter Unix-Pfad sein.");
+        }
+    }
+
+    private static void ValidateScriptPath(string scriptPath)
+    {
+        var expanded = Environment.ExpandEnvironmentVariables(scriptPath);
+        var rooted = Path.IsPathRooted(expanded);
+        var segments = expanded.Replace('\\', '/').Split('/');
+        var pathSegments = (rooted && segments.Length > 0 && segments[0].Length == 0
+            ? segments.Skip(1)
+            : segments).ToArray();
+        if (string.IsNullOrWhiteSpace(scriptPath)
+            || expanded.Contains('\r')
+            || expanded.Contains('\n')
+            || (!rooted && expanded.Contains(':'))
+            || pathSegments.Length == 0
+            || pathSegments.Any(segment => string.IsNullOrWhiteSpace(segment) || segment is "." or ".."))
+        {
+            throw new MultipassException(
+                $"Script für '{scriptPath}' muss ein normalisierter relativer oder absoluter Pfad sein.");
+        }
+    }
+
+    private static void ValidateScalarValues(IEnumerable<string> values, string label)
+    {
+        foreach (var value in values)
+        {
+            ValidateScalar(value, label);
+        }
+    }
+
+    private static void ValidateScalar(string value, string label)
+    {
+        if (string.IsNullOrWhiteSpace(value) || value.Contains('\r') || value.Contains('\n'))
+        {
+            throw new MultipassException($"Ungültiger {label}-Wert: '{value}'.");
+        }
+    }
+
+    private static string SafeComment(string value)
+    {
+        return value.Replace('\r', ' ').Replace('\n', ' ').Trim();
+    }
+
+    private static string YamlQuote(string value)
+    {
+        return $"'{value.Replace("'", "''")}'";
     }
 }

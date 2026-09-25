@@ -74,7 +74,7 @@ public class ImageProfileResolverTests
         File.WriteAllText(ImageStore.ConfigFile("agent"), config.ToJson());
 
         var profile = ImageProfileResolver.Resolve(
-            TestConfigs.Images with { DefaultRuntimeImage = "daily:26.10" },
+            new ImagesConfig { DefaultRuntimeImage = "daily:26.10" },
             "agent");
 
         Assert.NotNull(profile);
@@ -104,7 +104,7 @@ public class ImageProfileResolverTests
 
         var explicitPath = Path.Combine(store.Path, "explicit.yaml");
         var profile = ImageProfileResolver.Resolve(
-            TestConfigs.Images,
+            new ImagesConfig(),
             "agent",
             explicitPath);
 

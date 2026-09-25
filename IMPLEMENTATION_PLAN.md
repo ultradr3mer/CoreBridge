@@ -23,7 +23,8 @@ Die aktive Zielbasis ist klassisches Ubuntu 26.10 Edge:
 
 - Modell: `ubuntu-classic-2610-amd64-dangerous.model`
 - Multipass-Runtime: `daily:26.10`
-- `Images:Build:Image=26.04` ist nur das Werkzeug-Image der Bau-VM.
+- `Images:Build:Image=26.04` gehört nur zum versteckten, deprecated
+  Kompatibilitätspfad `image-build`; es ist weder Ziel-Runtime noch Fallback.
 - `core26` und die T01–T11-Messungen bleiben historische Core-Evidenz;
   neue Defaults, Profile und Tests verwenden Classic Ubuntu.
 
@@ -195,8 +196,9 @@ pro Konfiguration änderbar:
 
 - Zielentscheidung ist Classic Ubuntu 26.10 Edge; die frühere Core-Frage
   bleibt nur als historische T02-Evidenz erhalten.
-- `image-build`/Custom-Image-Import unter Windows (https/file://-Workaround)
-  bleibt offen.
+- Custom-Image-Import unter Windows bleibt ungelöst; `image-build` ist bis zu
+  einer ausdrücklichen neuen Entscheidung deprecated und nicht unterstützt.
+  T11 enthält keinen erfolgreichen Importlauf.
 - Autobridge-Details, TUI, Installationsweg für `core-bridge` (PATH/Installation)
 - Git-Modell-Feinheiten (Sync-/Merge-Mechanik) — nach Phase-C-Ergebnissen
 
@@ -256,6 +258,8 @@ pro Konfiguration änderbar:
             eingebettetes Gast-Skript `scripts/components/install-claude.sh`.
             Der erste CLI-Lifecycle-Lauf ist wegen eines separaten
             Multipass-Daemon-Timeouts noch nicht als erfolgreich verifiziert.
-      - [ ] T11 Custom-Image: Import nach Multipass unter Windows bleibt wegen
-            `file://`-Client-Mangling/erzwungenem HTTPS offen.
+      - [ ] T11 Custom-Image: `image-build` bleibt als versteckter,
+            deprecated Kompatibilitätspfad erhalten. T11 belegt keinen
+            erfolgreichen Import unter Windows; `file://`-Client-Mangling und
+            erzwungenes HTTPS bleiben der dokumentierte Blocker.
       - [ ] Git-/Sync-Topologie, Autobridge, Secret-Scanning, TUI

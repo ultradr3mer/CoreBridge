@@ -3,10 +3,12 @@ using System.Text.Json;
 namespace CoreBridge.Core.Images;
 
 /// <summary>
-/// Persistierte Build- und Launch-Konfiguration eines Custom-Image-Profils.
+/// Persistierte Profil- und Launch-Konfiguration eines Classic-Profils.
 /// Das Profil wird durch <c>image-configure</c> erzeugt und von <c>vm-create</c>
-/// gelesen. Die zusätzlichen Felder sind optional, damit bereits erzeugte
-/// Konfigurationen aus der Core-Phase weiterlesbar bleiben.
+/// gelesen. <c>BuildTo</c> und die Snaps werden für den deprecated T11-
+/// Kompatibilitätspfad bzw. für die Profilauflistung weiterhin persistiert.
+/// Die zusätzlichen Felder sind optional, damit bereits erzeugte Konfigurationen
+/// aus der Core-Phase weiterlesbar bleiben.
 /// </summary>
 public sealed record ImageBuildConfig(
     string Name,
