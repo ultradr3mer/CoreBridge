@@ -1,6 +1,7 @@
 using System.Text;
 using System.Text.RegularExpressions;
 using CoreBridge.Core.Config;
+using CoreBridge.Core.Multipass;
 using CoreBridge.Core.Vm;
 
 namespace CoreBridge.Core.Images;

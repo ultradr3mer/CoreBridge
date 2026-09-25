@@ -2,8 +2,10 @@ using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Security.Principal;
 using System.Text.RegularExpressions;
+using CoreBridge.Core.Common;
+using CoreBridge.Core.Vm;
 
-namespace CoreBridge.Core.Vm;
+namespace CoreBridge.Core.Multipass;
 
 /// <summary>Zustand eines Windows-Dienstes laut <c>sc.exe queryex</c>.</summary>
 public enum MultipassServiceState
@@ -31,18 +33,21 @@ public class MultipassService
 
     private readonly TimeSpan _pollInterval;
     private readonly TimeSpan _killTimeout;
+    private readonly TimeSpan _commandTimeout;
 
     /// <param name="pollInterval">Abstand der Zustandsabfragen (Standard 500 ms).</param>
     /// <param name="killTimeout">Wartezeit auf <c>Stopped</c> nach dem harten Beenden (Standard 15 s).</param>
-    public MultipassService(TimeSpan? pollInterval = null, TimeSpan? killTimeout = null)
+    /// <param name="commandTimeout">Wartezeit auf einen einzelnen <c>sc.exe</c>-Aufruf (Standard 30 s; CLI: <c>DefaultTimeout</c>).</param>
+    public MultipassService(TimeSpan? pollInterval = null, TimeSpan? killTimeout = null, TimeSpan? commandTimeout = null)
     {
         _pollInterval = pollInterval ?? TimeSpan.FromMilliseconds(500);
         _killTimeout = killTimeout ?? TimeSpan.FromSeconds(15);
+        _commandTimeout = commandTimeout ?? TimeSpan.FromSeconds(30);
     }
 
     /// <summary>
     /// Startet den Dienst neu wie <c>Restart-Service Multipass -Force</c>: Stop
-    /// anfordern und bis <paramref name="stopTimeout"/> warten. Reagiert der
+    /// anfordern und bis <paramref name="timeout"/> warten. Reagiert der
     /// Dienst nicht, wird über <paramref name="confirm"/> gefragt, ob der
     /// Daemon-Prozess (PID laut Dienst, wie <c>Win32_Service.ProcessId</c>) hart
     /// beendet werden soll (<c>Stop-Process -Id &lt;PID&gt; -Force</c>). Danach
@@ -53,8 +58,7 @@ public class MultipassService
     /// </summary>
     /// <param name="confirm">Ja/Nein-Rückfrage an den Benutzer; <c>true</c> = Ja.</param>
     public async IAsyncEnumerable<string> Restart(
-        TimeSpan stopTimeout,
-        TimeSpan startTimeout,
+        TimeSpan timeout,
         Func<string, bool> confirm,
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
@@ -75,7 +79,35 @@ public class MultipassService
                 RequestStop();
             }
 
-            if (!await WaitForStateAsync(MultipassServiceState.Stopped, stopTimeout, cancellationToken))
+            // Ein hängender Stop ist hier kein Fehler, sondern führt zur Kill-Rückfrage.
+            // yield darf nicht im try mit catch stehen, daher nur MoveNextAsync überwachen.
+            var stopped = true;
+            await using (var wait = WaitForStateAsync(
+                MultipassServiceState.Stopped,
+                timeout,
+                () => string.Empty,
+                cancellationToken).GetAsyncEnumerator(cancellationToken))
+            {
+                while (true)
+                {
+                    try
+                    {
+                        if (!await wait.MoveNextAsync())
+                        {
+                            break;
+                        }
+                    }
+                    catch (MultipassServiceTimeoutException)
+                    {
+                        stopped = false;
+                        break;
+                    }
+
+                    yield return wait.Current;
+                }
+            }
+
+            if (!stopped)
             {
                 var processId = QueryProcessId();
                 if (processId == 0)
@@ -84,7 +116,7 @@ public class MultipassService
                         $"Service {ServiceName} reagiert nicht ({QueryState()}), meldet aber keinen Prozess — Rechner neu starten.");
                 }
 
-                yield return $"Service reagiert nach {stopTimeout.TotalSeconds:F0} s nicht ({QueryState()}).";
+                yield return $"Service reagiert nach {timeout.TotalSeconds:F0} s nicht ({QueryState()}).";
                 if (!confirm($"Daemon-Prozess {DaemonProcessName} (PID {processId}) hart beenden?"))
                 {
                     throw new MultipassException(
@@ -94,11 +126,14 @@ public class MultipassService
                 KillProcess(processId);
                 yield return $"Beendet: PID {processId}";
 
-                if (!await WaitForStateAsync(MultipassServiceState.Stopped, _killTimeout, cancellationToken))
+                await foreach (var line in WaitForStateAsync(
+                    MultipassServiceState.Stopped,
+                    _killTimeout,
+                    () => $"Service {ServiceName} bleibt in {QueryState()}, auch nach dem Beenden von {DaemonProcessName}. "
+                        + "Hängende Hyper-V-VMs mit `Stop-VM -TurnOff` ausschalten oder den Rechner neu starten.",
+                    cancellationToken))
                 {
-                    throw new MultipassException(
-                        $"Service {ServiceName} bleibt in {QueryState()}, auch nach dem Beenden von {DaemonProcessName}. "
-                        + "Hängende Hyper-V-VMs mit `Stop-VM -TurnOff` ausschalten oder den Rechner neu starten.");
+                    yield return line;
                 }
             }
 
@@ -107,17 +142,23 @@ public class MultipassService
 
         yield return "Starte Service ...";
         RequestStart();
-        if (!await WaitForStateAsync(MultipassServiceState.Running, startTimeout, cancellationToken))
+        await foreach (var line in WaitForStateAsync(
+            MultipassServiceState.Running,
+            timeout,
+            () => $"Service {ServiceName} ist nach {timeout.TotalSeconds:F0} s nicht Running ({QueryState()}).",
+            cancellationToken))
         {
-            throw new MultipassException(
-                $"Service {ServiceName} ist nach {startTimeout.TotalSeconds:F0} s nicht Running ({QueryState()}).");
+            yield return line;
         }
 
         yield return "Warte auf Daemon ...";
-        if (!await WaitUntilAsync(IsDaemonResponding, startTimeout, cancellationToken))
+        await foreach (var line in WaitUntilAsync(
+            IsDaemonResponding,
+            timeout,
+            () => $"Service {ServiceName} läuft, aber der Daemon antwortet nach {timeout.TotalSeconds:F0} s nicht auf `multipass version`.",
+            cancellationToken))
         {
-            throw new MultipassException(
-                $"Service {ServiceName} läuft, aber der Daemon antwortet nach {startTimeout.TotalSeconds:F0} s nicht auf `multipass version`.");
+            yield return line;
         }
     }
 
@@ -228,31 +269,51 @@ public class MultipassService
             : MultipassServiceState.Unknown;
     }
 
-    private Task<bool> WaitForStateAsync(MultipassServiceState expected, TimeSpan timeout, CancellationToken cancellationToken)
+    /// <summary>Wartet wie <see cref="WaitUntilAsync"/>, bis der Dienst <paramref name="expected"/> meldet.</summary>
+    /// <exception cref="MultipassServiceTimeoutException">Wenn <paramref name="expected"/> nicht innerhalb von <paramref name="timeout"/> erreicht wird.</exception>
+    private IAsyncEnumerable<string> WaitForStateAsync(
+        MultipassServiceState expected,
+        TimeSpan timeout,
+        Func<string> timeoutMessage,
+        CancellationToken cancellationToken)
     {
-        return WaitUntilAsync(() => QueryState() == expected, timeout, cancellationToken);
+        return WaitUntilAsync(() => QueryState() == expected, timeout, timeoutMessage, cancellationToken);
     }
 
-    private async Task<bool> WaitUntilAsync(Func<bool> condition, TimeSpan timeout, CancellationToken cancellationToken)
+    /// <summary>
+    /// Fragt <paramref name="condition"/> alle <c>pollInterval</c> ab. Liefert je
+    /// vergeblicher Abfrage <see cref="Progress.ProgressTick"/> und zum Schluss <c>OK</c>.
+    /// </summary>
+    /// <exception cref="MultipassServiceTimeoutException">
+    /// Mit <paramref name="timeoutMessage"/>, wenn <paramref name="condition"/> nicht innerhalb von <paramref name="timeout"/> erfüllt ist.
+    /// </exception>
+    private async IAsyncEnumerable<string> WaitUntilAsync(
+        Func<bool> condition,
+        TimeSpan timeout,
+        Func<string> timeoutMessage,
+        [EnumeratorCancellation] CancellationToken cancellationToken)
     {
         var stopwatch = Stopwatch.StartNew();
         while (true)
         {
             if (await Task.Run(condition, cancellationToken))
             {
-                return true;
+                yield return "OK";
+                yield break;
             }
 
             if (stopwatch.Elapsed >= timeout)
             {
-                return false;
+                throw new MultipassServiceTimeoutException(timeoutMessage());
             }
+
+            yield return Progress.ProgressTick;
 
             await Task.Delay(_pollInterval, cancellationToken);
         }
     }
 
-    private static (int ExitCode, string Output) RunSc(params string[] args)
+    private (int ExitCode, string Output) RunSc(params string[] args)
     {
         var startInfo = new ProcessStartInfo
         {
@@ -271,10 +332,12 @@ public class MultipassService
             ?? throw new MultipassException("sc.exe konnte nicht gestartet werden.");
         var stdErrTask = process.StandardError.ReadToEndAsync();
         var stdOut = process.StandardOutput.ReadToEnd();
-        if (!process.WaitForExit(30_000))
+        if (!process.WaitForExit(_commandTimeout))
         {
             process.Kill();
-            throw new MultipassException($"sc {string.Join(' ', args)} hat nicht innerhalb von 30 s geantwortet.");
+
+            throw new MultipassException(
+                $"sc {string.Join(' ', args)} hat nicht innerhalb von {_commandTimeout.TotalSeconds:F0} s geantwortet.");
         }
 
         return (process.ExitCode, stdOut + stdErrTask.GetAwaiter().GetResult());

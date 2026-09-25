@@ -1,5 +1,6 @@
 using System.Text;
 using System.Text.Json;
+using CoreBridge.Core.Multipass;
 using CoreBridge.Core.Vm;
 
 namespace Multipass.Experiments;

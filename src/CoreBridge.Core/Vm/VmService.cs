@@ -1,3 +1,5 @@
+using CoreBridge.Core.Multipass;
+
 namespace CoreBridge.Core.Vm;
 
 public sealed class VmService
@@ -23,11 +25,30 @@ public sealed class VmService
         return MultipassVmList.Parse(result.StdOut);
     }
 
-    public MultipassRunResult Create(string name, string image, string? disk = null, int timeoutMs = 2_400_000, string? cloudInitPath = null)
+    /// <summary>
+    /// Obergrenze, die multipass selbst per <c>launch --timeout</c> bekommt (inkl. cloud-init).
+    /// </summary>
+    public const int LaunchTimeoutSeconds = 2_400;
+
+    /// <summary>
+    /// Legt die VM per <c>multipass launch</c> an. Gewartet wird in Abschnitten von
+    /// <paramref name="waitSlice"/> (Standard: <see cref="LaunchTimeoutSeconds"/>);
+    /// nach jedem Abschnitt entscheidet <paramref name="keepWaiting"/> (Standard: nein),
+    /// ob weiter gewartet wird. Sonst wirft der Aufruf <see cref="MultipassTimeoutException"/>;
+    /// der Multipass-Daemon legt die VM dann im Hintergrund weiter an.
+    /// </summary>
+    public MultipassRunResult Create(
+        string name,
+        string image,
+        string? disk = null,
+        string? cloudInitPath = null,
+        TimeSpan? waitSlice = null,
+        Func<bool>? keepWaiting = null)
     {
         // multipass hat ein eigenes Launch-Timeout (Default 300 s, inkl. cloud-init) —
-        // ohne --timeout bricht es lange vor unserem Prozess-Timeout ab.
-        var args = new List<string> { "launch", image, "--name", name, "--timeout", (timeoutMs / 1000).ToString() };
+        // ohne --timeout bricht es lange vor unserem Prozess-Timeout ab. Die feste
+        // Obergrenze sorgt dafür, dass der Daemon nicht vor dem Benutzer aufgibt.
+        var args = new List<string> { "launch", image, "--name", name, "--timeout", LaunchTimeoutSeconds.ToString() };
         if (disk is not null)
         {
             args.Add("--disk");
@@ -40,7 +61,10 @@ public sealed class VmService
             args.Add(cloudInitPath);
         }
 
-        return _cli.Run(args, timeoutMs);
+        return _cli.RunWithExtensions(
+            args,
+            waitSlice ?? TimeSpan.FromSeconds(LaunchTimeoutSeconds),
+            keepWaiting ?? (() => false));
     }
 
     public MultipassRunResult Start(string name)

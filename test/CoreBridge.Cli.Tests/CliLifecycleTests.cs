@@ -1,3 +1,4 @@
+using CoreBridge.Core.Multipass;
 using CoreBridge.Core.Vm;
 using Xunit.Abstractions;
 

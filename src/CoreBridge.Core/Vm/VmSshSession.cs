@@ -1,5 +1,6 @@
 using Renci.SshNet;
 using Renci.SshNet.Common;
+using CoreBridge.Core.Multipass;
 
 namespace CoreBridge.Core.Vm;
 

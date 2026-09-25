@@ -1,4 +1,5 @@
 using System.Text;
+using CoreBridge.Core.Multipass;
 using CoreBridge.Core.Vm;
 
 namespace CoreBridge.Core.Tests;
@@ -135,6 +136,15 @@ public class VmServiceTests
             var call = args.ToArray();
             Calls.Add(call);
             return _respond(call);
+        }
+
+        public override MultipassRunResult RunWithExtensions(
+            IReadOnlyList<string> args,
+            TimeSpan slice,
+            Func<bool> keepWaiting,
+            string? exePath = null)
+        {
+            return Run(args, (int)slice.TotalMilliseconds, exePath);
         }
 
         public override int Attach(IReadOnlyList<string> args, string? exePath = null)

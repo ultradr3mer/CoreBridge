@@ -29,6 +29,9 @@ public sealed class CliLifecycleFixture : IDisposable
         store = new TempDirectory();
         config = new AppConfig
         {
+            // Ohne interaktive Rückfrage (Antwort Nein) darf ein langer cloud-init-Launch
+            // nicht nach dem ersten Abschnitt abgebrochen werden.
+            DefaultTimeoutVmCreation = "2400s",
             Images = new ImagesConfig
             {
                 StoreRoot = store.Path,

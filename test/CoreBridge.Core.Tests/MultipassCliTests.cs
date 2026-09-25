@@ -1,3 +1,4 @@
+using CoreBridge.Core.Multipass;
 using CoreBridge.Core.Vm;
 
 namespace CoreBridge.Core.Tests;
@@ -43,6 +44,44 @@ public class MultipassCliTests
 
         Assert.Equal(1_000, exception.TimeoutMs);
         Assert.Contains("ping -n 30 127.0.0.1", exception.Command);
+    }
+
+    [Fact]
+    public void RunWithExtensionsOhneWeiterWartenKilltUndWirft()
+    {
+        var cli = new MultipassCli(() => CmdPath);
+        var asked = 0;
+        var exception = Assert.Throws<MultipassTimeoutException>(() => cli.RunWithExtensions(
+            new[] { "/c", "ping", "-n", "30", "127.0.0.1" },
+            TimeSpan.FromMilliseconds(500),
+            () =>
+            {
+                asked++;
+                return false;
+            },
+            CmdPath));
+
+        Assert.Equal(1, asked);
+        Assert.Equal(500, exception.TimeoutMs);
+    }
+
+    [Fact]
+    public void RunWithExtensionsWartetWeiterBisProzessFertig()
+    {
+        var cli = new MultipassCli(() => CmdPath);
+        var asked = 0;
+        var result = cli.RunWithExtensions(
+            new[] { "/c", "ping", "-n", "3", "127.0.0.1" },
+            TimeSpan.FromMilliseconds(500),
+            () =>
+            {
+                asked++;
+                return true;
+            },
+            CmdPath);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.True(asked >= 1);
     }
 
     [Fact]

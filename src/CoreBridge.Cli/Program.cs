@@ -1,8 +1,10 @@
 using System.Runtime.CompilerServices;
 using System.Text;
 using CommandLine;
+using CoreBridge.Core.Common;
 using CoreBridge.Core.Config;
 using CoreBridge.Core.Images;
+using CoreBridge.Core.Multipass;
 using CoreBridge.Core.Vm;
 using Microsoft.Extensions.Configuration;
 
@@ -64,17 +66,11 @@ public static class Program
     public static async Task<int> Main(string[] args)
     {
         var config = LoadConfig();
-        var parsed = Parser.Default.ParseArguments(args, RegisteredOptionTypes.ToArray());
-        if (parsed is NotParsed<object> notParsed)
+        if (!TryParseOptions(args, out var options, out var helpRequested))
         {
-            return notParsed.Errors.Any(error => error.Tag is ErrorType.HelpRequestedError
-                or ErrorType.VersionRequestedError
-                or ErrorType.HelpVerbRequestedError)
-                ? 0
-                : 1;
+            return helpRequested ? 0 : 1;
         }
 
-        var options = (IOptions)((Parsed<object>)parsed).Value;
         using var cancellation = new CancellationTokenSource();
         Console.CancelKeyPress += (_, eventArgs) =>
         {
@@ -84,15 +80,17 @@ public static class Program
 
         try
         {
-            await foreach (var line in Run(config, options, cancellation.Token, ConfirmOnConsole))
+            await foreach (var line in Run(config, options, cancellation.Token, ConfirmOnConsole, PromptOnConsole))
             {
-                Console.WriteLine(line);
+                WriteOutput(line);
             }
 
+            EndProgressLine();
             return 0;
         }
         catch (ProgramExecutionException exception)
         {
+            EndProgressLine();
             Console.Error.WriteLine(exception.Message);
             return exception.ExitCode;
         }
@@ -106,9 +104,68 @@ public static class Program
         }
     }
 
+    /// <summary>
+    /// Parst die Argumente gegen <see cref="RegisteredOptionTypes"/>; Hilfe- und
+    /// Fehlermeldungen schreibt der Parser selbst.
+    /// </summary>
+    /// <param name="helpRequested"><c>true</c>, wenn nur Hilfe/Version angefragt wurde (kein Fehler).</param>
+    private static bool TryParseOptions(string[] args, out IOptions options, out bool helpRequested)
+    {
+        var parsed = Parser.Default.ParseArguments(args, RegisteredOptionTypes.ToArray());
+        if (parsed is NotParsed<object> notParsed)
+        {
+            options = null!;
+            helpRequested = notParsed.Errors.Any(error => error.Tag is ErrorType.HelpRequestedError
+                or ErrorType.VersionRequestedError
+                or ErrorType.HelpVerbRequestedError);
+            return false;
+        }
+
+        options = (IOptions)((Parsed<object>)parsed).Value;
+        helpRequested = false;
+        return true;
+    }
+
+    private static bool _midProgressLine;
+
+    /// <summary>
+    /// Schreibt eine Meldung; <see cref="Progress.ProgressTick"/>-Zeilen werden
+    /// hintereinander in dieselbe Zeile geschrieben.
+    /// </summary>
+    private static void WriteOutput(string line)
+    {
+        if (line == Progress.ProgressTick)
+        {
+            Console.Write(line);
+            _midProgressLine = true;
+            return;
+        }
+
+        if (_midProgressLine && line == "OK")
+        {
+            Console.WriteLine(line);
+            _midProgressLine = false;
+            return;
+        }
+
+        EndProgressLine();
+        Console.WriteLine(line);
+    }
+
+    /// <summary>Schließt eine offene Punktezeile ab, bevor anderer Text folgt.</summary>
+    private static void EndProgressLine()
+    {
+        if (_midProgressLine)
+        {
+            Console.WriteLine();
+            _midProgressLine = false;
+        }
+    }
+
     /// <summary>Ja/Nein-Rückfrage auf der Konsole; ohne interaktive Eingabe immer Nein.</summary>
     private static bool ConfirmOnConsole(string question)
     {
+        EndProgressLine();
         if (Console.IsInputRedirected)
         {
             Console.WriteLine($"{question} [y/n] n (keine interaktive Eingabe)");
@@ -117,6 +174,20 @@ public static class Program
 
         Console.Write($"{question} [y/n] ");
         return Console.ReadLine()?.Trim().ToLowerInvariant() is "y" or "yes" or "j" or "ja";
+    }
+
+    /// <summary>Freitext-Eingabe auf der Konsole; ohne interaktive Eingabe <c>null</c>.</summary>
+    private static string? PromptOnConsole(string question)
+    {
+        EndProgressLine();
+        if (Console.IsInputRedirected)
+        {
+            Console.WriteLine($"{question}(no interactive input)");
+            return null;
+        }
+
+        Console.Write(question);
+        return Console.ReadLine();
     }
 
     /// <summary>
@@ -130,18 +201,23 @@ public static class Program
     /// </summary>
     /// <param name="confirm">
     /// Ja/Nein-Rückfrage für Kommandos, die vor riskanten Schritten fragen
-    /// (multipass-restart). Ohne Angabe wird jede Rückfrage mit Nein beantwortet.
+    /// (multipass-restart, vm-create). Ohne Angabe wird jede Rückfrage mit Nein beantwortet.
+    /// </param>
+    /// <param name="prompt">
+    /// Freitext-Eingabe, z. B. das Folgekommando nach abgebrochenem Warten in
+    /// vm-create. Ohne Angabe gibt es keine Eingabe (<c>null</c>).
     /// </param>
     public static IAsyncEnumerable<string> Run(
         AppConfig config,
         IOptions options,
         CancellationToken cancellationToken = default,
-        Func<string, bool>? confirm = null)
+        Func<string, bool>? confirm = null,
+        Func<string, string?>? prompt = null)
     {
         ArgumentNullException.ThrowIfNull(config);
         ArgumentNullException.ThrowIfNull(options);
 
-        return RunCore(config, options, confirm ?? (_ => false), cancellationToken);
+        return RunCore(config, options, confirm ?? (_ => false), prompt ?? (_ => null), cancellationToken);
     }
 
     /// <summary>
@@ -153,9 +229,10 @@ public static class Program
         AppConfig config,
         IOptions options,
         Func<string, bool> confirm,
+        Func<string, string?> prompt,
         [EnumeratorCancellation] CancellationToken cancellationToken)
     {
-        await using var lines = Execute(config, options, confirm, cancellationToken).GetAsyncEnumerator(cancellationToken);
+        await using var lines = Execute(config, options, confirm, prompt, cancellationToken).GetAsyncEnumerator(cancellationToken);
         while (true)
         {
             try
@@ -177,7 +254,7 @@ public static class Program
     /// <summary>
     /// Einzige Stelle, an der erwartete Fehler zu Meldung und Exit-Code werden:
     /// Multipass-Timeout (1, mit Hinweis auf multipass-restart), Multipass (1),
-    /// unlesbare Multipass-Antwort (1), Datei-/Rechtefehler (1),
+    /// unlesbare Multipass-Antwort (1), ungültige Zeitangabe in der Config (1), Datei-/Rechtefehler (1),
     /// Abbruch per Strg+C (130). <c>null</c> heißt: kein erwarteter Fehler.
     /// </summary>
     private static ProgramExecutionException? ToExecutionException(Exception exception)
@@ -192,6 +269,7 @@ public static class Program
                 exception),
             MultipassException => new(1, exception.Message, exception),
             System.Text.Json.JsonException => new(1, $"Unerwartete Multipass-Antwort (kein JSON): {exception.Message}", exception),
+            FormatException => new(1, $"Configuration error: {exception.Message}", exception),
             IOException or UnauthorizedAccessException => new(1, $"CLI-I/O-Fehler: {exception.Message}", exception),
             OperationCanceledException => new(130, "Abgebrochen.", exception),
             _ => null
@@ -202,29 +280,26 @@ public static class Program
         AppConfig config,
         IOptions options,
         Func<string, bool> confirm,
+        Func<string, string?> prompt,
         [EnumeratorCancellation] CancellationToken cancellationToken)
     {
         ImageStore.Initialize(config.Images.StoreRoot);
-        var vms = new VmService();
-        await foreach (var line in Dispatch(config, vms, options, confirm, cancellationToken))
+        var context = new CommandContext(config, new VmService(), confirm, prompt, cancellationToken);
+        await foreach (var line in Dispatch(context, options))
         {
             yield return line;
         }
     }
 
-    private static IAsyncEnumerable<string> Dispatch(
-        AppConfig config,
-        VmService vms,
-        IOptions options,
-        Func<string, bool> confirm,
-        CancellationToken cancellationToken)
+    private static IAsyncEnumerable<string> Dispatch(CommandContext context, IOptions options)
     {
+        var (config, vms, cancellationToken) = (context.Config, context.Vms, context.CancellationToken);
         return options switch
         {
             MultipassStatusOptions => RunMultipassStatus(cancellationToken),
-            MultipassRestartOptions o => RunMultipassRestart(o, confirm, cancellationToken),
+            MultipassRestartOptions => RunMultipassRestart(context),
             VmListOptions => RunVmList(vms, cancellationToken),
-            VmCreateOptions o => RunVmCreate(config, vms, o, cancellationToken),
+            VmCreateOptions o => RunVmCreate(context, o),
             VmStartOptions o => RunVmStart(vms, o, cancellationToken),
             VmStopOptions o => RunVmStateCommand(vms, o.Name, $"stop {o.Name}", () => vms.Stop(o.Name), cancellationToken),
             VmDeleteOptions o => RunVmStateCommand(
@@ -242,6 +317,47 @@ public static class Program
             ImageDeleteOptions o => RunImageDelete(config, o, cancellationToken),
             _ => throw new MultipassException($"Unbekannter CLI-Options-Typ: {options.GetType().Name}")
         };
+    }
+
+    /// <summary>
+    /// Zerlegt eine eingegebene Kommandozeile an Leerzeichen; Abschnitte in
+    /// doppelten Anführungszeichen bleiben zusammen (ohne die Anführungszeichen).
+    /// </summary>
+    private static string[] SplitCommandLine(string commandLine)
+    {
+        var args = new List<string>();
+        var current = new StringBuilder();
+        var inQuotes = false;
+        var hasToken = false;
+        foreach (var character in commandLine)
+        {
+            if (character == '"')
+            {
+                inQuotes = !inQuotes;
+                hasToken = true;
+            }
+            else if (char.IsWhiteSpace(character) && !inQuotes)
+            {
+                if (hasToken)
+                {
+                    args.Add(current.ToString());
+                    current.Clear();
+                    hasToken = false;
+                }
+            }
+            else
+            {
+                current.Append(character);
+                hasToken = true;
+            }
+        }
+
+        if (hasToken)
+        {
+            args.Add(current.ToString());
+        }
+
+        return args.ToArray();
     }
 
     private static IEnumerable<string> Lines(string text)
@@ -311,23 +427,22 @@ public static class Program
         }
     }
 
-    private static async IAsyncEnumerable<string> RunMultipassRestart(
-        MultipassRestartOptions options,
-        Func<string, bool> confirm,
-        [EnumeratorCancellation] CancellationToken cancellationToken)
+    private static async IAsyncEnumerable<string> RunMultipassRestart(CommandContext context)
     {
+        var cancellationToken = context.CancellationToken;
+        var timeout = context.Config.DefaultTimeout.ReadTime();
         var stopwatch = System.Diagnostics.Stopwatch.StartNew();
-        var service = new MultipassService();
+        var service = new MultipassService(commandTimeout: timeout);
         if (!service.IsElevated())
         {
             yield return $"Warnung: Der Neustart des Dienstes {MultipassService.ServiceName} benötigt Administratorrechte.";
-            if (!confirm("Mit Administratorrechten in einem neuen Fenster fortfahren?"))
+            if (!context.Confirm("Mit Administratorrechten in einem neuen Fenster fortfahren?"))
             {
                 throw new ProgramExecutionException(1, "Abgebrochen — ohne Administratorrechte kein Neustart.");
             }
 
             yield return "Starte erhöht (UAC-Abfrage) — Ausgabe und Rückfragen folgen im Administratorfenster ...";
-            var exitCode = await RunElevatedAsync(options, cancellationToken);
+            var exitCode = await RunElevatedAsync(cancellationToken);
             if (exitCode != 0)
             {
                 throw new ProgramExecutionException(exitCode, $"multipass-restart im Administratorfenster fehlgeschlagen (Exit {exitCode}).");
@@ -337,11 +452,7 @@ public static class Program
             yield break;
         }
 
-        await foreach (var line in service.Restart(
-            TimeSpan.FromSeconds(options.StopTimeoutSeconds),
-            TimeSpan.FromSeconds(options.StartTimeoutSeconds),
-            confirm,
-            cancellationToken))
+        await foreach (var line in service.Restart(timeout, context.Confirm, cancellationToken))
         {
             yield return line;
         }
@@ -350,11 +461,12 @@ public static class Program
     }
 
     /// <summary>
-    /// Startet dieselbe CLI per UAC (<c>runas</c>) mit denselben Optionen und
-    /// <c>--pause-on-exit</c> und wartet auf ihr Ende. Läuft die CLI als DLL
-    /// unter <c>dotnet</c>, wird die DLL als erstes Argument mitgegeben.
+    /// Startet dieselbe CLI per UAC (<c>runas</c>) mit <c>multipass-restart
+    /// --pause-on-exit</c> und wartet auf ihr Ende; Timeouts liest der erhöhte
+    /// Prozess aus derselben Config. Läuft die CLI als DLL unter <c>dotnet</c>,
+    /// wird die DLL als erstes Argument mitgegeben.
     /// </summary>
-    private static async Task<int> RunElevatedAsync(MultipassRestartOptions options, CancellationToken cancellationToken)
+    private static async Task<int> RunElevatedAsync(CancellationToken cancellationToken)
     {
         var processPath = Environment.ProcessPath
             ?? throw new ProgramExecutionException(1, "Pfad der laufenden CLI unbekannt — erhöhter Neustart nicht möglich.");
@@ -370,13 +482,7 @@ public static class Program
             startInfo.ArgumentList.Add(typeof(Program).Assembly.Location);
         }
 
-        foreach (var argument in new[]
-        {
-            "multipass-restart",
-            "--stop-timeout", options.StopTimeoutSeconds.ToString(),
-            "--start-timeout", options.StartTimeoutSeconds.ToString(),
-            "--pause-on-exit"
-        })
+        foreach (var argument in new[] { "multipass-restart", "--pause-on-exit" })
         {
             startInfo.ArgumentList.Add(argument);
         }
@@ -409,12 +515,16 @@ public static class Program
         }
     }
 
-    private static async IAsyncEnumerable<string> RunVmCreate(
-        AppConfig config,
-        VmService vms,
-        VmCreateOptions options,
-        [EnumeratorCancellation] CancellationToken cancellationToken)
+    /// <summary>
+    /// Legt die VM an und wartet in Abschnitten von <c>DefaultTimeoutVmCreation</c>;
+    /// nach jedem Abschnitt wird gefragt, ob weiter gewartet werden soll. Bei Nein
+    /// läuft der Launch im Multipass-Daemon weiter, und der Benutzer kann ein
+    /// Folgekommando eingeben, das wie ein normaler CLI-Aufruf ausgeführt wird.
+    /// </summary>
+    private static async IAsyncEnumerable<string> RunVmCreate(CommandContext context, VmCreateOptions options)
     {
+        var (config, vms, cancellationToken) = (context.Config, context.Vms, context.CancellationToken);
+        var waitSlice = config.DefaultTimeoutVmCreation.ReadTime();
         var requestedImage = string.IsNullOrWhiteSpace(options.Image)
             ? config.Images.DefaultRuntimeImage
             : options.Image.Trim();
@@ -427,9 +537,48 @@ public static class Program
             + $"{(options.Disk is null ? string.Empty : $", Disk: {options.Disk}")}"
             + $"{(cloudInit is null ? string.Empty : ", cloud-init")}) ...";
 
-        var result = await Task.Run(
-            () => vms.Create(options.Name, launchImage, options.Disk, cloudInitPath: cloudInit),
-            cancellationToken);
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+        MultipassRunResult? result;
+        try
+        {
+            result = await Task.Run(
+                () => vms.Create(
+                    options.Name,
+                    launchImage,
+                    options.Disk,
+                    cloudInit,
+                    waitSlice,
+                    () => context.Confirm(
+                        $"VM `{options.Name}` is not ready after {stopwatch.Elapsed.TotalSeconds:F0} s — keep waiting?")),
+                cancellationToken);
+        }
+        catch (MultipassTimeoutException)
+        {
+            result = null;
+        }
+
+        if (result is null)
+        {
+            yield return "Stopped waiting — Multipass keeps creating the VM in the background (check with `cb vm-list`).";
+            var followUp = context.Prompt("Follow-up command (empty = quit): ");
+            if (string.IsNullOrWhiteSpace(followUp))
+            {
+                yield break;
+            }
+
+            if (!TryParseOptions(SplitCommandLine(followUp), out var followUpOptions, out _))
+            {
+                throw new ProgramExecutionException(1, $"Invalid follow-up command: {followUp}");
+            }
+
+            await foreach (var line in Dispatch(context, followUpOptions))
+            {
+                yield return line;
+            }
+
+            yield break;
+        }
+
         if (result.ExitCode != 0)
         {
             foreach (var line in Lines(result.StdOut))

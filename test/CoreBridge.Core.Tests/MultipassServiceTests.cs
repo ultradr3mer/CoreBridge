@@ -1,4 +1,5 @@
-using CoreBridge.Core.Vm;
+using CoreBridge.Core.Common;
+using CoreBridge.Core.Multipass;
 
 namespace CoreBridge.Core.Tests;
 
@@ -56,6 +57,7 @@ public class MultipassServiceTests
         // StopPending: kein zweiter Stop-Request, sondern direkt warten → fragen → kill.
         Assert.Equal(["confirm", "kill 4711", "start"], service.Calls);
         Assert.Contains(lines, line => line.StartsWith("Beendet: PID 4711"));
+        Assert.Contains(Progress.ProgressTick, lines);
         Assert.Equal(MultipassServiceState.Running, service.State);
     }
 
@@ -85,7 +87,7 @@ public class MultipassServiceTests
             KillHelps = false
         };
 
-        var exception = await Assert.ThrowsAsync<MultipassException>(() => Drain(service));
+        var exception = await Assert.ThrowsAsync<MultipassServiceTimeoutException>(() => Drain(service));
 
         Assert.Contains("Stop-VM -TurnOff", exception.Message);
         Assert.DoesNotContain("start", service.Calls);
@@ -104,7 +106,7 @@ public class MultipassServiceTests
     private static async Task<List<string>> Drain(FakeService service)
     {
         var lines = new List<string>();
-        await foreach (var line in service.Restart(Short, Short, service.Confirm))
+        await foreach (var line in service.Restart(Short, service.Confirm))
         {
             lines.Add(line);
         }

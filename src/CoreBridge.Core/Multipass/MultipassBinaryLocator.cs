@@ -1,4 +1,4 @@
-namespace CoreBridge.Core.Vm;
+namespace CoreBridge.Core.Multipass;
 
 public static class MultipassBinaryLocator
 {
