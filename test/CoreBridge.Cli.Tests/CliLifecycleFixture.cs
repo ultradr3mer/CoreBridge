@@ -1,3 +1,5 @@
+using System.Security.Cryptography;
+using System.Text;
 using CoreBridge.Cli;
 using CoreBridge.Core.Config;
 using CoreBridge.Core.Images;
@@ -9,10 +11,14 @@ internal sealed record CliLifecycleCleanupReport(bool Success, string Diagnostic
     public static CliLifecycleCleanupReport Ok() => new(true, "Keine Lifecycle-Ressourcen offen.");
 }
 
+internal sealed record CliRunResult(int ExitCode, IReadOnlyList<string> Lines);
+
 /// <summary>
 /// Gemeinsamer, serialisierter Zustand für die nummerierten Integrationstufen.
-/// Der Fixture ruft ausschließlich den öffentlichen <see cref="Program.Run"/>-
-/// Dispatcher auf; es startet keinen CLI-Kindprozess und capturt keinen Output.
+/// CLI-Kommandos laufen ausschließlich über den öffentlichen
+/// <see cref="Program.Run"/>-Dispatcher (kein CLI-Kindprozess). Nur die
+/// interaktiven Verbindungen (vm-connect, SSH) gehen direkt über die
+/// Session-Typen aus CoreBridge.Core, weil `multipass shell` ein TTY braucht.
 /// </summary>
 public sealed class CliLifecycleFixture : IDisposable
 {
@@ -75,24 +81,71 @@ public sealed class CliLifecycleFixture : IDisposable
 
     internal bool VmCleanupRequired { get; set; }
 
+    internal string SshPrivateKeyPath => Path.Combine(store.Path, "ssh", "id_rsa");
+
     /// <summary>
-    /// Konsumiert den Ausgabestrom vollständig und bildet
-    /// <see cref="ProgramExecutionException"/> auf ihren Exit-Code ab (0 bei
-    /// Erfolg). Andere Exceptions werden nicht abgefangen.
+    /// Erzeugt einmalig ein RSA-Schlüsselpaar im Temp-Store (ohne ssh-keygen):
+    /// Private Key als PKCS#1-PEM für SSH.NET, Public Key im OpenSSH-Format für
+    /// ~/.ssh/authorized_keys der VM.
     /// </summary>
-    internal async Task<int> RunAsync(IOptions options)
+    internal string EnsureSshKey()
     {
+        var publicKeyPath = SshPrivateKeyPath + ".pub";
+        if (File.Exists(publicKeyPath))
+        {
+            return File.ReadAllText(publicKeyPath);
+        }
+
+        Directory.CreateDirectory(Path.GetDirectoryName(SshPrivateKeyPath)!);
+        using var rsa = RSA.Create(3072);
+        File.WriteAllText(SshPrivateKeyPath, rsa.ExportRSAPrivateKeyPem());
+
+        var parameters = rsa.ExportParameters(includePrivateParameters: false);
+        using var blob = new MemoryStream();
+        WriteSshString(blob, Encoding.ASCII.GetBytes("ssh-rsa"));
+        WriteSshString(blob, ToMpint(parameters.Exponent!));
+        WriteSshString(blob, ToMpint(parameters.Modulus!));
+        var publicKey = $"ssh-rsa {Convert.ToBase64String(blob.ToArray())} cbx-cli-lifecycle";
+        File.WriteAllText(publicKeyPath, publicKey);
+        return publicKey;
+    }
+
+    private static byte[] ToMpint(byte[] unsignedBigEndian)
+    {
+        return (unsignedBigEndian[0] & 0x80) != 0 ? [0, .. unsignedBigEndian] : unsignedBigEndian;
+    }
+
+    private static void WriteSshString(Stream stream, byte[] data)
+    {
+        Span<byte> length = stackalloc byte[4];
+        System.Buffers.Binary.BinaryPrimitives.WriteInt32BigEndian(length, data.Length);
+        stream.Write(length);
+        stream.Write(data);
+    }
+
+    /// <summary>
+    /// Konsumiert den Ausgabestrom vollständig, schreibt jede Meldung sofort ins
+    /// Log und bildet <see cref="ProgramExecutionException"/> auf ihren Exit-Code
+    /// ab (0 bei Erfolg); die Fehlermeldung landet ebenfalls im Log. Andere
+    /// Exceptions werden nicht abgefangen.
+    /// </summary>
+    internal async Task<CliRunResult> RunAsync(IOptions options, Action<string> log)
+    {
+        var lines = new List<string>();
         try
         {
-            await foreach (var _ in Program.Run(config, options))
+            await foreach (var line in Program.Run(config, options))
             {
+                log(line);
+                lines.Add(line);
             }
 
-            return 0;
+            return new CliRunResult(0, lines);
         }
         catch (ProgramExecutionException exception)
         {
-            return exception.ExitCode;
+            log($"Fehler (Exit {exception.ExitCode}): {exception.Message}");
+            return new CliRunResult(exception.ExitCode, lines);
         }
     }
 
@@ -107,13 +160,13 @@ public sealed class CliLifecycleFixture : IDisposable
         return !MultipassAvailable;
     }
 
-    internal async Task<CliLifecycleCleanupReport> CleanupAsync()
+    internal async Task<CliLifecycleCleanupReport> CleanupAsync(Action<string> log)
     {
         var failures = new List<string>();
 
         if (VmCleanupRequired)
         {
-            var exitCode = await RunAsync(new VmDeleteOptions { Name = VmName });
+            var exitCode = (await RunAsync(new VmDeleteOptions { Name = VmName, Purge = true }, log)).ExitCode;
             if (exitCode != 0)
             {
                 failures.Add($"vm-delete '{VmName}' fehlgeschlagen (Exit {exitCode}).");
@@ -133,7 +186,7 @@ public sealed class CliLifecycleFixture : IDisposable
             }
             else
             {
-                var exitCode = await RunAsync(new ImageDeleteOptions { Name = ImageName });
+                var exitCode = (await RunAsync(new ImageDeleteOptions { Name = ImageName }, log)).ExitCode;
                 if (exitCode != 0)
                 {
                     failures.Add($"image-delete '{ImageName}' fehlgeschlagen (Exit {exitCode}).");
@@ -162,10 +215,12 @@ public sealed class CliLifecycleFixture : IDisposable
         }
 
         disposed = true;
+        // Kein ITestOutputHelper beim Dispose — die Meldungen gehen in die Diagnose.
+        var log = new List<string>();
         CliLifecycleCleanupReport report;
         try
         {
-            report = CleanupAsync().GetAwaiter().GetResult();
+            report = CleanupAsync(log.Add).GetAwaiter().GetResult();
         }
         finally
         {
@@ -174,7 +229,9 @@ public sealed class CliLifecycleFixture : IDisposable
 
         if (!report.Success)
         {
-            throw new InvalidOperationException("Lifecycle-Cleanup fehlgeschlagen:" + Environment.NewLine + report.Diagnostics);
+            throw new InvalidOperationException(string.Join(
+                Environment.NewLine,
+                ["Lifecycle-Cleanup fehlgeschlagen:", report.Diagnostics, "Log:", .. log]));
         }
     }
 }
