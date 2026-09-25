@@ -9,13 +9,15 @@ public class TestConfigs
     /// <summary>Konfig-Äquivalent zu src/CoreBridge.Cli/appsettings.json.</summary>
     public static ImagesConfig Images { get; } = new()
     {
-        DefaultModelUrl = "https://raw.githubusercontent.com/canonical/models/main/ubuntu-core-26-amd64-dangerous.model",
+        DefaultModelUrl = "https://raw.githubusercontent.com/canonical/models/main/ubuntu-classic-2610-amd64-dangerous.model",
+        DefaultRuntimeImage = "daily:26.10",
         Components = new Dictionary<string, ComponentConfig>(StringComparer.OrdinalIgnoreCase)
         {
             ["claude"] = new()
             {
-                Snap = "claude-code",
-                Symlinks = ["/snap/bin/claude-code|/home/ubuntu/.local/bin/claude"]
+                CloudInitScript = "scripts/components/install-claude.sh",
+                CloudInitInstallPath = "/usr/local/sbin/corebridge-install-claude",
+                CloudInitPackages = ["bash", "curl", "ca-certificates"]
             },
             ["dotnet"] = new()
             {
@@ -52,7 +54,7 @@ public class TestConfigs
 public class ImageCloudInitTests
 {
     [Fact]
-    public void NeedsCloudInit_TrueSobaldKomponentenGewaehlt()
+    public void NeedsCloudInit_TrueSobaldGastProvisionierungVorhanden()
     {
         Assert.True(ImageCloudInit.NeedsCloudInit(TestConfigs.Images, new[] { "claude" }));
         Assert.True(ImageCloudInit.NeedsCloudInit(TestConfigs.Images, new[] { "claude", "dotnet" }));
@@ -73,7 +75,8 @@ public class ImageCloudInitTests
         Assert.Contains("apt-get download", yaml);
         Assert.Contains("dpkg -x", yaml);
         Assert.Contains("libunwind8", yaml);
-        Assert.Contains("chown -R ubuntu:ubuntu /home/ubuntu", yaml);
+        Assert.Contains("chown -h ubuntu:ubuntu /home/ubuntu/.local/bin/dotnet", yaml);
+        Assert.DoesNotContain("chown -R ubuntu:ubuntu /home/ubuntu\n", yaml);
     }
 
     [Fact]
@@ -98,13 +101,20 @@ public class ImageCloudInitTests
     }
 
     [Fact]
-    public void GenerateEnthaeltSnapInstallationen()
+    public void GenerateEnthaeltClaudeInCloudInit()
     {
         var yaml = ImageCloudInit.Generate("agent", TestConfigs.Images, new[] { "claude", "opencode" });
 
+        Assert.Contains("package_update: true", yaml);
+        Assert.Contains("  - curl", yaml);
+        Assert.Contains("path: /usr/local/sbin/corebridge-install-claude", yaml);
+        Assert.Contains("curl -fsSL https://claude.ai/install.sh | bash -s stable", yaml);
+        Assert.Contains("runcmd:", yaml);
+        Assert.Contains("  - [/usr/local/sbin/corebridge-install-claude]", yaml);
         Assert.Contains("snap:", yaml);
-        Assert.Contains("- snap install claude-code", yaml);
         Assert.Contains("- snap install opencode", yaml);
+        Assert.DoesNotContain("install-claude.ps1", yaml);
+        Assert.DoesNotContain("Host-Install", yaml);
     }
 
     [Fact]
@@ -121,11 +131,11 @@ public class ImageCloudInitTests
 public class ImageComponentsTests
 {
     [Fact]
-    public void ResolveSnaps_MapptKomponentenAufStoreSnaps()
+    public void ResolveSnaps_MapptNurKomponentenMitStoreSnap()
     {
         var snaps = ImageComponents.ResolveSnaps(TestConfigs.Images, new[] { "claude", "dotnet", "python" });
 
-        Assert.Equal(new[] { "claude-code", "dotnet-sdk-100", "python3-alt" }, snaps);
+        Assert.Equal(new[] { "dotnet-sdk-100", "python3-alt" }, snaps);
     }
 
     [Fact]
@@ -133,7 +143,7 @@ public class ImageComponentsTests
     {
         var snaps = ImageComponents.ResolveSnaps(TestConfigs.Images, new[] { " Claude ", "DOTNET" });
 
-        Assert.Equal(new[] { "claude-code", "dotnet-sdk-100" }, snaps);
+        Assert.Equal(new[] { "dotnet-sdk-100" }, snaps);
     }
 
     [Fact]
@@ -157,7 +167,13 @@ public class ImageServiceConfigureGuardTests
         {
             return Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.OK)
             {
-                Content = new StringContent("type: model\n...")
+                Content = new StringContent(
+                    "type: model\n" +
+                    "model: ubuntu-classic-2610-amd64-dangerous\n" +
+                    "base: core24\n" +
+                    "classic: true\n" +
+                    "distribution: ubuntu\n" +
+                    "grade: dangerous\n")
             });
         }
     }
@@ -176,7 +192,9 @@ public class ImageServiceConfigureGuardTests
         Assert.True(File.Exists(result.ConfigPath));
         Assert.NotNull(result.CloudInitPath);
         Assert.True(File.Exists(result.CloudInitPath));
-        Assert.Equal(new[] { "claude-code", "dotnet-sdk-100" }, result.Snaps);
+        Assert.Equal(new[] { "dotnet-sdk-100" }, result.Snaps);
+        Assert.Equal("daily:26.10", result.RuntimeImage);
+        Assert.DoesNotContain("HostInstall", File.ReadAllText(result.ConfigPath));
     }
     [Fact]
     public void Configure_BestehendesImage_OhneForceWirftMultipassException()
@@ -206,6 +224,8 @@ public class ImageServiceConfigureGuardTests
             .Configure("agent", ["claude"], force: true);
 
         Assert.True(File.Exists(result.ConfigPath));
+        Assert.NotNull(result.CloudInitPath);
+        Assert.Empty(result.Snaps);
     }
 }
 
@@ -235,7 +255,7 @@ public class ImageServiceListDeleteTests
     public void List_LiefertKonfigurierteImages()
     {
         using var store = new TempDirectory();
-        SeedStore(store, "alpha", ["claude"], ["claude-code"], withImage: false);
+        SeedStore(store, "alpha", ["claude"], [], withImage: false);
         SeedStore(store, "beta", ["dotnet"], ["dotnet-sdk-100"], withImage: true);
 
         var entries = new ImageService(TestConfigs.Images).List();
@@ -261,7 +281,7 @@ public class ImageServiceListDeleteTests
     public void Delete_EntferntKonfigurationUndImage()
     {
         using var store = new TempDirectory();
-        SeedStore(store, "agent", ["claude"], ["claude-code"], withImage: true);
+        SeedStore(store, "agent", ["claude"], [], withImage: true);
         var modelDir = ImageStore.ModelDir("agent");
         var imageFile = ImageStore.ImageFile("agent");
 
@@ -292,7 +312,11 @@ public class ImageBuildConfigTests
             "agent",
             TestConfigs.Images.DefaultModelUrl,
             new[] { "claude", "dotnet" },
-            new[] { "claude-code", "dotnet-sdk-100" });
+            new[] { "dotnet-sdk-100" },
+            RuntimeImage: "daily:26.10",
+            CloudInitFile: "cloud-init.yaml",
+            ModelId: "ubuntu-classic-2610-amd64-dangerous",
+            ModelSha256: "abc123");
 
         var roundtrip = ImageBuildConfig.FromJson(config.ToJson());
 
@@ -300,5 +324,10 @@ public class ImageBuildConfigTests
         Assert.Equal(config.BaseModelUrl, roundtrip.BaseModelUrl);
         Assert.Equal(config.Components, roundtrip.Components);
         Assert.Equal(config.Snaps, roundtrip.Snaps);
+        Assert.Equal(config.RuntimeImage, roundtrip.RuntimeImage);
+        Assert.Equal(config.CloudInitFile, roundtrip.CloudInitFile);
+        Assert.Equal(config.ModelId, roundtrip.ModelId);
+        Assert.Equal(config.ModelSha256, roundtrip.ModelSha256);
+        Assert.Equal(3, roundtrip.SchemaVersion);
     }
 }

@@ -1,10 +1,10 @@
 # CoreBridge — Multipass Bridge
 
-.NET-10-Konsolen-App, die Ubuntu-Core-VMs unter Multipass/Hyper-V verwaltet:
-anlegen, starten/stoppen, Dateien austauschen, Kommandos ausführen — als
-Grundlage dafür, ein echtes Host-Git-Repo mit isolierten Agent-VMs (Claude
-Code, OpenCode, ...) zu verbinden, ohne dass die VM einen direkten Zugriff
-auf den Host bekommt.
+.NET-10-Konsolen-App, die klassische Ubuntu-26.10-Edge-VMs unter
+Multipass/Hyper-V verwaltet: anlegen, starten/stoppen, Dateien austauschen,
+Kommandos ausführen — als Grundlage dafür, ein echtes Host-Git-Repo mit
+isolierten Agent-VMs (Claude Code, OpenCode, ...) zu verbinden, ohne dass die
+VM einen direkten Zugriff auf den Host bekommt.
 
 ## Voraussetzungen
 
@@ -38,8 +38,12 @@ cb vm-connect --name meine-vm
 cb vm-delete --name meine-vm
 ```
 
-`image-configure` gibt den passenden `vm-create`-Aufruf am Ende selbst aus.
-`vm-connect` macht eine SSH verbindung auf, hier könnte man dann mit dem KI Agenten kommunizieren als hätte man ihn lokal laufen
+`image-configure` erzeugt ein Profil. `vm-create --image <profilname>` löst
+dieses Profil auf, startet `daily:26.10` und übergibt die generierte
+cloud-init. Alle Gast-Komponenten, einschließlich Claude, werden dort
+installiert. Ein direkt angegebener Katalogname wie `26.04` bleibt ein
+normaler, unprofilierter Launch. `vm-connect` ist eine interaktive
+Multipass-Shell und benötigt ein echtes Terminal.
 
 `cb` ruft im Repo `dotnet run --project src/CoreBridge.Cli -- @args` auf; ohne
 Repo würde es einen installierten `core-bridge`-Befehl erwarten (noch nicht
@@ -61,7 +65,7 @@ VM-Lifecycle:
 |---|---|
 | `multipass-status` | Prüft, ob Multipass auffindbar ist, gibt CLI- und Daemon-Version aus |
 | `vm-list` | Listet alle Multipass-VMs (inkl. Papierkorb, state `Deleted`) |
-| `vm-create -n <name> [-i <image>] [-c <cloud-init>] [-d <disk>]` | Legt eine neue VM an (Standard-Image: `core26`) |
+| `vm-create -n <name> [-i <image>] [-c <cloud-init>] [-d <disk>]` | Legt eine neue VM an (Standard: `daily:26.10`, Classic Ubuntu 26.10 Edge) |
 | `vm-start -n <name>` | Startet eine gestoppte VM |
 | `vm-stop -n <name>` | Stoppt eine laufende VM |
 | `vm-delete -n <name> [-p/--purge]` | Löscht eine VM in den Papierkorb; `--purge` endgültig |
@@ -70,11 +74,12 @@ VM-Lifecycle:
 | `vm-put -n <name> -s <lokale-datei> [-d <ziel-in-vm>]` | Kopiert eine Datei Host → VM |
 | `vm-get -n <name> -r <pfad-in-vm> -d <lokales-ziel>` | Kopiert eine Datei VM → Host |
 
-Custom-Images (Ubuntu-Core-Image mit vorinstallierten Snaps/Tools bauen):
+Custom-Images (Classic-Ubuntu-26.10-Edge-Profil mit cloud-init-basierter
+Gast-Provisionierung):
 
 | Befehl | Zweck |
 |---|---|
-| `image-configure -n <name> [-c claude,dotnet,opencode,python] [--model-url <url>] [-b <build-to>] [-f/--force]` | Erzeugt Build-Config, Basis-Modell (Canonical, signiert) und cloud-init für ein Custom-Image |
+| `image-configure -n <name> [-c claude,dotnet,opencode,python] [--model-url <url>] [--runtime-image <image>] [-b <build-to>] [-f/--force]` | Erzeugt ein Classic-Profil (Standardmodell `ubuntu-classic-2610-amd64-dangerous.model`, Runtime `daily:26.10`) und persistiert die Gast-cloud-init |
 | `image-list` | Listet konfigurierte Custom-Images (Komponenten, Snaps, vorhandene `.img`) |
 | `image-delete -n <name>` | Löscht Konfiguration + gebaute `.img` eines Custom-Images |
 
@@ -101,11 +106,16 @@ CLI liest `config.Get<AppConfig>()` aus (Reihenfolge, letztes gewinnt):
 Wichtige Einstellungen (`src/CoreBridge.Cli/appsettings.json`):
 
 - `Images:StoreRoot` — wohin `image-configure`/`image-build` Modelle,
-  cloud-init und `.img`-Dateien ablegen (Default `%LOCALAPPDATA%\CoreBridge`)
-- `Images:Components` — verfügbare Custom-Image-Bausteine (Snap-Name,
-  `--classic`-Flag, Symlinks, `.profile`-Exports, vendored Libs). Neue
-  Komponente = neuer Config-Eintrag, kein Code
-- `Images:Build` — Default-Bau-VM/-Image/-Disk/-Timeout für `image-build`
+  cloud-init und `.img`-Dateien ablegen (Development: `artifacts`)
+- `Images:DefaultModelUrl` — Standardmodell
+  `ubuntu-classic-2610-amd64-dangerous.model`
+- `Images:DefaultRuntimeImage` — Standard-Runtime `daily:26.10`
+  (Classic Ubuntu 26.10 Edge)
+- `Images:Components` — Gast-Snaps, Pakete, Symlinks, `.profile`-Exports und
+  optionale `CloudInitScript`-Dateien. Claude wird standardmäßig über eine
+  eingebettete cloud-init-Datei provisioniert, nicht über einen Core-Snap.
+- `Images:Build` — Default-Bau-VM/-Image/-Disk/-Timeout für `image-build`.
+  `26.04` ist dabei nur das Werkzeug-Image der Bau-VM, nicht die Ziel-Runtime.
 
 **Keine Passwörter in der Config** — Secrets laufen über die Env-Kette
 `CORE_BRIDGE_[ALL,<NAME>,...]_PASSWORD` (Sync-Feature, noch nicht
@@ -114,56 +124,36 @@ implementiert).
 ## Tests & Experimente
 
 ```powershell
-dotnet test                                    # alles
-dotnet test test/CoreBridge.Core.Tests         # Unit- + Integrationstests
-dotnet test test/Multipass.Experiments         # Experimente (siehe EXPERIMENT_LOG.md)
+dotnet test                                             # alles
+dotnet test test/CoreBridge.Core.Tests                  # schnelle Core-/Image-Unit-Tests
+dotnet test test/CoreBridge.Cli.Tests --filter "Category!=Integration"
+dotnet test test/CoreBridge.Cli.Tests                   # echter Classic-CLI-Lifecycle
+dotnet test test/Multipass.Experiments                  # historische Experimente
 ```
 
-- `test/CoreBridge.Core.Tests` → `IntegrationsTests.cs` (`VmCycleTests`) —
-  **guter Einstiegspunkt, um die App kennenzulernen**: ein durchgängiger
-  `image-configure` → `vm-create` → `vm-list` → `vm-start` → `vm-exec` →
-  `vm-connect` (Pipe **und** natives SSH) → `vm-stop` → `vm-delete` →
-  `image-delete`-Zyklus, der die `cbx-cycle-a`-VM wirklich **von null aufbaut
-  und am Ende wieder komplett abbaut** — nichts bleibt hängen. Läuft komplett
-  gegen echtes Multipass, dauert ca. 2,5 Minuten (den Löwenanteil davon macht
-  `vm-create`):
-
-  ```
-  ✅ VmCycleTests (10) ──────────────── 2,5 min
-  ├─ ✅ _0_multipassStatus ─────────────── 56 ms
-  ├─ ✅ _1_imageConfigure ─────────────── 140 ms
-  ├─ ✅ _2_vmCreate ───────────────────── 2,2 min
-  ├─ ✅ _3_vmList ─────────────────────── 140 ms
-  ├─ ✅ _4_vmStart ────────────────────── 12,6 sec
-  ├─ ✅ _5_vmExec ─────────────────────── 380 ms
-  ├─ ✅ _6_vmConnect ──────────────────── 138 ms
-  ├─ ✅ _7_vmConnectSsh ───────────────── 761 ms
-  ├─ ✅ _8_vmStop ─────────────────────── 4,1 sec
-  ╰─ ✅ _9_vmDelete ───────────────────── 543 ms
-  ```
-
-  Solange der Testlauf steht (oder wenn man ihn mit `--filter` vor `_9`
-  abbricht), existiert `cbx-cycle-a` wirklich — man kann sich parallel in
-  einem zweiten Terminal mit `cb vm-connect --name cbx-cycle-a` reinhängen
-  und sich die VM live ansehen.
-
-  **Bekannter offener Punkt, den man dabei sieht:** die per `image-configure
-  --components claude` gezogene `claude-code`-Snap ist zwar installiert,
-  lässt sich aber nicht starten:
-
-  ```
-  PS> cb vm-connect --name cbx-cycle-a
-  ...
-  -bash-5.3$ claude-code
-  2026/09/23 12:46:12.314119 cmd_run.go:1585: WARNING: cannot create user data directory: cannot create snap home dir: mkdir /home/ubuntu/snap: permission denied
-  cannot create user data directory: /home/ubuntu/snap/claude-code/53: Permission denied
-  ```
-
-  Vermutlich braucht die Snap `--classic`-Confinement, um außerhalb der
-  Snap-Sandbox schreiben zu dürfen — und `--classic` läuft auf Ubuntu Core
-  (strict confinement per Systemdesign) nicht. Noch ungeklärt; bis dahin ist
-  der in `AGENTS.md` als Default beschriebene Claude-Binary-Modus (statt
-  Snap) der verlässlichere Weg, Claude Code in die VM zu bekommen.
+- `test/CoreBridge.Cli.Tests` → `CliLifecycleTests` — der öffentliche
+  CLI-first-Lifecycle. Der Test startet die bereits gebaute CLI als
+  Child-Prozess und verwendet ausschließlich die Verben aus diesem README:
+  `multipass-status` → `image-configure` → `vm-create --image <profil>` →
+  `vm-start` → `vm-exec` → Claude-Postcondition → `vm-delete` (ohne
+  `--purge`). Der Test verwendet eindeutige `cbx-cli-*`
+  Namen und räumt VM/Profil in `finally` auf. `vm-connect` bleibt ein
+  echter Terminalbefehl; dafür existieren schnelle Prozessvertrags-Tests
+  (`vm-connect --help`).
+- Der Integrationstest verwendet `DOTNET_ENVIRONMENT=Development` und
+  damit `appsettings.Development.json` (`Images:StoreRoot=artifacts`).
+  Temporäre Dateien für den Claude-Download landen ausschließlich in einem
+  Test-`TEMP`-Verzeichnis.
+- `test/CoreBridge.Core.Tests` enthält weiterhin schnelle Unit-Tests für
+  Core, Image-Profilauflösung, Modellvalidierung und Cloud-init. Die alte
+  direkte Service-Integration wurde in den CLI-Test verschoben.
+- `test/Multipass.Experiments` — die T01–T11-Experimente, die die
+  historischen Multipassaussagen belegen. Jeder Lauf wird protokolliert:
+  Kommando, Exit-Code, Dauer, Roh-Ausgabe in `EXPERIMENT_LOG.md`, volle
+  Rohdaten unter `experiment-data/`.
+- Beide Multipass-Testprojekte überspringen sich automatisch, wenn kein
+  Multipass gefunden wird. Für reale Läufe gilt weiterhin: niemals
+  `multipass` direkt in der Shell aufrufen, sondern `dotnet test`.
 - `test/Multipass.Experiments` — die T01–T11-Experimente, die die
   Architekturentscheidungen belegen (Latenzen, JSON-Formate, Netzwerk, SSH,
   Lifecycle). Jeder Lauf wird protokolliert: Kommando, Exit-Code, Dauer,
@@ -186,9 +176,10 @@ src/
   CoreBridge.Cli      CommandLineParser-Verbs + Ausgabe (einziges Projekt mit
                       dem NuGet-Paket CommandLineParser)
 test/
-  CoreBridge.Core.Tests   Unit- + Integrationstests
-  Multipass.Experiments   reproduzierbare Experimente, keine klassischen Tests
-scripts/               cb-Shortcut, VM-Bootstrap, Custom-Image-Build, Hyper-V-Gruppierung
+  CoreBridge.Core.Tests   Unit-Tests für Core/Image-Profil/Cloud-init
+  CoreBridge.Cli.Tests    Prozessbasierte CLI-/Lifecycle-Tests
+  Multipass.Experiments   reproduzierbare historische Experimente
+scripts/               cb-Shortcut, Cloud-init-Skriptquellen, Image-Build, Hyper-V-Gruppierung
 ```
 
 `src/CoreBridge.Tui` (Terminal-UI, geplant mit
@@ -199,12 +190,12 @@ eine TUI noch keinen Mehrwert gebracht hätte.
 
 ## Status
 
-Phase D (siehe `IMPLEMENTATION_PLAN.md` §10): VM-Lifecycle-Verbs, Datei-
-transfer und die Custom-Image-Pipeline (`image-configure`/`image-list`/
-`image-delete`) sind implementiert und end-to-end verifiziert; `image-build`
-und die geplante Autobridge (automatischer Host↔VM-Workflow für Coding-Agents)
-sind offene Punkte. Aktueller Stand im Detail: `AGENTS.md` → „Aktueller
-Stand“.
+Phase D (siehe `IMPLEMENTATION_PLAN.md` §10): VM-Lifecycle, Datei-transfer
+und die Classic-26.10-Edge-Image-Pipeline sind implementiert. `image-configure`
+schreibt ein launchbares Profil; `vm-create --image <profil>` startet
+`daily:26.10` und übergibt die cloud-init, die Claude und die übrigen
+Gast-Komponenten installiert. `image-build` und die spätere Autobridge bleiben
+offen. Aktueller Stand im Detail: `AGENTS.md` → „Aktueller Stand“.
 
 ## Weiterführende Dokumentation
 
@@ -213,8 +204,7 @@ Stand“.
 - `IMPLEMENTATION_PLAN.md` — der verbindliche Plan: Leitsätze, Phasen,
   Experimente T01–T11, offene Fragen, Umsetzungsstatus
 - `EXPERIMENT_LOG.md` / `experiment-data/` — alle bisherigen Experimentläufe
-- `COMMANDLINEPARSER_COMMANDLINE_README.md` — Referenz für CommandLineParser
-  2.9.1
+- CommandLineParser 2.9.1: <https://github.com/commandlineparser/commandline>
 - `PROJECT_MULTIPASS_BRIDGE.md` — die ursprüngliche Projektidee (Ausgangspunkt,
   nicht der aktuelle Stand)
 

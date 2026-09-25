@@ -12,9 +12,20 @@ public sealed record AppConfig
 
 public sealed record ImagesConfig
 {
+    /// <summary>
+    /// Kanonisches Modell für neu konfigurierte Classic-Ubuntu-Images.
+    /// 26.10 ist aktuell der Edge-Stand; der Runtime-Image-Katalog muss dazu
+    /// passend konfiguriert werden (<see cref="DefaultRuntimeImage"/>).
+    /// </summary>
     public string DefaultModelUrl { get; init; } =
-        "https://raw.githubusercontent.com/canonical/models/main/ubuntu-core-26-amd64-dangerous.model";
+        "https://raw.githubusercontent.com/canonical/models/main/ubuntu-classic-2610-amd64-dangerous.model";
 
+    /// <summary>
+    /// Multipass-Katalogname, der für VMs aus einem konfigurierten Image-Profil
+    /// verwendet wird. Der Classic-26.10-Stand ist im T02-Katalog als
+    /// <c>daily:26.10</c> verfügbar.
+    /// </summary>
+    public string DefaultRuntimeImage { get; init; } = "daily:26.10";
     /// <summary>
     /// Wurzel für Modell-/Config-/cloud-init-/Image-Dateien. Absoluter Pfad oder
     /// relativ zur Repo-Wurzel (Ordner, der CoreBridge.slnx enthält). Leer =
@@ -39,19 +50,29 @@ public sealed record ImageBuildDefaultsConfig
 }
 
 /// <summary>
-/// Eine Bootstrap-Komponente: Snap (wird per `ubuntu-image --snap` ins Image gebacken)
-/// plus optionaler Nicht-Snap-Rest (Symlinks, .profile-Exports, vendored Libs),
-/// der über die generierte cloud-init beim ersten Boot nachgezogen wird.
+/// Eine Image-Komponente. Snap und Cloud-Init-Eigenschaften beschreiben die
+/// Provisionierung im Gast. Ein optionales <see cref="CloudInitScript"/> wird
+/// als Gast-Datei in die generierte cloud-init-YAML eingebettet; es wird nie
+/// vom Host als Installationsschritt gestartet.
 /// </summary>
 public sealed record ComponentConfig
 {
-    public required string Snap { get; init; }
+    /// <summary>Optionaler Store-Snap für die Custom-Image-Pipeline.</summary>
+    public string? Snap { get; init; }
 
     /// <summary>
-    /// Snap mit classic confinement — `snap install --classic` (z. B. opencode,
-    /// python3-alt). Ohne das Flag schlägt die Installation auf Core still fehl-
-    /// schlagend fehl („no matching snaps installed").
+    /// Repo-relatives Shell-Skript, dessen Inhalt als ausführbare Datei in
+    /// cloud-init geschrieben wird. Der Pfad selbst wird nicht ausgeführt.
     /// </summary>
+    public string? CloudInitScript { get; init; }
+
+    /// <summary>Zielpfad des eingebetteten Skripts im Gast.</summary>
+    public string? CloudInitInstallPath { get; init; }
+
+    /// <summary>Pakete, die cloud-init vor der Ausführung des Skripts installiert.</summary>
+    public string[] CloudInitPackages { get; init; } = [];
+
+    /// <summary>Snap mit classic confinement — <c>snap install --classic</c>.</summary>
     public bool Classic { get; init; }
 
     /// <summary>"quelle|ziel" — absolute Pfade, z. B. /snap/bin/x|/home/ubuntu/.local/bin/x.</summary>
@@ -62,7 +83,13 @@ public sealed record ComponentConfig
 
     public VendoredLibsConfig? VendoredLibs { get; init; }
 
-    public bool NeedsCloudInit => Symlinks.Length > 0 || ProfileExports.Length > 0 || VendoredLibs is not null;
+    public bool NeedsCloudInit =>
+        !string.IsNullOrWhiteSpace(Snap) ||
+        !string.IsNullOrWhiteSpace(CloudInitScript) ||
+        CloudInitPackages.Length > 0 ||
+        Symlinks.Length > 0 ||
+        ProfileExports.Length > 0 ||
+        VendoredLibs is not null;
 }
 
 public sealed record VendoredLibsConfig

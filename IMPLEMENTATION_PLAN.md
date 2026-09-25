@@ -17,6 +17,22 @@
 | .NET SDK | 10.0.401 → `net10.0` machbar |
 | OS | Windows 11 Pro, Hyper-V im Einsatz (Multipass auf Windows baut ebenfalls auf Hyper-V auf) |
 
+## 0.1 Zielentscheidung (25.09.2026): Classic Ubuntu 26.10 Edge
+
+Die aktive Zielbasis ist klassisches Ubuntu 26.10 Edge:
+
+- Modell: `ubuntu-classic-2610-amd64-dangerous.model`
+- Multipass-Runtime: `daily:26.10`
+- `Images:Build:Image=26.04` ist nur das Werkzeug-Image der Bau-VM.
+- `core26` und die T01–T11-Messungen bleiben historische Core-Evidenz;
+  neue Defaults, Profile und Tests verwenden Classic Ubuntu.
+
+`image-configure` erzeugt ein persistentes Profil. `vm-create --image <name>`
+löst dieses Profil auf, startet die gespeicherte Runtime und übergibt die
+generierte cloud-init. Gast-Skripte werden darin eingebettet und per
+`runcmd` im Gast ausgeführt; es gibt keine Host-Installationsphase. Der
+öffentliche `vm-connect`-Befehl bleibt ein echter TTY-Terminalbefehl.
+
 ## 1. Leitsätze
 
 1. **VERBOT wird Architektur.** Der Agent ruft Multipass nie direkt in der Shell
@@ -177,10 +193,10 @@ pro Konfiguration änderbar:
 
 ## 9. Offene Punkte / bewusst zurückgestellt
 
-- Ubuntu-Core-Katalogfrage: durch T02 geklärt (16.09.2026) — Core-Images `core` (=16) bis
-  `core26` sind im Standard-Katalog (siehe `EXPERIMENT_LOG.md`, T02-Eintrag). Die konkrete
-  Wahl der VM-Basis bleibt trotzdem Phase D vorbehalten (Core vs. plain Ubuntu,
-  Snap-Härte als spätere Option)
+- Zielentscheidung ist Classic Ubuntu 26.10 Edge; die frühere Core-Frage
+  bleibt nur als historische T02-Evidenz erhalten.
+- `image-build`/Custom-Image-Import unter Windows (https/file://-Workaround)
+  bleibt offen.
 - Autobridge-Details, TUI, Installationsweg für `core-bridge` (PATH/Installation)
 - Git-Modell-Feinheiten (Sync-/Merge-Mechanik) — nach Phase-C-Ergebnissen
 
@@ -220,42 +236,26 @@ pro Konfiguration änderbar:
       - T10: Cleanup löscht gezielt alle cbx-VMs (kein purge); gelöschte VMs bleiben
         mit state `Deleted` in `list` sichtbar — Existenzchecks müssen den State
         prüfen. Offen: ob ein Launch den Namen einer Papierkorb-VM übernehmen kann
-- [ ] Phase D (angelaufen, 17.09.2026):
-      - [x] CLI-Ausbau Schritt 1: Verbs `vm-list`, `vm-create` (Default-Image
-            core26), `vm-start`, `vm-stop`, `vm-delete`, `vm-exec`,
+- [ ] Phase D (angelaufen, 25.09.2026):
+      - [x] CLI-Ausbau Schritt 1: Verbs `vm-list`, `vm-create` (Default
+            `daily:26.10`), `vm-start`, `vm-stop`, `vm-delete`, `vm-exec`,
             `vm-connect` (interaktiv über `multipass shell`). Core-Layer:
             `VmService`, `MultipassVmList`, `VmInfo`, `MultipassCli.Attach`.
-            End-to-end verifiziert: create 57,9 s / stop 4,0 s / start 49,6 s /
-            delete 1,1 s — deckt sich mit den T09-Messwerten. Damit sind die
-            Command-Namen gesetzt (vm-*-Schema, §8-Konventionen).
+            Historische Core-Latenzen bleiben in T03/T09; Classic-Profile
+            werden über den CLI-Test validiert.
       - [x] `cb`-Shortcut (Plan §7; absoluter Pfad statt relativ, damit `cb` aus
             jedem Verzeichnis funktioniert): Quelle `scripts/cb.ps1`,
             Installer `scripts/install-cb.ps1`, AfterBuild-Target im Cli-Projekt
             installiert die Funktion bei JEDEM Build idempotent (Marker-Blöcke)
             in BEIDE PowerShell-Profile — pwsh 7 und Windows PowerShell 5.1.
-            Verifiziert in beiden Hosts.
-      - [x] `vm-put` (Datei Host→VM über `multipass transfer`) — erster Baustein
-            des Sync-Wegs. Verifiziert mit dem Claude-Code-Native-Binary (218 MB,
-            Checksum-geprüft gegen das Release-Manifest): läuft auf core26 ohne
-            npm/curl (`claude --version` = 2.1.273) — Bootstrap-Pfad für
-            Autobridge-Agenten steht damit grundsätzlich.
-      - [x] .NET SDK 10 auf core26 bewiesen (17.09.2026): classic Snap
-            `dotnet-sdk-100` installiert und läuft DOCH auf Core 26 (Annahme
-            „classic geht auf Core nicht" ist widerlegt); nötig sind vendored
-            `libunwind8`/`libicu78` nach `~/.local/lib` (Core hat sie nicht) +
-            `LD_LIBRARY_PATH`/`DOTNET_ROOT` in `~/.profile`, Symlink nach
-            `~/.local/bin` statt /usr/local (read-only). Volltest inkl.
-            `dotnet new/run` + NuGet-Restore über HTTPS erfolgreich.
-            Reproduzierbar: `scripts/bootstrap-agent-vm.ps1`.
-      - [ ] T11 Custom-Image: Bau lokal bewiesen (Canonical-dangerous-Modell,
-            `scripts/build-coreimage.ps1`, kein Ubuntu One nötig); Import nach
-            Multipass unter Windows blockiert (1.16.3: file://-Client-Mangling +
-            erzwungenes https) — offen: https-Workaround oder Upstream-Bugfix.
-      - [ ] Custom-Image-Pipeline als CLI-Verbs (17.09.2026, `image-configure`/
-            `image-build`, config-getrieben via `AppConfig`/`ConfigurationBuilder` —
-            Leitsatz 6): `build-coreimage.ps1` damit ersetzt; `image-configure`
-            verifiziert (Modell-Download + cloud-init-Generierung), `image-build`
-            NOCH NICHT end-to-end verifiziert. `vm-create --cloud-init` für den
-            Nicht-Snap-Rest (Symlinks/.profile/vendored Libs); runcmd-Anteil auf
-            core26 unbewiesen (write_files bewiesen via T06).
+      - [x] CLI-first-Refactor aus `TEST-REFACTOR.md`: `IOptions`,
+            `Program.Run`, Image-Profilauflösung, Gast-cloud-init,
+            idempotentes `vm-start` und `CoreBridge.Cli.Tests`.
+      - [x] Classic-Profilkonfiguration: `ubuntu-classic-2610-amd64-dangerous.model`,
+            Runtime `daily:26.10`, Development-Store `artifacts`, Claude als
+            eingebettetes Gast-Skript `scripts/components/install-claude.sh`.
+            Der erste CLI-Lifecycle-Lauf ist wegen eines separaten
+            Multipass-Daemon-Timeouts noch nicht als erfolgreich verifiziert.
+      - [ ] T11 Custom-Image: Import nach Multipass unter Windows bleibt wegen
+            `file://`-Client-Mangling/erzwungenem HTTPS offen.
       - [ ] Git-/Sync-Topologie, Autobridge, Secret-Scanning, TUI

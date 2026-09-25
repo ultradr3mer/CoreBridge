@@ -1,40 +1,36 @@
 # CLOUD-INIT — Provisioning und Claude-Code-Installation
 
-> Rechercheergebnis, 25.09.2026. Die angeforderten lokalen cloud-init-Dokumente,
-> die aktuelle CoreBridge-Implementierung und die offiziellen Installations- und
-> Ubuntu-Core-Dokumentationen wurden ausgewertet. Dieses Dokument ändert noch
-> keinen Code.
+> Recherche-/Implementierungsstand, 25.09.2026. Die lokale Cloud-init-Checkout,
+> die aktuelle CoreBridge-Implementierung und die offiziellen Installations-
+> und Classic-Ubuntu-Dokumentationen wurden ausgewertet. Die Zielentscheidung
+> ist nun Classic Ubuntu 26.10 Edge.
 
 ## 1. Kurzergebnis
 
-Für die aktuelle Ubuntu-Core-Architektur ist **kein neues `.deb`-Paket** der
-beste nächste Schritt. Der native Claude-Code-Installationsweg ist bereits der
-passendere Sicherheits- und Isolationsvertrag:
+Die aktive Zielbasis ist **klassisches Ubuntu 26.10 Edge**:
 
-1. Auf dem Host eine konkrete Claude-Version und deren Release-Manifest
-   auswählen.
-2. Das Manifest mit dem fest verdrahteten Anthropic-GPG-Fingerprint prüfen.
-3. Das Binary gegen die im signierten Manifest enthaltene SHA-256-Prüfsumme
-   prüfen.
-4. Das geprüfte Binary versioniert und content-addressed im lokalen
-   CoreBridge-Artifact-Store cachen.
-5. Es in eine VM-Staging-Pfad übertragen, dort erneut prüfen und erst danach
-   atomar in die native Claude-Installation überführen.
-6. Version, Digest, Quelle und Update-Policy im VM-Metadaten protokollieren.
+- Modell: `ubuntu-classic-2610-amd64-dangerous.model`
+- Multipass-Runtime: `daily:26.10`
+- `26.04` bleibt nur das Werkzeug-Image der Image-Bau-VM.
+- Claude wird nicht über den Core-only `claude-code`-Snap provisioniert.
+  `scripts/components/install-claude.sh` ist eine Gast-Datei, die in die
+  generierte cloud-init-YAML eingebettet und dort per `runcmd` ausgeführt wird.
 
-Das ist bewusst **kein Repackaging** des Binarys in ein selbstgebautes Paket.
-Als wiederverwendbarer Paket-Ersatz dient der versionierte, signierte
-Upstream-Artifact-Eintrag. Ein Container- oder Archivformat würde weder Signatur
-noch Atomizität verbessern.
+Die Provisionierung ist bewusst getrennt:
 
-Später kann eine verifizierte Installation in eine gestoppte Template-VM
-aufgenommen und per `clone` repliziert werden. Das ist eine Geschwindigkeits-
-und Betriebsoptimierung, kein Ersatz für die Integritätsprüfung.
+1. `image-configure` lädt/validiert das Classic-Modell, schreibt Profil,
+   Runtime und die Cloud-init-Metadaten.
+2. `vm-create --image <profil>` startet die gespeicherte Runtime
+   (`daily:26.10`) und übergibt die generierte Cloud-init.
+3. Cloud-init installiert Pakete, schreibt das Claude-Skript als Datei und
+   führt es im Gast per `runcmd` aus.
+4. Ein erfolgreicher Launch allein gilt nicht als erfolgreiche
+   Agent-Provisionierung; der Postcondition-Befehl muss explizit geprüft
+   werden.
 
-Falls das eigentliche Ziel **klassisches Ubuntu 26.04** statt Ubuntu Core ist,
-ändert sich die Empfehlung: Dann ist Anthropics offizielle, signierte
-apt-Repository-Quelle vorzuziehen und die benutzerdefinierte
-Binary-Transfer-Pipeline sollte nicht weiter ausgebaut werden.
+Cloud-init bleibt für Gast-Komponenten zuständig (Snaps, Symlinks,
+`.profile`-Exports und optionale Bibliotheken). Ein großes Binary wird nicht
+in YAML eingebettet.
 
 ## 2. Vorhandener Claude-Code-Pfad
 
@@ -44,45 +40,29 @@ Die aktuelle Komponentenddefinition ist:
 
 ```json
 "claude": {
-  "HostInstallScript": "scripts/components/install-claude.ps1"
+  "CloudInitScript": "scripts/components/install-claude.sh",
+  "CloudInitInstallPath": "/usr/local/sbin/corebridge-install-claude",
+  "CloudInitPackages": ["bash", "curl", "ca-certificates"]
 }
 ```
 
 Quelle: `src/CoreBridge.Cli/appsettings.json`.
 
-`ComponentConfig.HostInstallScript` wird von `NeedsCloudInit` bewusst nicht als
-cloud-init-Pflicht behandelt. `ImageCloudInit` bettet Host-Scripts ebenfalls
-nicht ein. Das ist für ein mehrere hundert Megabyte großes Binary grundsätzlich
-richtig.
+`ImageCloudInit` liest die Skriptquelle, schreibt sie mit `write_files` als
+`/usr/local/sbin/corebridge-install-claude` und ruft sie über `runcmd` auf.
+Der Host führt das Skript nicht aus; es gibt im aktuellen Classic-Workflow
+keine Host-Installationsphase.
 
-Wichtiger ist aber der aktuelle Integrationsfehler:
+### 2.2 Aktueller Ablauf des eingebetteten Skripts
 
-- `image-configure` ermittelt das Script und gibt seinen Pfad aus.
-- `image-build` berücksichtigt nur Snap-Namen.
-- Weder `image-configure` noch `image-build` startet
-  `scripts/components/install-claude.ps1`.
-- Nur der Integrationstest startet das Script separat nach `vm-create`.
+Das Skript führt im Gast aus:
 
-`image-configure --components claude` behauptet damit semantisch eine
-Claude-Komponente, installiert sie aber nicht. Vor einer Paketentscheidung muss
-die Komponenteninstallation eine echte, explizite CoreBridge-Operation werden.
+1. `curl -fsSL https://claude.ai/install.sh | bash -s stable` als Benutzer
+   `ubuntu` ausführen.
+2. `claude --version` als Postcondition prüfen.
+3. `/var/lib/corebridge/claude.ready` als Provisioning-Marker anlegen.
 
-### 2.2 Aktueller Ablauf von `install-claude.ps1`
-
-`scripts/components/install-claude.ps1` macht derzeit:
-
-1. `claude --version` in der VM prüfen.
-2. Den beweglichen Endpunkt `.../latest` auflösen.
-3. `manifest.json` laden.
-4. Den Cache unter `%TEMP%\opencode\claude-linux-x64` verwenden.
-5. Das Linux-x64-Binary herunterladen.
-6. dessen SHA-256 gegen das Manifest prüfen.
-7. Das Binary direkt nach `~/.local/bin/claude` übertragen.
-8. `chmod +x`, `claude install` und `claude --version` ausführen.
-
-Der Host-Transfer ist auf Ubuntu Core der bislang bewiesene Weg. Das in
-`IMPLEMENTATION_PLAN.md` dokumentierte Binary hatte 218 MB und lief auf Core 26
-ohne npm oder curl.
+Pakete werden vorher über das `packages`-Modul von cloud-init installiert.
 
 ### 2.3 Schwächen des aktuellen Ablaufs
 
@@ -167,34 +147,28 @@ den empfohlenen Vertrag:
 - **floating:** `install latest`.
 
 Das Bootstrap-Binary wird nach erfolgreicher Installation wieder gelöscht; der
-native Versionsstore und Launcher bleiben erhalten. Auf Core 26 kann der
-offizielle Shell-Installer nicht direkt verwendet werden, weil er `curl` oder
-`wget` im Gast verlangt. Genau deshalb ist der Host-Transfer des
-Bootstrap-Binaries auf Core sinnvoll.
-
-CoreBridge sollte das Binary jedoch in einen Staging-Pfad übertragen und von
-dort mit explizitem Target installieren, statt es erst nach
-`~/.local/bin/claude` zu kopieren:
+native Versionsstore und Launcher bleiben erhalten. Auf Classic Ubuntu 26.10
+stehen `curl` und `bash` nach dem `packages`-Schritt zur Verfügung. Das
+eingebettete Skript ruft deshalb den offiziellen Shell-Installer direkt mit
+`stable` auf:
 
 ```sh
-~/.local/share/claude/bootstrap/claude install <exact-version>
+sudo -u ubuntu -H bash -lc \
+  'curl -fsSL https://claude.ai/install.sh | bash -s stable'
 ```
 
-Der offizielle Installer prüft selbst SHA-256 gegen das Manifest. Für
-CoreBridge ist die zusätzliche Prüfung der detached Manifest-Signatur mit dem
-gepinnten Anthropic-Fingerprint trotzdem die stärkere und reproduzierbarere
-Kette.
+Das ist die aktive Classic-Implementierung. Eine Core-spezifische
+Host-Transfer-Pipeline ist nicht mehr Teil des öffentlichen Workflows.
 
-### 2.6 Lücken in Tests und Bildkonfiguration
+### 2.6 Tests und Bildkonfiguration
 
 Aktuell muss die Test- und Konfigurationslage mitgeplant werden:
 
 - `ImageTests` prüft nur per `Assert.Contains`, ob der erzeugte Text bestimmte
   Strings enthält. Das beweist weder valides YAML noch ein gültiges
   cloud-init-Schema.
-- `VmCycleTests` ruft den Claude-Host-Installer separat direkt nach
-  `vm-create` auf. Der derzeitige manuelle Installationsschritt ist damit als
-  Testimplementierung sichtbar, aber nicht als CLI-Funktion.
+- `CoreBridge.Cli.Tests` führt den öffentlichen CLI-Lifecycle aus; der frühere
+  direkte `VmCycleTests`-Servicefluss ist entfernt.
 - Der Integrationstest erwartet jedes Mal die Ausgabe
   `Prüfsumme bestätigt`. Ein korrekt idempotenter zweiter Lauf, der früh
   zurückkehrt, würde diesen Test dadurch fehlschlagen.
@@ -203,15 +177,15 @@ Aktuell muss die Test- und Konfigurationslage mitgeplant werden:
   `Release`.
 - Es werden weder Rerun/Upgrade noch unterbrochene Übertragung, Installations-
   rollback, Autoupdate-Policy oder postinstallierter Binary-Hash getestet.
-- `ImageBuildConfig` speichert nur Komponenten- und Snap-Namen. Die
-  Host-Install-Scripts, `Classic`, Channels und Revisionsinformationen gehen
-  nicht in die persistierte Build-Konfiguration ein.
+- `ImageBuildConfig` speichert Komponenten, Snaps, Runtime, Cloud-init-Dateiname,
+  Modell-ID und Modell-Digest. Gast-Skriptinhalte werden config-getrieben
+  bei `image-configure` in die YAML geschrieben.
 - `image-build` übergibt ausschließlich `--snap <name>` an `ubuntu-image`.
   Ein in cloud-init konfiguriertes `--classic` kann dadurch beim Custom-Image-
   Build verloren gehen.
-- Das Basis-Modell wird von einem beweglichen `main`-Branch geladen und nur
-  oberflächlich auf `type: model` geprüft. Für reproduzierbare Builds müssen
-  mindestens Quell-URL/Commit und Digest der Modelldatei protokolliert werden.
+- Das Basis-Modell wird von einem beweglichen `main`-Branch geladen und auf
+  Classic-Identität geprüft; Modell-ID und SHA-256 werden im Profil
+  protokolliert.
 - `--force` kann bei einer Neukonfiguration ohne cloud-init-Bedararf eine alte
   generierte `cloud-init.yaml` stehen lassen. `vm-create --image <name>`
   leitet diese alte Datei später automatisch ab und verwendet sie erneut.
@@ -522,8 +496,9 @@ wenn Builds reproduzierbar sein sollen.
 
 - Multipass liefert die Netzkonfiguration. Das generierte cloud-config darf
   keine Interface-, Route- oder DHCP-Konfiguration ersetzen.
-- Host-Artefakte sollten über `vm-put` übertragen werden. Die VM darf nicht
-  eine Rückverbindung zum Host aufbauen, um Provisioning-Material zu holen.
+- Provisioning-Material wird als config-getriebene `write_files`/`runcmd`-YAML
+  übergeben. Die VM baut keine Rückverbindung zum Host auf, um
+  Installationsmaterial zu holen.
 - Falls später Remote-Includes verwendet werden, müssen sie immutable sein,
   ohne Credentials in URL/Header enthalten und anschließend geprüft werden.
 - `write_files` läuft im Network-Stadium vor `users_groups`. Ein Benutzer, auf
@@ -536,11 +511,9 @@ wenn Builds reproduzierbar sein sollen.
 
 ### 3.11 Benutzer, SSH und Locale
 
-`runcmd` und `scripts_user` laufen normalerweise als root. Ein späterer
-cloud-init-basierter Claude-Installer müsste deshalb explizit als Benutzer `ubuntu`
-mit dessen Home arbeiten, beispielsweise über eine sauber quotierte
-`sudo -u ubuntu -H ...`-Form. Das bestehende Host-Transfer-Script vermeidet
-dieses Problem durch den VM-Aufruf als ubuntu.
+`runcmd` und `scripts_user` laufen normalerweise als root. Das eingebettete
+Gast-Skript verwendet deshalb explizit `sudo -u ubuntu -H bash -lc`, damit
+Claude im Benutzer-Home und mit korrekter PATH-Umgebung installiert wird.
 
 `ImageCloudInit` ist an `/home/ubuntu` gekoppelt. Das entspricht dem aktuellen
 Ubuntu-Base, ist aber kein vertraglich erkannter Default User. Ein Custom Model
@@ -581,18 +554,16 @@ Lokale Quellen:
 
 ## 4. Packaging-Optionen
 
-| Option | Ubuntu-Core-Passung | Reproduzierbarkeit | Empfehlung |
+| Option | Classic-Passung | Reproduzierbarkeit | Empfehlung |
 |---|---:|---:|---|
-| Signiertes natives Binary per Host-Transfer | gut | nach Version/Signatur/Pin gut | **Sofortiger CoreBridge-Weg** |
+| Offizielles `claude.ai/install.sh` per cloud-init `runcmd` | gut | mit `stable`/späterer Pin-Policy | **Aktiver Classic-Weg** |
 | Binary über `write_files` | technisch möglich, ungeeignet für ~238 MB | aufwendig | **Nein** |
-| Selbstgebautes `.deb` | schlecht für immutable Systempfade | gut, aber ohne Nutzen gegenüber nativem Installer | **Nein, solange Core das Ziel ist** |
-| Anthropics offizielle apt-/`.deb`-Quelle | für klassisches Ubuntu gut | gut | **Bevorzugt, falls klassisches Ubuntu das Ziel ist** |
-| Bestehender Community-Claude-Snap | Snap-Modell passt grundsätzlich | gut mit Revision/Pin | Aktueller Startnachweis fehlt; nicht Default |
-| CoreBridge-eigener Snap | gut, aber confinement/update-autorität komplex | möglich | Nur für breitere Paketstrategie neu bewerten |
+| Core-only Host-Transfer | für Classic unnötig | gut, aber nicht mehr aktiv | **Veraltet** |
+| CoreBridge-eigener Snap | unnötig | möglich | Nur für breitere Paketstrategie neu bewerten |
 | Custom Image | langfristig gut | gut mit exakten Revisionen | Windows-Import blockiert aktuell |
 | Gestoppte Template-VM + `clone` | gut | gut bei unveränderlicher, protokollierter Vorlage | **Spätere Optimierung nach T12/T13** |
 
-### 4.1 Warum kein eigenes `.deb` auf Ubuntu Core
+### 4.1 Warum kein eigenes `.deb` auf Classic Ubuntu
 
 Ein selbstgebautes Paket würde:
 
@@ -728,10 +699,10 @@ nicht als Default für Images oder Templates.
 10. **Protokollieren:** Version, Digest, Quelle, Signaturkey, Zeitpunkt und
     Installerstatus ablegen.
 
-Ein zukünftiger CoreBridge-Befehl sollte diese Phase explizit auslösen, etwa
-`component-install` oder als Teil des späteren Autobridge-Laufs. Der bloße
-Eintrag `HostInstallScript` in der Component-Konfiguration ist derzeit nur
-Metadaten.
+Ein zukünftiger CoreBridge-Befehl kann diese Phase später als
+`component-status` oder im Autobridge-Lauf auswerten. Der aktuelle
+Cloud-init-Weg schreibt und startet das Gast-Skript direkt; es gibt keine
+Host-Installationsphase.
 
 ## 6. Empfohlene Härtung von `ImageCloudInit`
 
@@ -780,7 +751,7 @@ Nach Freigabe von T12/T13 passt am besten Variante B aus
 `PLAN_TEMPLATE_FACTORY.md`:
 
 - eine gestoppte Template-VM je benötigtem Komponenten-Set,
-- Claude vorab über den gehärteten Host-Transfer installiert,
+- Claude bereits über die cloud-init-Postcondition als verfügbar geprüft,
 - native Updates im Template-Modus deaktiviert,
 - keine Credentials, kein Projekt-Sync und kein Agent-State im Template,
 - Upgrade durch kontrollierten Neuaufbau vom sauberen Template,
@@ -790,67 +761,53 @@ Ein Template ist dabei kein Ersatz für die Artifact-Provenienz. Die Vorlage
 sollte auf eine konkrete Version und einen Binary-Digest zurückgeführt werden
 können.
 
-## 8. Entscheidungsbedarf vor der Implementierung
+## 8. Entscheidung: Classic Ubuntu 26.10 Edge
 
-### Frage A: Zielbetriebssystem
+### Zielbetriebssystem
 
-- **Ubuntu Core 26:** gehärtigter nativer Host-Transfer; kein `.deb`.
-- **Klassisches Ubuntu 26.04:** offizielle signierte apt-Quelle; den
-  CoreBridge-Sonderpfad reduzieren oder entfernen.
+- **Aktiv:** klassisches Ubuntu 26.10 Edge.
+- Modell: `ubuntu-classic-2610-amd64-dangerous.model`.
+- Multipass-Runtime: `daily:26.10`.
+- `26.04` wird ausschließlich als Werkzeug-Image der Build-VM verwendet.
+- Die alten Core-26-Aussagen bleiben historische Experimente und werden nicht
+  auf Classic übertragen.
 
-Repository-Befunde sind widersprüchlich:
+### Reproduzierbarkeit versus Autoupdate
 
-- `src/CoreBridge.Cli/appsettings.json` und die Integrationstests nennen
-  `core26`,
-- `AGENTS.md` beschreibt eine uncommittete Umstellung auf
-  `ubuntu-classic-2610-amd64-dangerous.model`.
+- Profil und Runtime werden als `daily:26.10`/Modell-Digest persistiert;
+  Edge-Inputs können sich bewegen und werden bei jedem `image-configure`
+  erneut validiert.
+- Eine `pinned`-/`managed-stable`-Claude-Policy ist noch nicht als separates
+  Vertragsmodell implementiert.
 
-Diese Entscheidung muss vor einem Implementierungsplan feststehen.
+### Eigener Snap
 
-### Frage B: Reproduzierbarkeit versus Autoupdate
-
-- Template/Image: exakte Version und Updates deaktiviert.
-- Interaktive Task-VM: managed-stable mit Hintergrundupdates erlaubt.
-
-### Frage C: Eigener Snap
-
-Ein eigener Snap wäre erst zu evaluieren, wenn es neben Claude weitere
-Core-only Binaries gibt, die gemeinsam confinement-, update- und provenance-
-Policies benötigen. Nur für ein Binary ist der Aufbau zu groß.
+Ein eigener Snap bleibt zurückgestellt. Für Classic Ubuntu wird Claude
+standardmäßig über das eingebettete Gast-Skript und cloud-init-Pakete
+provisioniert; der `claude-code`-Snap ist kein Default.
 
 ## 9. Empfohlene Reihenfolge für eine spätere Umsetzung
 
-### Phase 0 — Entscheidung
+### Phase 0 — Entscheidung (erledigt)
 
-1. Ubuntu Core 26 oder klassisches Ubuntu 26.04 verbindlich festlegen.
-2. `pinned` oder `managed-stable` als Default-Policy festlegen.
-3. Entscheiden, ob `image-configure` nur ein Rezept bleibt oder selbst ein
-   installierbarer Komponentenplan wird. Beides sollte nicht gleichzeitig gelten.
+1. Classic Ubuntu 26.10 Edge als Zielbasis festlegen.
+2. `image-configure` als Profil-/Rezeptschritt und `vm-create` als
+   Launch-Orchestrator verwenden.
+3. Gast-Installer über `write_files`/`runcmd` in cloud-init ausführen.
 
-### Phase 1 — Hostseitige Claude-Artefaktpipeline
+### Phase 1 — Gast-Cloud-init-Provisionierung
 
-1. Komponentenmodell um Installer-Art, Plattform, Version/Channel,
-   Update-Policy und erwartete Digest-Provenance erweitern.
-2. Anthropic-Key und Fingerabdruck pinnen.
-3. Signiertes Manifest, Version und Binary-Digest validieren.
-4. Versionierten, atomaren Artifact-Store unterhalb `Images:StoreRoot`
-   implementieren.
-5. `install-claude.ps1` durch eine Ersteinstieg plus Idempotenz/Upgrade/
-   Fehlerbehandlung härten.
-6. PowerShell-Parse- und Host-Unit-Tests ohne Multipass ergänzen.
-7. Den Debug/Release-Fehler im Integrationstest korrigieren.
+1. Paketliste und Skriptinhalt config-getrieben modellieren.
+2. `write_files`-Pfad, Rechte, Ownership und `runcmd`-Aufruf prüfen.
+3. `claude --version` und `/var/lib/corebridge/claude.ready` als
+   Postconditions auswerten.
+4. Idempotenz, Fehlerstatus und cloud-init-Health dokumentieren.
 
-### Phase 2 — Ausführbare CoreBridge-Operation
+### Phase 2 — Profil und Runtime
 
-1. Eine explizite Komponenteninstallationsphase einführen; ein reiner
-   `HostInstallScript`-Metadatenwert darf keine Installation vortäuschen.
-2. VM-Staging, Guest-Hash, native `install`-Phase, Postcondition und
-   Installation-Metadaten umsetzen.
-3. Erfolg an `component-install` beziehungsweise den späteren Autobridge
-   zurückgeben.
-4. `pinned` setzt `DISABLE_UPDATES=1` erst für den verwalteten Runtime-
-   Kontext nach der Erstinstallation; `managed-stable` erlaubt Claude-Updates
-   und speichert den beobachteten Stand.
+1. Modell-ID und SHA-256 im Profil persistieren.
+2. `daily:26.10` und Classic-Modell gemeinsam verwalten.
+3. Keine stillen Fallbacks auf `26.04` oder `core26` einbauen.
 
 ### Phase 3 — Cloud-init-Härtung und Health-Vertrag
 
@@ -904,27 +861,28 @@ Die Recherche ist abgeschlossen:
 
 Validiert wurde:
 
-- `scripts\components\install-claude.ps1` lässt sich mit dem PowerShell-Parser
-  fehlerfrei parsen.
+- `scripts/components/install-claude.sh` wird in die generierte cloud-init-YAML
+  eingebettet; die Datei wird nicht separat vom Host gestartet.
 - `CLOUD-INIT.md` besteht `git diff --check`.
-- Es wurde kein Multipass-Kommando direkt aufgerufen.
-- Es wurde kein neues VM-Experiment gestartet oder in `EXPERIMENT_LOG.md`
-  protokolliert.
+- Der CLI-first-Prozesslauf verwendet `DOTNET_ENVIRONMENT=Development` und
+  `appsettings.Development.json` (`Images:StoreRoot=artifacts`).
+- Es wurde kein Multipass-Kommando direkt aus der Agent-Shell aufgerufen.
 
-Offen bleiben bewusst Entscheidungen beziehungsweise freizugebende
-Experimente, nicht mehr die Dokumentationsrecherche:
+Offen bleiben bewusst spätere Entscheidungen beziehungsweise freizugebende
+Experimente:
 
-1. Ubuntu Core 26 oder klassisches Ubuntu 26.04 als Zielbasis.
-2. `pinned` oder `managed-stable` als Default-Update-Policy.
-3. T12/T13 für Template/Snapshot/Clone-Semantik.
-4. Ein eventuelles gezieltes Core-26-Experiment für den vollständigen
-   generierten cloud-init-Pfad.
+1. `pinned` oder `managed-stable` als Default-Update-Policy.
+2. T12/T13 für Template/Snapshot/Clone-Semantik.
+3. Classic-Edge-Messungen für Latenz, Cloud-init-Health und Komponenten-
+   Postconditions; historische Core-Messungen dürfen nicht als Classic-Werte
+   verwendet werden.
+4. Import eines gebauten Classic-`.img` über den Windows-https-Workaround.
 
 ## 11. Quellen
 
 ### CoreBridge
 
-- `scripts/components/install-claude.ps1`
+- `scripts/components/install-claude.sh`
 - `src/CoreBridge.Cli/appsettings.json`
 - `src/CoreBridge.Core/Config/AppConfig.cs`
 - `src/CoreBridge.Core/Images/ImageCloudInit.cs`

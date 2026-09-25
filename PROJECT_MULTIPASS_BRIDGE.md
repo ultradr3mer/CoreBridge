@@ -131,7 +131,7 @@ Inhalte zu lang für inline
 
 ### 1. EXECUTION SHORTCUT
 ---
-TODO: So einen Shortcut braucehn wir wieder, Sobald es ans ausführen geht solltest du dies anpassen/Übernehmen
+Historical note: the `cb` shortcut was implemented later; see the current `scripts/cb.ps1` and `AGENT.md`.
 Ich denke anstatt "sb" "cb" zur unterscheidung, und es braucht eine möglichkeit schnell commands zu debuggen also run aber mit debugger attched. 
 
 
@@ -176,7 +176,7 @@ function sb {
             dotnet run --project $tuiProject
         }
         else {
-            # TODO: noch keine installierte TUI-Variante - siehe TODO.md,
+            # Historical note: the TUI remains deferred; see the current roadmap in AGENT.md.
             # Abschnitt "Echte Installation fuer sandbox-bridge einplanen".
             sandbox-bridge
         }

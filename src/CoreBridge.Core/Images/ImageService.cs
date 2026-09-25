@@ -1,4 +1,6 @@
 using System.Net.Http;
+using System.Security.Cryptography;
+using System.Text;
 using CoreBridge.Core.Config;
 using CoreBridge.Core.Vm;
 
@@ -9,7 +11,8 @@ public sealed record ImageConfigureResult(
     string ModelPath,
     string ConfigPath,
     string? CloudInitPath,
-    string[] Snaps);
+    string[] Snaps,
+    string RuntimeImage);
 
 public sealed record ImageBuildResult(string Name, string ImagePath, long DurationMs, string BuildVmName);
 
@@ -23,11 +26,11 @@ public sealed record ImageListEntry(
 public sealed record ImageDeleteResult(string Name, string? ModelDir, string? ImageFile);
 
 /// <summary>
-/// Custom-Image-Pipeline: `Configure` lädt das Basis-Modell (Canonical dangerous,
-/// unverändert signiert), schreibt Build-Config + generierte cloud-init unter
-/// %LOCALAPPDATA%\CoreBridge\models; `Build` backt in einer klassischen Ubuntu-Bau-VM
-/// mit `ubuntu-image --snap` die Store-Snaps ein und holt die pc.img auf den Host.
-/// Alle Komponenten-Definitionen und Bau-Defaults kommen aus der AppConfig.
+/// Custom-Image-Pipeline: `Configure` lädt/validiert das Classic-Modell,
+/// schreibt Build-Config + generierte cloud-init unterhalb des konfigurierten
+/// Image-Stores; `Build` backt in einer klassischen Ubuntu-Bau-VM mit
+/// `ubuntu-image --snap` die Store-Snaps ein. Alle Komponenten-Definitionen
+/// und Bau-Defaults kommen aus der AppConfig.
 /// </summary>
 public sealed class ImageService
 {
@@ -42,7 +45,13 @@ public sealed class ImageService
         _http = http ?? new HttpClient();
     }
 
-    public ImageConfigureResult Configure(string name, string[] components, string? baseUrl = null, string? buildTo = null, bool force = false)
+    public ImageConfigureResult Configure(
+        string name,
+        string[] components,
+        string? baseUrl = null,
+        string? buildTo = null,
+        bool force = false,
+        string? runtimeImage = null)
     {
         if (string.IsNullOrWhiteSpace(name))
         {
@@ -66,6 +75,13 @@ public sealed class ImageService
 
         var snaps = ImageComponents.ResolveSnaps(_config, trimmed);
         var url = baseUrl ?? _config.DefaultModelUrl;
+        var resolvedRuntimeImage = string.IsNullOrWhiteSpace(runtimeImage)
+            ? _config.DefaultRuntimeImage
+            : runtimeImage.Trim();
+        if (string.IsNullOrWhiteSpace(resolvedRuntimeImage))
+        {
+            throw new MultipassException("Runtime-Image fehlt (Images:DefaultRuntimeImage).");
+        }
 
         Directory.CreateDirectory(ImageStore.ModelDir(name));
 
@@ -79,25 +95,57 @@ public sealed class ImageService
             throw new MultipassException($"Basis-Modell konnte nicht geladen werden: {url}", exception);
         }
 
-        if (string.IsNullOrWhiteSpace(model) || !model.StartsWith("type: model", StringComparison.Ordinal))
+        ModelDescriptor descriptor;
+        try
+        {
+            ModelDescriptorParser.ValidateClassic(model);
+            descriptor = ModelDescriptorParser.Parse(model);
+        }
+        catch (InvalidDataException exception)
         {
             throw new MultipassException(
-                $"Antwort von {url} sieht nicht nach einer signierten Modell-Assertion aus — Download abgebrochen.");
+                $"Antwort von {url} ist kein gültiges Classic-Ubuntu dangerous-Modell — Download abgebrochen.",
+                exception);
         }
 
+        var modelSha256 = Convert.ToHexString(
+            SHA256.HashData(Encoding.UTF8.GetBytes(model))).ToLowerInvariant();
         File.WriteAllText(ImageStore.ModelFile(name), model);
 
-        var buildConfig = new ImageBuildConfig(name, url, trimmed, snaps, buildTo);
-        File.WriteAllText(ImageStore.ConfigFile(name), buildConfig.ToJson());
-
         string? cloudInitPath = null;
+        var generatedCloudInitPath = ImageStore.CloudInitFile(name);
         if (ImageCloudInit.NeedsCloudInit(_config, trimmed))
         {
-            cloudInitPath = ImageStore.CloudInitFile(name);
+            cloudInitPath = generatedCloudInitPath;
             File.WriteAllText(cloudInitPath, ImageCloudInit.Generate(name, _config, trimmed));
         }
+        else if (File.Exists(generatedCloudInitPath))
+        {
+            // Bei --force darf kein altes Profil-Cloud-init unbemerkt
+            // an einem neuen Profil hängen bleiben.
+            File.Delete(generatedCloudInitPath);
+        }
 
-        return new ImageConfigureResult(name, ImageStore.ModelFile(name), ImageStore.ConfigFile(name), cloudInitPath, snaps);
+        var cloudInitFile = cloudInitPath is null ? null : Path.GetFileName(cloudInitPath);
+        var buildConfig = new ImageBuildConfig(
+            name,
+            url,
+            trimmed,
+            snaps,
+            buildTo,
+            resolvedRuntimeImage,
+            cloudInitFile,
+            ModelId: descriptor.Model,
+            ModelSha256: modelSha256);
+        File.WriteAllText(ImageStore.ConfigFile(name), buildConfig.ToJson());
+
+        return new ImageConfigureResult(
+            name,
+            ImageStore.ModelFile(name),
+            ImageStore.ConfigFile(name),
+            cloudInitPath,
+            snaps,
+            resolvedRuntimeImage);
     }
 
     public ImageBuildResult Build(

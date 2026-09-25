@@ -65,4 +65,17 @@ public static class ImageStore
     public static string CloudInitFile(string name) => Path.Combine(ModelDir(name), "cloud-init.yaml");
 
     public static string ImageFile(string name) => Path.Combine(ImagesRoot, $"{name}.img");
+
+    /// <summary>
+    /// Löst einen konfigurierten repo-relativen Pfad auf. Eingebettete Gast-Skripte
+    /// und optionale Testressourcen werden dadurch unabhängig vom Arbeitsverzeichnis
+    /// des aufrufenden Prozesses gefunden.
+    /// </summary>
+    public static string ResolvePath(string path)
+    {
+        var expanded = Environment.ExpandEnvironmentVariables(path);
+        return Path.GetFullPath(Path.IsPathRooted(expanded)
+            ? expanded
+            : Path.Combine(RepoRoot(), expanded));
+    }
 }

@@ -1,50 +1,55 @@
 using System.Text;
 using CoreBridge.Core.Config;
+using CoreBridge.Core.Vm;
 
 namespace CoreBridge.Core.Images;
 
 /// <summary>
-/// Erzeugt die cloud-init-YAML für den Nicht-Snap-Rest der Komponenten —
-/// vollständig config-getrieben (Symlinks, ProfileExports, VendoredLibs aus
-/// appsettings.json). Die Snaps selbst sind bereits per `ubuntu-image --snap`
-/// ins Image gebacken.
+/// Erzeugt die cloud-init-YAML für die Provisionierung im Gast.
+/// Komponenten-Skripte werden als Dateien mit <c>write_files</c> eingebettet
+/// und anschließend über <c>runcmd</c> ausgeführt. Der Host führt sie nicht
+/// separat aus.
 /// </summary>
 public static class ImageCloudInit
 {
     private const string Home = "/home/ubuntu";
 
-    /// <summary>Immer true, solange Komponenten gewählt sind — die Snaps selbst
-    /// werden inzwischen ebenfalls per cloud-init installiert (root), nicht nur
-    /// der Nicht-Snap-Rest.</summary>
     public static bool NeedsCloudInit(ImagesConfig config, IEnumerable<string> components)
     {
-        return components.Select(c => c.Trim()).Any(c => c.Length > 0);
+        return ImageComponents.Resolve(config, components).Any(component => component.NeedsCloudInit);
     }
 
     public static string Generate(string name, ImagesConfig config, IEnumerable<string> components)
     {
-        var selected = components
-            .Select(c => c.Trim())
-            .Where(c => config.Components.ContainsKey(c))
-            .Select(c => config.Components[c])
-            .ToArray();
-
+        var selected = ImageComponents.Resolve(config, components);
         var yaml = new StringBuilder();
         yaml.AppendLine("#cloud-config");
         yaml.AppendLine($"# Generiert von `cb image-configure --name {name}`.");
-        yaml.AppendLine("# Vollständiger Bootstrap beim Launch (cloud-init läuft als root, kein sudo nötig):");
-        yaml.AppendLine("#   cb vm-create --name <vm> --cloud-init <diese-datei>");
-        yaml.AppendLine("# (Image-Bau via `image-build` optional — Snaps sind hier ohnehin enthalten und");
-        yaml.AppendLine("#  eine gebackene Version wäre idempotent.)");
+        yaml.AppendLine("# Gast-Provisionierung; Komponenten-Skripte werden als Dateien eingebettet.");
+
+        var packages = selected
+            .SelectMany(component => component.CloudInitPackages)
+            .Where(package => !string.IsNullOrWhiteSpace(package))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        if (packages.Length > 0)
+        {
+            yaml.AppendLine("package_update: true");
+            yaml.AppendLine("packages:");
+            foreach (var package in packages)
+            {
+                yaml.AppendLine($"  - {package}");
+            }
+        }
 
         var snaps = selected
-            .Select(c => (c.Snap, c.Classic))
-            .DistinctBy(s => s.Snap, StringComparer.OrdinalIgnoreCase)
+            .Where(component => !string.IsNullOrWhiteSpace(component.Snap))
+            .Select(component => (Snap: component.Snap!, Classic: component.Classic))
+            .DistinctBy(snap => snap.Snap, StringComparer.OrdinalIgnoreCase)
             .ToArray();
         if (snaps.Length > 0)
         {
             yaml.AppendLine();
-            yaml.AppendLine("# Store-Snaps (als root installiert; --classic wo nötig)");
             yaml.AppendLine("snap:");
             yaml.AppendLine("  commands:");
             foreach (var (snap, classic) in snaps)
@@ -53,78 +58,126 @@ public static class ImageCloudInit
             }
         }
 
-        var exports = selected.SelectMany(c => c.ProfileExports).Distinct().ToArray();
-        if (exports.Length > 0)
+        var exports = selected.SelectMany(component => component.ProfileExports)
+            .Where(export => !string.IsNullOrWhiteSpace(export))
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+        var scripts = selected
+            .Where(component => !string.IsNullOrWhiteSpace(component.CloudInitScript))
+            .ToArray();
+        if (exports.Length > 0 || scripts.Length > 0)
         {
             yaml.AppendLine();
-            yaml.AppendLine("# .profile-Erweiterungen");
             yaml.AppendLine("write_files:");
-            yaml.AppendLine($"  - path: {Home}/.profile");
-            yaml.AppendLine("    append: true");
-            yaml.AppendLine("    owner: ubuntu:ubuntu");
-            yaml.AppendLine("    content: |");
-            foreach (var export in exports)
+            if (exports.Length > 0)
             {
-                yaml.AppendLine($"      export {export}");
+                yaml.AppendLine($"  - path: {Home}/.profile");
+                yaml.AppendLine("    append: true");
+                yaml.AppendLine("    owner: ubuntu:ubuntu");
+                yaml.AppendLine("    content: |");
+                foreach (var export in exports)
+                {
+                    yaml.AppendLine($"      export {export}");
+                }
+            }
+
+            foreach (var component in scripts)
+            {
+                var scriptPath = component.CloudInitScript!;
+                var installPath = component.CloudInitInstallPath;
+                if (string.IsNullOrWhiteSpace(installPath) || !installPath.StartsWith('/'))
+                {
+                    throw new MultipassException(
+                        $"CloudInitInstallPath für '{scriptPath}' muss ein absoluter Unix-Pfad sein.");
+                }
+
+                var sourcePath = ImageStore.ResolvePath(scriptPath);
+                if (!File.Exists(sourcePath))
+                {
+                    throw new MultipassException($"Cloud-init-Skript fehlt: {sourcePath}");
+                }
+
+                yaml.AppendLine($"  - path: {installPath}");
+                yaml.AppendLine("    permissions: \"0755\"");
+                yaml.AppendLine("    owner: root:root");
+                yaml.AppendLine("    content: |");
+                foreach (var line in File.ReadAllText(sourcePath).Replace("\r\n", "\n").Split('\n'))
+                {
+                    yaml.AppendLine($"      {line}");
+                }
             }
         }
 
         var runCmd = new List<string>();
-        foreach (var symlink in selected.SelectMany(c => c.Symlinks).Distinct())
+        foreach (var symlink in selected.SelectMany(component => component.Symlinks).Distinct(StringComparer.Ordinal))
         {
             var parts = symlink.Split('|', 2);
             if (parts.Length != 2)
             {
-                throw new CoreBridge.Core.Vm.MultipassException(
+                throw new MultipassException(
                     $"Ungültiger Symlink in der Config (Format 'quelle|ziel'): {symlink}");
             }
 
             var (source, target) = (parts[0], parts[1]);
-            var targetDir = System.IO.Path.GetDirectoryName(target)!.Replace('\\', '/');
-            if (targetDir.Length > 0)
+            var targetDir = Path.GetDirectoryName(target)?.Replace('\\', '/');
+            if (!string.IsNullOrEmpty(targetDir))
             {
-                runCmd.Add($"mkdir -p {targetDir}");
+                runCmd.Add($"install -d -o ubuntu -g ubuntu {targetDir}");
             }
 
             runCmd.Add($"ln -sf {source} {target}");
+            runCmd.Add($"chown -h ubuntu:ubuntu {target}");
         }
 
-        foreach (var vendored in selected.Select(c => c.VendoredLibs).Where(v => v is not null))
+        foreach (var vendored in selected.Select(component => component.VendoredLibs).Where(value => value is not null))
         {
-            var packages = string.Join(" ", vendored!.Packages.Select(p => $"\"{p}\""));
+            var packagesText = string.Join(" ", vendored!.Packages.Select(package => $"\"{package}\""));
+            runCmd.Add($"install -d -o ubuntu -g ubuntu {vendored.Destination}");
             runCmd.Add(string.Join('\n',
-                $"ldd {vendored.LddTarget} 2>/dev/null | grep -q \"not found\" || exit 0",
+                "set -e",
+                $"if ! ldd {vendored.LddTarget} 2>/dev/null | grep -q \"not found\"; then exit 0; fi",
                 $"cd {Home} && rm -rf vm-libs && mkdir vm-libs && cd vm-libs",
-                $"for p in {packages}; do apt-get download \"$p\" 2>/dev/null || echo \"SKIP $p\"; done",
+                $"for p in {packagesText}; do apt-get download \"$p\"; done",
                 "for d in *.deb; do dpkg -x \"$d\" \"ex-$d\"; done",
-                $"cp ex-*.deb/{vendored.ExtractGlob} {vendored.Destination}/ 2>/dev/null",
+                $"cp ex-*.deb/{vendored.ExtractGlob} {vendored.Destination}/",
+                $"chown -R ubuntu:ubuntu {vendored.Destination}",
                 $"cd {Home} && rm -rf vm-libs"));
         }
 
-        if (runCmd.Count > 0)
+        var scriptCommands = scripts
+            .Select(component => component.CloudInitInstallPath!)
+            .ToArray();
+        if (runCmd.Count > 0 || scriptCommands.Length > 0)
         {
-            // Core26 legt cloud-init-Pfade als root an — das ganze $HOME zurückgeben,
-            // sonst können Snaps als user ubuntu kein ~/snap anlegen.
-            runCmd.Add($"chown -R ubuntu:ubuntu {Home}");
             yaml.AppendLine();
             yaml.AppendLine("runcmd:");
             foreach (var command in runCmd)
             {
-                if (command.Contains('\n'))
-                {
-                    yaml.AppendLine("  - |");
-                    foreach (var line in command.Split('\n'))
-                    {
-                        yaml.AppendLine($"    {line}");
-                    }
-                }
-                else
-                {
-                    yaml.AppendLine($"  - {command}");
-                }
+                AppendRunCommand(yaml, command);
+            }
+
+            foreach (var command in scriptCommands)
+            {
+                yaml.AppendLine($"  - [{command}]");
             }
         }
 
         return yaml.ToString();
+    }
+
+    private static void AppendRunCommand(StringBuilder yaml, string command)
+    {
+        if (command.Contains('\n'))
+        {
+            yaml.AppendLine("  - |");
+            foreach (var line in command.Split('\n'))
+            {
+                yaml.AppendLine($"    {line}");
+            }
+        }
+        else
+        {
+            yaml.AppendLine($"  - {command}");
+        }
     }
 }

@@ -27,7 +27,23 @@ ein Ergebnis.
   Inhaltsbasis); lokale Multipass-Doku als blobless Clone unter `refs/multipass`
   (sparse auf `docs/`, gegitignored).
 
-## Aktueller Stand (17.09.2026) — Plan §10 laufend gegen den Repo-Zustand prüfen
+## Aktueller Stand (25.09.2026) — Plan §10 laufend gegen den Repo-Zustand prüfen
+
+### Verbindliche Zielentscheidung: Classic Ubuntu 26.10 Edge
+
+- Neues Standardmodell: `ubuntu-classic-2610-amd64-dangerous.model`
+  (`https://raw.githubusercontent.com/canonical/models/main/ubuntu-classic-2610-amd64-dangerous.model`).
+- Runtime-Image für normale VMs und Profile: `daily:26.10`.
+- `26.04` in `Images:Build:Image` bleibt ausschließlich das Werkzeug-Image
+  der klassischen Ubuntu-Bau-VM; es ist kein Fallback für die Ziel-Runtime.
+- `core26` und die alten Core-Messungen bleiben historische Experimentdaten,
+  keine Defaults für neue Implementierungen oder Tests.
+- `image-configure` erzeugt ein Profil; `vm-create --image <profil>` löst
+  Runtime und Cloud-init auf. Claude wird standardmäßig über ein in die
+  cloud-init-YAML eingebettetes Gast-Skript (`scripts/components/install-claude.sh`)
+  installiert, nicht über einen Core-only Claude-Snap.
+- `CLOUD-INIT.md` beschreibt die Gast-Provisionierung; es gibt keine
+  Host-Installationsschritte im aktuellen Classic-Workflow.
 
 - Phase A steht: `CoreBridge.slnx` (SDK 10 erzeugt XML-Solution- statt `.sln`),
   `src/CoreBridge.Core` (`Vm/MultipassCli`, `Vm/Doctor`, `Vm/VmService`), `src/CoreBridge.Cli`
@@ -38,11 +54,9 @@ ein Ergebnis.
   (Datei Host→VM). `cb`-Shortcut liegt als PowerShell-Funktion im Profil
   (absoluter Pfad, funktioniert aus jedem Verzeichnis; neues Fenster oder
   `. $PROFILE` nötig).
-- Claude Code läuft als Native-Binary in einer core26-VM (kein npm/curl nötig —
-  Core hat keines von beidem): Host lädt Binary von downloads.claude.ai,
-  `vm-put` + `chmod +x`, Login-Shell findet es über ~/.local/bin. Das ist der
-  Bootstrap-Pfad für die Autobridge (Phase D).
-- **.NET SDK 10 läuft auf core26** (bewiesen inkl. `dotnet new/run` + NuGet-Restore):
+- Claude Code lief historisch als Native-Binary in einer core26-VM (kein
+  npm/curl nötig); das ist keine aktive Classic-Installationsanweisung.
+- **.NET SDK 10 auf core26** (historische Core-Evidenz, inkl. `dotnet new/run` + NuGet-Restore):
   `snap install dotnet-sdk-100` (classic Snap — geht auf Core 26 DOCH), Symlink
   nach `~/.local/bin` (/usr/local ist read-only), vendored Runtime-Libs aus
   Ubuntu-debs nach `~/.local/lib` + `LD_LIBRARY_PATH`, `DOTNET_ROOT` in
@@ -70,50 +84,31 @@ ein Ergebnis.
   dem Papierkorb übernehmen kann (T03-Rerun würde es klären).
 - Multipass 1.16.3 liegt im **User-PATH** (`C:\Program Files\Multipass\bin`), NICHT
   machine-weit → Locator-Stufe 2 (PATH) greift bereits.
-- **Custom-Image-Pipeline als CLI-Verbs (17.09.2026):**
-  - `cb image-configure --name <n> [-c claude,dotnet,opencode,python] [--model-url <url>]`
-    lädt das Basis-Modell (Canonical `ubuntu-core-26-amd64-dangerous.model`, signiert,
-    unverändert — Custom-Snaps gehen als `ubuntu-image --snap`-Flags, kein Selbst-Signieren
-    nötig),     schreibt `<n>.build.json` + (falls Komponenten Nicht-Snap-Rest haben) eine
-    cloud-init-YAML nach `%LOCALAPPDATA%\CoreBridge\models\<n>\`. Überschreibt einen
-    bereits konfigurierten Namen nur mit `--force` (sonst MultipassException mit
-    Hinweis auf `image-delete`).
-  - `cb image-build --name <n>` macht, was früher `scripts/build-coreimage.ps1` tat:
-    Bau-VM (Default aus Config) + `ubuntu-image snap` + `--snap <store-snap>` pro
-    Komponente + `vm-get` der pc.img nach `%LOCALAPPDATA%\CoreBridge\images\<n>.img`.
-    `build-coreimage.ps1` ist damit ersetzt (kann entfallen, sobald image-build
-    einmal gelaufen ist — noch NICHT end-to-end verifiziert).
-  - **Konfiguration statt Hardcoding (Leitsatz 6 umgesetzt):** alle Komponenten-
-    Definitionen (Snap-Name, Symlinks, .profile-Exports, vendored Libs mit ldd-Guard)
-    und Bau-Defaults stehen in `src/CoreBridge.Cli/appsettings.json`, gebunden über
-    `ConfigurationBuilder` (appsettings.json → appsettings.local.json (gitignored)
-    → Env `Images__…`) auf `AppConfig` in `CoreBridge.Core/Config/`. Neue Komponente
-    = Config-Eintrag, kein Code. Keine Passwörter in der Config (Regel bleibt).
-  - Nicht-Snap-Rest (dotnet/python-Symlinks, DOTNET_ROOT/LD_LIBRARY_PATH, vendored
-    Libs, Claude-Binary-Modus) läuft über die generierte cloud-init, die beim
-    `vm-create --cloud-init` mitgegeben wird. `vm-create` hat dafür `--cloud-init`.
-  - `bootstrap-agent-vm.ps1` bleibt bis zur Verifikation als Fallback; danach
-    kann es auf den Claude-Binary-Modus reduziert oder entfernt werden.
-- **WIP/offene Fäden (17.09.2026):**
-  (a) ENTSCHIEDEN (Nutzer, 17.09.2026): Snap `claude-code` ist der DEFAULT-Weg
-  (`bootstrap-agent-vm.ps1 -ClaudeInstallMode snap`). Publisher `pfsmorigo*`
-  ist Community/unverifiziert, aber das Snap existiert seit Juli 2026 und wird
-  gepflegt → vom Nutzer als safe eingestuft. Binary von downloads.claude.ai
-  (Checksum-geprüft) bleibt als `-ClaudeInstallMode binary` verfügbar.
-  Snap-Installation selbst noch nicht end-to-end verifiziert (läuft über das
-  Skript auf einer VM, nicht in Agent-Shell).
-  (b) Custom-Image-Import: Ausweg A (https-Workaround, 1× UAC für Zertifikat) oder
-  B (parken + Upstream-Bug melden) — wartet auf Nutzerentscheidung.
-  (c) `opencode` UND `python` als bootstrap-agent-vm-Komponenten implementiert
-  (`-Components opencode,python`):
-  - opencode: Store-Snap, Publisher **Ubuntu verified** (im Gegensatz zum
-    Claude-Snap), latest/stable 1.18.27, `--classic`.
-  - python: Snap `python3-alt` (Publisher Muqtadir, Community/unverifiziert;
-    letzte Stable 1.1.0 von Dez 2024) → Python 3.14 als `python3-alt.3-14`,
-    pip als `python3-alt.pip3-14`; Symlinks `python`/`pip` nach `~/.local/bin`.
-  End-to-end noch nicht verifiziert.
-  (d) `cbx-t11-build2` läuft noch (Bau-Werkzeug, Wegwerf); 6 cbx-VMs liegen im
-  Multipass-Papierkorb und belegen Platz (purge tabu für Agenten).
+- **Custom-Image-Pipeline als CLI-Verbs (25.09.2026):**
+  - `cb image-configure --name <n> [-c claude,dotnet,opencode,python] [--model-url <url>] [--runtime-image <image>]`
+    lädt/validiert das Classic-Modell
+    (`ubuntu-classic-2610-amd64-dangerous.model`), schreibt `<n>.build.json`
+    mit Runtime `daily:26.10` und erzeugt cloud-init für Gast-Komponenten.
+  - `cb image-build --name <n>` backt weiterhin Store-Snaps in der
+    26.04-Bau-VM; der Import des fertigen `.img` unter Windows bleibt offen.
+  - Komponentendefinitionen (Pakete, Snap-Name, Cloud-init-Skript,
+    Symlinks, `.profile`-Exports, vendored Libs) stehen in
+    `src/CoreBridge.Cli/appsettings.json`; neue Komponenten benötigen keinen
+    Host-Code.
+  - Claude wird als `scripts/components/install-claude.sh` in die generierte
+    cloud-init-YAML eingebettet und per `runcmd` im Gast ausgeführt.
+  - `bootstrap-agent-vm.ps1` ist kein notwendiger Schritt des öffentlichen
+    CLI-first-Workflows.
+- **WIP/offene Fäden (25.09.2026):**
+  (a) Classic-26.10-Edge: Modell- und Runtime-Inputs können sich bewegen;
+  `image-configure` validiert und persistiert den jeweils geladenen
+  Modell-Digest. `pinned` versus `managed-stable` für Claude ist noch offen.
+  (b) Custom-Image-Import: https-Workaround oder Upstream-Bugfix bleibt offen.
+  (c) `opencode`/`python` und der .NET-Snap bleiben als Classic-Gast-
+  Provisionierung zu validieren; die alte Core-spezifische Begründung darf
+  nicht übertragen werden.
+  (d) `cbx-t11-build2` und alte `cbx-*`-VMs können im Papierkorb liegen;
+  Purge bleibt tabu.
 - **Hyper-V-VM-Gruppe**: `scripts/group-vms.ps1` hält cbx-*-VMs (Multipass
   benennt Hyper-V-VMs wie Instanzen) in einer VMCollection-Gruppe (Default
   „CoreBridge“). Benötigt Hyper-V-Rechte → in elevated PowerShell laufen
@@ -134,8 +129,10 @@ ein Ergebnis.
   `F:\source\SandboxBridge\src\SandboxBridge.Tui\AGENTS.md` ansehen.
 - `test/CoreBridge.Core.Tests` — Unit-Tests; jedes Projekt bekommt ein eigenes
   Testprojekt.
-- `test/Multipass.Experiments` — reproduzierbare Experimente, keine klassischen
-  Tests.
+- `test/CoreBridge.Cli.Tests` — Prozessbasierte CLI-/Lifecycle-Tests; der
+  öffentliche VM-Lifecycle läuft ausschließlich über diese Verben.
+- `test/Multipass.Experiments` — reproduzierbare historische Experimente, keine
+  klassischen Tests.
 - `net10.0`, SDK via `global.json` gepinnt. Config in CLI und TUI aus derselben
   Quelle: `config.Get<AppConfig>()`.
 

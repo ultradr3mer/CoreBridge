@@ -2,11 +2,12 @@ param(
     [string]$BuildVmName = "cbx-t11-build2",
     [string]$BuildImage = "26.04",
     [string]$BuildDisk = "20G",
-    [string]$ModelUrl = "https://raw.githubusercontent.com/canonical/models/main/ubuntu-core-26-amd64-dangerous.model",
-    [string]$Destination = "$env:LOCALAPPDATA\CoreBridge\images\cbx-core26.img"
+    [string]$ModelUrl = "https://raw.githubusercontent.com/canonical/models/main/ubuntu-classic-2610-amd64-dangerous.model",
+    [string]$Destination = "$env:LOCALAPPDATA\CoreBridge\images\cbx-classic-2610.img"
 )
 
 $ErrorActionPreference = "Stop"
+Write-Host "Hinweis: 26.04 ist nur das Build-VM-Image; das gebaute Zielmodell ist Classic Ubuntu 26.10 Edge."
 $repoRoot = Split-Path -Parent $PSScriptRoot
 
 function Invoke-Cli {
@@ -37,3 +38,4 @@ Invoke-Cli @("vm-get", "--name", $BuildVmName, "--remote", "/home/ubuntu/imgout/
 $megaBytes = [math]::Round((Get-Item $Destination).Length / 1MB)
 Write-Host "Image fertig: $Destination ($megaBytes MB)"
 Write-Host "Hinweis: Import via `multipass launch <url>` — unter Windows NICHT via file:// (multipass 1.16.3 Bug), sondern https:// (siehe EXPERIMENT_LOG T11)."
+# Legacy compatibility script; see AGENT.md for its removal/integration decision.

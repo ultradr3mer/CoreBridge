@@ -1,13 +1,24 @@
 using System.Text.Json;
-using CoreBridge.Core.Vm;
 
 namespace CoreBridge.Core.Images;
 
 /// <summary>
-/// Persistierte Build-Konfiguration eines Custom-Images, erzeugt von
-/// `image-configure` und gelesen von `image-build`.
+/// Persistierte Build- und Launch-Konfiguration eines Custom-Image-Profils.
+/// Das Profil wird durch <c>image-configure</c> erzeugt und von <c>vm-create</c>
+/// gelesen. Die zusätzlichen Felder sind optional, damit bereits erzeugte
+/// Konfigurationen aus der Core-Phase weiterlesbar bleiben.
 /// </summary>
-public sealed record ImageBuildConfig(string Name, string BaseModelUrl, string[] Components, string[] Snaps, string? BuildTo = null)
+public sealed record ImageBuildConfig(
+    string Name,
+    string BaseModelUrl,
+    string[] Components,
+    string[] Snaps,
+    string? BuildTo = null,
+    string RuntimeImage = "daily:26.10",
+    string? CloudInitFile = null,
+    int SchemaVersion = 3,
+    string? ModelId = null,
+    string? ModelSha256 = null)
 {
     private static readonly JsonSerializerOptions Options = new() { WriteIndented = true };
 
@@ -18,7 +29,21 @@ public sealed record ImageBuildConfig(string Name, string BaseModelUrl, string[]
 
     public static ImageBuildConfig FromJson(string json)
     {
-        return JsonSerializer.Deserialize<ImageBuildConfig>(json)
-            ?? throw new MultipassException("Build-Konfiguration ist leer.");
+        var config = JsonSerializer.Deserialize<ImageBuildConfig>(json)
+            ?? throw new InvalidDataException("Build-Konfiguration ist leer.");
+
+        if (string.IsNullOrWhiteSpace(config.Name)
+            || string.IsNullOrWhiteSpace(config.BaseModelUrl)
+            || config.Components is null
+            || config.Snaps is null)
+        {
+            throw new InvalidDataException("Build-Konfiguration enthält unvollständige Pflichtfelder.");
+        }
+
+        return config with
+        {
+            Components = config.Components,
+            Snaps = config.Snaps
+        };
     }
 }
