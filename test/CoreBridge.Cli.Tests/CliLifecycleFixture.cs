@@ -1,18 +1,18 @@
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.RegularExpressions;
 using CoreBridge.Cli;
 using CoreBridge.Core.Config;
 using CoreBridge.Core.Images;
 
 namespace CoreBridge.Cli.Tests;
 
-internal sealed record CliRunResult(int ExitCode, IReadOnlyList<string> Lines);
+/// <summary>Ergebnis eines CLI-Kommandos; <paramref name="Error"/> ist die fertige Fehlermeldung bei Exit ≠ 0.</summary>
+internal sealed record CliRunResult(int ExitCode, IReadOnlyList<string> Lines, string? Error = null);
 
 /// <summary>
-/// Gemeinsame Namen, Config und Temp-Store der Lifecycle-Stufen — aber kein
-/// Fortschrittszustand: jede Stufe stellt ihre Voraussetzungen selbst her
-/// (<see cref="EnsureImageAsync"/>, <see cref="EnsureVmAsync"/>) und prüft dabei
-/// den echten Zustand (Profildatei, vm-list), damit sie einzeln lauffähig ist.
+/// Gemeinsame Namen, Config und Temp-Store der Lifecycle-Stufen; den
+/// Fortschrittszustand (Image, VM) hinterlässt jeweils die vorherige Stufe.
 /// CLI-Kommandos laufen ausschließlich über den öffentlichen
 /// <see cref="Program.Run"/>-Dispatcher (kein CLI-Kindprozess). Nur die
 /// interaktiven Verbindungen (vm-connect, SSH) gehen direkt über die
@@ -131,7 +131,7 @@ public sealed class CliLifecycleFixture : IDisposable
         catch (ProgramExecutionException exception)
         {
             log($"Fehler (Exit {exception.ExitCode}): {exception.Message}");
-            return new CliRunResult(exception.ExitCode, lines);
+            return new CliRunResult(exception.ExitCode, lines, exception.Message);
         }
     }
 
@@ -142,7 +142,7 @@ public sealed class CliLifecycleFixture : IDisposable
         if (result.ExitCode != 0)
         {
             throw new InvalidOperationException(
-                $"{options.GetType().Name} fehlgeschlagen (Exit {result.ExitCode}) — Details im Log.");
+                $"{options.GetType().Name} fehlgeschlagen (Exit {result.ExitCode}): {result.Error}");
         }
 
         return result;
@@ -155,6 +155,28 @@ public sealed class CliLifecycleFixture : IDisposable
         return FindVmState(list, VmName);
     }
 
+    /// <summary>Scheitert bei Exit ≠ 0 mit der Fehlermeldung des Kommandos statt „Expected 0, Actual 1“.</summary>
+    internal static void AssertSucceeded(CliRunResult result)
+    {
+        if (result.ExitCode != 0)
+        {
+            Assert.Fail($"Exit {result.ExitCode}: {result.Error}");
+        }
+    }
+
+    /// <summary>
+    /// Prüft Exit 0 und die Abschlusszeile zustandsändernder Kommandos:
+    /// <c>&lt;label&gt;: OK (&lt;Dauer&gt;) — State: &lt;state&gt;</c>.
+    /// </summary>
+    internal static void AssertCompleted(CliRunResult result, string label, string state)
+    {
+        AssertSucceeded(result);
+        Assert.NotEmpty(result.Lines);
+        Assert.Matches(
+            $@"^{Regex.Escape(label)}: OK \([^)]*\) — State: {Regex.Escape(state)}$",
+            result.Lines[^1]);
+    }
+
     internal static string? FindVmState(CliRunResult list, string vmName)
     {
         return list.Lines
@@ -164,56 +186,17 @@ public sealed class CliLifecycleFixture : IDisposable
             .FirstOrDefault();
     }
 
-    /// <summary>Konfiguriert das Test-Image, falls seine Profildatei noch fehlt.</summary>
-    internal async Task EnsureImageAsync(Action<string> log)
-    {
-        if (File.Exists(ProfileConfigPath))
-        {
-            return;
-        }
-
-        await RunCheckedAsync(new ImageConfigureOptions { Name = ImageName, Components = "claude,dotnet" }, log);
-    }
-
-    /// <summary>Entfernt die Test-VM endgültig, falls sie existiert (auch aus dem Papierkorb).</summary>
-    internal async Task EnsureVmAbsentAsync(Action<string> log)
+    /// <summary>
+    /// Räumt anhand des echten Zustands auf, egal an welcher Stufe der Lauf
+    /// abgebrochen ist: VM laut vm-list (endgültig, auch aus dem Papierkorb),
+    /// Image laut Modellverzeichnis.
+    /// </summary>
+    internal async Task CleanupAsync(Action<string> log)
     {
         if (await QueryVmStateAsync(log) is not null)
         {
             await RunCheckedAsync(new VmDeleteOptions { Name = VmName, Purge = true }, log);
         }
-    }
-
-    /// <summary>
-    /// Stellt sicher, dass die Test-VM existiert (legt Image und VM bei Bedarf an)
-    /// und — mit <paramref name="running"/> — läuft.
-    /// </summary>
-    internal async Task EnsureVmAsync(Action<string> log, bool running = true)
-    {
-        var state = await QueryVmStateAsync(log);
-        if (state == "Deleted")
-        {
-            await RunCheckedAsync(new VmDeleteOptions { Name = VmName, Purge = true }, log);
-            state = null;
-        }
-
-        if (state is null)
-        {
-            await EnsureImageAsync(log);
-            await RunCheckedAsync(new VmCreateOptions { Name = VmName, Image = ImageName }, log);
-            return;
-        }
-
-        if (running && state != "Running")
-        {
-            await RunCheckedAsync(new VmStartOptions { Name = VmName }, log);
-        }
-    }
-
-    /// <summary>Räumt anhand des echten Zustands auf: VM laut vm-list, Image laut Modellverzeichnis.</summary>
-    internal async Task CleanupAsync(Action<string> log)
-    {
-        await EnsureVmAbsentAsync(log);
 
         var modelDirectory = Path.Combine(store.Path, "models", ImageName);
         if (Directory.Exists(modelDirectory))

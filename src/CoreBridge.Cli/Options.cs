@@ -7,6 +7,20 @@ public sealed class MultipassStatusOptions : IOptions
 {
 }
 
+[Verb("multipass-restart", HelpText = "Startet den Windows-Dienst Multipass neu (wie Restart-Service -Force); hängt der Stop, wird nach Rückfrage multipassd beendet. Fragt ohne Administratorrechte nach einem erhöhten Neustart.")]
+public sealed class MultipassRestartOptions : IOptions
+{
+    [Option("stop-timeout", Default = 30, HelpText = "Sekunden, die auf einen regulären Stop gewartet wird, bevor multipassd hart beendet wird.")]
+    public int StopTimeoutSeconds { get; set; } = 30;
+
+    [Option("start-timeout", Default = 120, HelpText = "Sekunden, die auf Running und die erste Daemon-Antwort gewartet wird.")]
+    public int StartTimeoutSeconds { get; set; } = 120;
+
+    /// <summary>Intern: vom erhöhten Neustart gesetzt, damit das Admin-Fenster offen bleibt.</summary>
+    [Option("pause-on-exit", Hidden = true)]
+    public bool PauseOnExit { get; set; }
+}
+
 [Verb("vm-list", HelpText = "Listet alle Multipass-VMs auf (inkl. Papierkorb, state Deleted).")]
 public sealed class VmListOptions : IOptions
 {
