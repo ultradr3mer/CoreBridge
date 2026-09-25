@@ -5,7 +5,7 @@ namespace CoreBridge.Cli;
 /// <summary>
 /// Optionen, die für einen einzelnen Aufruf die Timeouts aus der Config
 /// (<c>DefaultTimeout</c>, <c>DefaultTimeoutVmCreation</c>) ersetzen; wird zentral
-/// in <c>Program.Execute</c> angewendet.
+/// in <c>Program.ApplyTimeoutOverride</c> angewendet.
 /// </summary>
 public interface ITimeoutOverride
 {
@@ -63,7 +63,7 @@ public sealed class ImageConfigureOptions : MultipassOptions
     [Option('n', "name", Required = true, HelpText = "Name des Images (Namespace für Modell/Config/cloud-init/Ausgabe-.img).")]
     public string Name { get; set; } = string.Empty;
 
-    [Option('c', "components", Default = "claude,dotnet", HelpText = "Komma-Liste der Komponenten (verfügbar laut Config Images:Components, z. B. claude,dotnet,opencode,python).")]
+    [Option('c', "components", Default = "claude,dotnet", HelpText = "Komma-Liste der Komponenten (verfügbar laut Config Images:Components, z. B. claude,dotnet,opencode,python,cline).")]
     public string Components { get; set; } = "claude,dotnet";
 
     [Option("model-url", HelpText = "URL des Basis-Modells (Standard: Config Images:DefaultModelUrl).")]
@@ -136,7 +136,7 @@ public sealed class VmGetOptions : MultipassOptions
 }
 
 [Verb("vm-connect", HelpText = "Öffnet eine interaktive Shell in der VM.")]
-public sealed class VmConnectOptions : IOptions
+public sealed class VmConnectOptions : MultipassOptions
 {
     [Option('n', "name", Required = true, HelpText = "Name der VM.")]
     public string Name { get; set; } = string.Empty;

@@ -125,7 +125,15 @@ public sealed class CliLifecycleFixture : IDisposable
         var lines = new List<string>();
         try
         {
-            await foreach (var line in Program.Run(config, options))
+            // Rückfragen (VM starten/stoppen/löschen, weiter warten) werden im
+            // automatisierten Lauf bejaht und protokolliert.
+            bool Confirm(string question)
+            {
+                log($"{question} [y/n] y (Test)");
+                return true;
+            }
+
+            await foreach (var line in Program.Run(config, options, confirm: Confirm))
             {
                 log(line);
                 lines.Add(line);

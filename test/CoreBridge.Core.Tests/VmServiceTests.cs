@@ -63,6 +63,39 @@ public class VmServiceTests
     }
 
     [Fact]
+    public void StartMitKeepWaitingWartetInAbschnitten()
+    {
+        var cli = new FakeMultipassCli(EmptyResult);
+        var service = new VmService(cli);
+
+        service.Start("cbx-test", 5_000, () => true);
+        service.Stop("cbx-test", 5_000);
+
+        Assert.Equal(["start:5000:extensions", "stop:5000:fixed"], cli.Modes);
+    }
+
+    [Fact]
+    public void FindLiefertVmOderNull()
+    {
+        var cli = new FakeMultipassCli(_ => new MultipassRunResult(
+            0,
+            """{ "list": [ { "name": "cbx-a", "state": "Suspended", "ipv4": [] }, { "name": "cbx-b", "state": "Deleted", "ipv4": [] } ] }""",
+            string.Empty,
+            5));
+        var service = new VmService(cli);
+
+        var a = service.Find("CBX-A");
+        var b = service.Find("cbx-b");
+
+        Assert.NotNull(a);
+        Assert.True(a.IsStopped);
+        Assert.False(a.IsRunning);
+        Assert.NotNull(b);
+        Assert.True(b.IsDeleted);
+        Assert.Null(service.Find("cbx-c"));
+    }
+
+    [Fact]
     public void ExecLaeuftUeberShC()
     {
         var cli = new FakeMultipassCli(EmptyResult);
@@ -123,6 +156,9 @@ public class VmServiceTests
     {
         public List<string[]> Calls { get; } = new();
 
+        /// <summary>Je Aufruf <c>&lt;verb&gt;:&lt;timeoutMs&gt;:fixed|extensions</c>.</summary>
+        public List<string> Modes { get; } = new();
+
         private readonly Func<string[], MultipassRunResult> _respond;
 
         public FakeMultipassCli(Func<string[], MultipassRunResult> respond)
@@ -135,6 +171,7 @@ public class VmServiceTests
         {
             var call = args.ToArray();
             Calls.Add(call);
+            Modes.Add($"{call[0]}:{timeoutMs}:fixed");
             return _respond(call);
         }
 
@@ -144,7 +181,10 @@ public class VmServiceTests
             Func<bool> keepWaiting,
             string? exePath = null)
         {
-            return Run(args, (int)slice.TotalMilliseconds, exePath);
+            var call = args.ToArray();
+            Calls.Add(call);
+            Modes.Add($"{call[0]}:{(int)slice.TotalMilliseconds}:extensions");
+            return _respond(call);
         }
 
         public override int Attach(IReadOnlyList<string> args, string? exePath = null)

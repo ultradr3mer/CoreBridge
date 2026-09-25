@@ -319,23 +319,13 @@ public static class Program
             MultipassRestartOptions => RunMultipassRestart(context),
             VmListOptions => RunVmList(vms, context.DefaultTimeoutMs, cancellationToken),
             VmCreateOptions o => RunVmCreate(context, o),
-            VmStartOptions o => RunVmStart(vms, o, context.DefaultTimeoutMs, cancellationToken),
-            VmStopOptions o => RunVmStateCommand(
-                vms,
-                o.Name,
-                $"stop {o.Name}",
-                () => vms.Stop(o.Name, context.DefaultTimeoutMs),
-                cancellationToken),
-            VmDeleteOptions o => RunVmStateCommand(
-                vms,
-                o.Name,
-                $"delete {o.Name}{(o.Purge ? " --purge" : string.Empty)}",
-                () => vms.Delete(o.Name, o.Purge, context.DefaultTimeoutMs),
-                cancellationToken),
-            VmExecOptions o => RunVmExec(vms, o, context.DefaultTimeoutMs, cancellationToken),
-            VmConnectOptions o => RunVmConnect(vms, o, cancellationToken),
-            VmPutOptions o => RunVmPut(vms, o, context.DefaultTimeoutMs, cancellationToken),
-            VmGetOptions o => RunVmGet(vms, o, context.DefaultTimeoutMs, cancellationToken),
+            VmStartOptions o => RunVmStart(context, o),
+            VmStopOptions o => RunVmStop(context, o),
+            VmDeleteOptions o => RunVmDelete(context, o),
+            VmExecOptions o => RunVmExec(context, o),
+            VmConnectOptions o => RunVmConnect(context, o),
+            VmPutOptions o => RunVmPut(context, o),
+            VmGetOptions o => RunVmGet(context, o),
             ImageConfigureOptions o => RunImageConfigure(config, o, cancellationToken),
             ImageListOptions => RunImageList(config, cancellationToken),
             ImageDeleteOptions o => RunImageDelete(config, o, cancellationToken),
@@ -388,7 +378,7 @@ public static class Program
     {
         return string.IsNullOrEmpty(text)
             ? []
-            : text.Replace("\r\n", "\n").TrimEnd('\n').Split('\n');
+            : MultipassOutput.CleanLines(text);
     }
 
     private static ProgramExecutionException Failure(MultipassRunResult result)
@@ -536,6 +526,12 @@ public static class Program
         [EnumeratorCancellation] CancellationToken cancellationToken)
     {
         var list = await Task.Run(() => vms.List(timeoutMs), cancellationToken);
+        if (list.Count == 0)
+        {
+            yield return "No VMs — create one with `cb vm-create -n <name>`.";
+            yield break;
+        }
+
         yield return $"{"Name",-30} {"State",-10} IPv4";
         foreach (var vm in list)
         {
@@ -543,8 +539,13 @@ public static class Program
         }
     }
 
+    /// <summary>Multipass-Namensregel: Buchstaben, Ziffern, Bindestriche; Beginn mit Buchstabe, Ende ohne Bindestrich.</summary>
+    private static readonly System.Text.RegularExpressions.Regex VmNamePattern =
+        new("^[A-Za-z](?:[A-Za-z0-9-]*[A-Za-z0-9])?$", System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+
     /// <summary>
-    /// Legt die VM an und wartet in Abschnitten von <c>DefaultTimeoutVmCreation</c>;
+    /// Legt die VM an (eine vorhandene gleichnamige VM nur nach Rückfrage ersetzt)
+    /// und wartet in Abschnitten von <c>DefaultTimeoutVmCreation</c>;
     /// nach jedem Abschnitt wird gefragt, ob weiter gewartet werden soll. Bei Nein
     /// läuft der Launch im Multipass-Daemon weiter, und der Benutzer kann ein
     /// Folgekommando eingeben, das wie ein normaler CLI-Aufruf ausgeführt wird.
@@ -559,6 +560,22 @@ public static class Program
         var profile = ImageProfileResolver.Resolve(config.Images, requestedImage, options.CloudInit);
         var launchImage = profile?.RuntimeImage ?? requestedImage;
         var cloudInit = options.CloudInit ?? profile?.CloudInitPath;
+        if (!VmNamePattern.IsMatch(options.Name))
+        {
+            throw new ProgramExecutionException(
+                1,
+                $"Invalid VM name `{options.Name}` — use letters, digits and hyphens, starting with a letter and not ending with a hyphen (e.g. dev-01).");
+        }
+
+        if (cloudInit is not null && !File.Exists(cloudInit))
+        {
+            throw new ProgramExecutionException(1, $"cloud-init file not found: {cloudInit}");
+        }
+
+        await foreach (var line in ReplaceExistingVm(context, options.Name))
+        {
+            yield return line;
+        }
 
         yield return $"Lege VM `{options.Name}` an (Image: {requestedImage}"
             + (profile is null ? string.Empty : $" → Runtime: {launchImage}")
@@ -627,56 +644,256 @@ public static class Program
         yield return await Completed(vms, options.Name, $"create {options.Name}", result, cancellationToken);
     }
 
-    private static async IAsyncEnumerable<string> RunVmExec(
-        VmService vms,
-        VmExecOptions options,
-        int timeoutMs,
-        [EnumeratorCancellation] CancellationToken cancellationToken)
+    private static async IAsyncEnumerable<string> RunVmExec(CommandContext context, VmExecOptions options)
     {
+        await foreach (var line in EnsureRunning(context, options.Name))
+        {
+            yield return line;
+        }
+
         var result = await Task.Run(
-            () => vms.Exec(options.Name, options.Command, timeoutMs),
-            cancellationToken);
+            () => context.Vms.Exec(options.Name, options.Command, context.DefaultTimeoutMs),
+            context.CancellationToken);
         foreach (var line in Report(result))
         {
             yield return line;
         }
     }
 
-    private static async IAsyncEnumerable<string> RunVmConnect(
-        VmService vms,
-        VmConnectOptions options,
-        [EnumeratorCancellation] CancellationToken cancellationToken)
+    private static async IAsyncEnumerable<string> RunVmConnect(CommandContext context, VmConnectOptions options)
     {
-        var exitCode = await Task.Run(() => vms.Connect(options.Name), cancellationToken);
+        await foreach (var line in EnsureRunning(context, options.Name))
+        {
+            yield return line;
+        }
+
+        var exitCode = await Task.Run(() => context.Vms.Connect(options.Name), context.CancellationToken);
         if (exitCode != 0)
         {
             throw new ProgramExecutionException(exitCode, $"vm-connect fehlgeschlagen (Exit {exitCode}).");
         }
-
-        yield break;
     }
 
-    private static async IAsyncEnumerable<string> RunVmStart(
-        VmService vms,
-        VmStartOptions options,
-        int timeoutMs,
-        [EnumeratorCancellation] CancellationToken cancellationToken)
+    private static async IAsyncEnumerable<string> RunVmStart(CommandContext context, VmStartOptions options)
     {
-        if (string.Equals(await QueryVmState(vms, options.Name, cancellationToken), "Running", StringComparison.OrdinalIgnoreCase))
+        var name = options.Name;
+        var vm = await RequireVm(context, name);
+        if (vm.IsDeleted)
         {
-            yield return $"start {options.Name}: OK (lief bereits) — State: Running";
+            throw InTrash(name);
+        }
+
+        if (vm.IsRunning)
+        {
+            yield return $"start {name}: OK (lief bereits) — State: Running";
             yield break;
         }
 
         await foreach (var line in RunVmStateCommand(
-            vms,
-            options.Name,
-            $"start {options.Name}",
-            () => vms.Start(options.Name, timeoutMs),
-            cancellationToken))
+            context.Vms,
+            name,
+            $"start {name}",
+            () => context.Vms.Start(name, context.DefaultTimeoutMs, KeepWaiting(context, $"start {name}")),
+            context.CancellationToken))
         {
             yield return line;
         }
+    }
+
+    private static async IAsyncEnumerable<string> RunVmStop(CommandContext context, VmStopOptions options)
+    {
+        var name = options.Name;
+        var vm = await RequireVm(context, name);
+        if (vm.IsDeleted)
+        {
+            throw InTrash(name);
+        }
+
+        if (vm.IsStopped)
+        {
+            yield return $"stop {name}: OK (was already stopped) — State: {vm.State}";
+            yield break;
+        }
+
+        if (vm.IsTransitional
+            && !context.Confirm($"VM `{name}` is {vm.State} — Multipass can only power it off (--force). Power it off?"))
+        {
+            throw new ProgramExecutionException(1, $"Cancelled — VM `{name}` was not stopped (State: {vm.State}).");
+        }
+
+        await foreach (var line in StopVm(context, vm))
+        {
+            yield return line;
+        }
+    }
+
+    /// <summary>
+    /// Stoppt die VM; in Übergangszuständen (<see cref="VmInfo.IsTransitional"/>)
+    /// mit <c>--force</c>, weil Multipass den normalen Stop dort ablehnt. Die
+    /// Rückfrage dazu stellt der Aufrufer.
+    /// </summary>
+    private static IAsyncEnumerable<string> StopVm(CommandContext context, VmInfo vm)
+    {
+        var force = vm.IsTransitional;
+        var label = force ? $"stop --force {vm.Name}" : $"stop {vm.Name}";
+        return RunVmStateCommand(
+            context.Vms,
+            vm.Name,
+            label,
+            () => context.Vms.Stop(vm.Name, context.DefaultTimeoutMs, KeepWaiting(context, label), force),
+            context.CancellationToken);
+    }
+
+    /// <summary>
+    /// Löscht die VM (in den Papierkorb oder mit <c>--purge</c> endgültig). Vor dem
+    /// Löschen einer laufenden VM wird gefragt; eine VM im Papierkorb ohne
+    /// <c>--purge</c> ist bereits gelöscht.
+    /// </summary>
+    private static async IAsyncEnumerable<string> RunVmDelete(CommandContext context, VmDeleteOptions options)
+    {
+        var name = options.Name;
+        var vm = await RequireVm(context, name);
+        if (vm.IsDeleted && !options.Purge)
+        {
+            yield return $"delete {name}: OK (already in the trash; --purge removes it for good) — State: Deleted";
+            yield break;
+        }
+
+        if (!vm.IsDeleted
+            && !vm.IsStopped
+            && !context.Confirm($"VM `{name}` is {vm.State} — stop and delete it?"))
+        {
+            throw new ProgramExecutionException(1, $"Cancelled — VM `{name}` was not deleted (State: {vm.State}).");
+        }
+
+        if (!vm.IsDeleted && !vm.IsStopped)
+        {
+            await foreach (var line in StopVm(context, vm))
+            {
+                yield return line;
+            }
+        }
+
+        var label = $"delete {name}{(options.Purge ? " --purge" : string.Empty)}";
+        await foreach (var line in RunVmStateCommand(
+            context.Vms,
+            name,
+            label,
+            () => context.Vms.Delete(name, options.Purge, context.DefaultTimeoutMs, KeepWaiting(context, label)),
+            context.CancellationToken))
+        {
+            yield return line;
+        }
+    }
+
+    /// <summary>
+    /// Gibt es die VM schon (auch im Papierkorb), wird gefragt, ob sie gestoppt,
+    /// endgültig gelöscht und neu angelegt werden darf; bei Nein bricht vm-create ab.
+    /// </summary>
+    private static async IAsyncEnumerable<string> ReplaceExistingVm(CommandContext context, string name)
+    {
+        var existing = await Task.Run(() => context.Vms.Find(name), context.CancellationToken);
+        if (existing is null)
+        {
+            yield break;
+        }
+
+        var question = existing.IsDeleted
+            ? $"VM `{name}` is still in the trash (Deleted) — purge it and create it again?"
+            : $"VM `{name}` already exists ({existing.State}) — {(existing.IsStopped ? "delete" : "stop and delete")} it and create it again?";
+        if (!context.Confirm(question))
+        {
+            throw new ProgramExecutionException(
+                1,
+                $"Cancelled — VM `{name}` already exists ({existing.State}). Pick another name or remove it with `cb vm-delete -n {name} --purge`.");
+        }
+
+        if (!existing.IsDeleted && !existing.IsStopped)
+        {
+            await foreach (var line in StopVm(context, existing))
+            {
+                yield return line;
+            }
+        }
+
+        await foreach (var line in RunVmStateCommand(
+            context.Vms,
+            name,
+            $"delete {name} --purge",
+            () => context.Vms.Delete(name, purge: true, context.DefaultTimeoutMs, KeepWaiting(context, $"delete {name}")),
+            context.CancellationToken))
+        {
+            yield return line;
+        }
+    }
+
+    /// <summary>
+    /// Stellt sicher, dass die VM läuft: fehlt sie oder liegt sie im Papierkorb, gibt
+    /// es eine fertige Meldung; ist sie gestoppt, wird nach Rückfrage gestartet.
+    /// Übergangszustände (Starting, Restarting …) wartet Multipass selbst ab.
+    /// </summary>
+    private static async IAsyncEnumerable<string> EnsureRunning(CommandContext context, string name)
+    {
+        var vm = await RequireVm(context, name);
+        if (vm.IsDeleted)
+        {
+            throw InTrash(name);
+        }
+
+        if (vm.IsTransitional)
+        {
+            yield return $"VM `{name}` is {vm.State} — waiting for it to come up (if it hangs: `cb vm-stop -n {name}` powers it off) ...";
+        }
+
+        if (!vm.IsStopped)
+        {
+            yield break;
+        }
+
+        if (!context.Confirm($"VM `{name}` is {vm.State} — start it now?"))
+        {
+            throw new ProgramExecutionException(1, $"Cancelled — VM `{name}` is {vm.State}; start it with `cb vm-start -n {name}`.");
+        }
+
+        await foreach (var line in RunVmStateCommand(
+            context.Vms,
+            name,
+            $"start {name}",
+            () => context.Vms.Start(name, context.DefaultTimeoutMs, KeepWaiting(context, $"start {name}")),
+            context.CancellationToken))
+        {
+            yield return line;
+        }
+    }
+
+    /// <summary>VM laut vm-list; fehlt sie, gibt es eine fertige Meldung mit den vorhandenen Namen.</summary>
+    private static async Task<VmInfo> RequireVm(CommandContext context, string name)
+    {
+        var list = await Task.Run(() => context.Vms.List(context.DefaultTimeoutMs), context.CancellationToken);
+        return list.FirstOrDefault(vm => string.Equals(vm.Name, name, StringComparison.OrdinalIgnoreCase))
+            ?? throw new ProgramExecutionException(
+                1,
+                $"VM `{name}` does not exist. "
+                + (list.Count == 0
+                    ? "There are no VMs yet — create one with `cb vm-create -n <name>`."
+                    : $"Existing VMs: {string.Join(", ", list.Select(vm => vm.Name))}."));
+    }
+
+    private static ProgramExecutionException InTrash(string name)
+    {
+        return new ProgramExecutionException(
+            1,
+            $"VM `{name}` is in the trash (Deleted) — restore it with `multipass recover {name}` or remove it with `cb vm-delete -n {name} --purge`.");
+    }
+
+    /// <summary>
+    /// Rückfrage „weiter warten?“ für VM-Kommandos, die länger als
+    /// <c>DefaultTimeout</c> brauchen; die Zeit läuft ab Erzeugung.
+    /// </summary>
+    private static Func<bool> KeepWaiting(CommandContext context, string label)
+    {
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+        return () => context.Confirm($"`{label}` is still running after {stopwatch.Elapsed.TotalSeconds:F0} s — keep waiting?");
     }
 
     /// <summary>
@@ -724,21 +941,22 @@ public static class Program
             ?.State;
     }
 
-    private static async IAsyncEnumerable<string> RunVmPut(
-        VmService vms,
-        VmPutOptions options,
-        int timeoutMs,
-        [EnumeratorCancellation] CancellationToken cancellationToken)
+    private static async IAsyncEnumerable<string> RunVmPut(CommandContext context, VmPutOptions options)
     {
         if (!File.Exists(options.Source))
         {
             throw new ProgramExecutionException(1, $"Quelldatei fehlt: {options.Source}");
         }
 
+        await foreach (var line in EnsureRunning(context, options.Name))
+        {
+            yield return line;
+        }
+
         yield return $"transfer {options.Source} → {options.Name} ...";
         var result = await Task.Run(
-            () => vms.Put(options.Source, options.Name, options.Destination, timeoutMs),
-            cancellationToken);
+            () => context.Vms.Put(options.Source, options.Name, options.Destination, context.DefaultTimeoutMs),
+            context.CancellationToken);
         if (result.ExitCode != 0)
         {
             foreach (var line in Report(result))
@@ -750,12 +968,13 @@ public static class Program
         yield return $"transfer: OK ({result.DurationMs / 1000.0:F1} s)";
     }
 
-    private static async IAsyncEnumerable<string> RunVmGet(
-        VmService vms,
-        VmGetOptions options,
-        int timeoutMs,
-        [EnumeratorCancellation] CancellationToken cancellationToken)
+    private static async IAsyncEnumerable<string> RunVmGet(CommandContext context, VmGetOptions options)
     {
+        await foreach (var line in EnsureRunning(context, options.Name))
+        {
+            yield return line;
+        }
+
         var targetDirectory = Path.GetDirectoryName(Path.GetFullPath(options.Destination));
         if (!string.IsNullOrEmpty(targetDirectory) && !Directory.Exists(targetDirectory))
         {
@@ -764,8 +983,8 @@ public static class Program
 
         yield return $"transfer {options.Name}:{options.Remote} → {options.Destination} ...";
         var result = await Task.Run(
-            () => vms.Get(options.Name, options.Remote, options.Destination, timeoutMs),
-            cancellationToken);
+            () => context.Vms.Get(options.Name, options.Remote, options.Destination, context.DefaultTimeoutMs),
+            context.CancellationToken);
         if (!File.Exists(options.Destination))
         {
             foreach (var line in Report(result))

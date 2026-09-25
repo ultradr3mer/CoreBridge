@@ -67,17 +67,28 @@ public sealed class VmService
             keepWaiting ?? (() => false));
     }
 
-    public MultipassRunResult Start(string name, int timeoutMs = 180_000)
+    /// <param name="keepWaiting">
+    /// Optional: nach je <paramref name="timeoutMs"/> gefragt, ob weiter gewartet
+    /// wird (siehe <see cref="MultipassCli.RunWithExtensions"/>); ohne Angabe ist
+    /// <paramref name="timeoutMs"/> ein festes Limit.
+    /// </param>
+    public MultipassRunResult Start(string name, int timeoutMs = 180_000, Func<bool>? keepWaiting = null)
     {
-        return _cli.Run(new[] { "start", name }, timeoutMs);
+        return Run(new[] { "start", name }, timeoutMs, keepWaiting);
     }
 
-    public MultipassRunResult Stop(string name, int timeoutMs = 180_000)
+    /// <inheritdoc cref="Start"/>
+    /// <param name="force">
+    /// <c>stop --force</c>: schaltet hart aus. Nötig für VMs in Übergangszuständen
+    /// wie <c>Starting</c>, die Multipass sonst nicht stoppt.
+    /// </param>
+    public MultipassRunResult Stop(string name, int timeoutMs = 180_000, Func<bool>? keepWaiting = null, bool force = false)
     {
-        return _cli.Run(new[] { "stop", name }, timeoutMs);
+        return Run(force ? new[] { "stop", "--force", name } : new[] { "stop", name }, timeoutMs, keepWaiting);
     }
 
-    public MultipassRunResult Delete(string name, bool purge = false, int timeoutMs = 180_000)
+    /// <inheritdoc cref="Start"/>
+    public MultipassRunResult Delete(string name, bool purge = false, int timeoutMs = 180_000, Func<bool>? keepWaiting = null)
     {
         var args = new List<string> { "delete", name };
         if (purge)
@@ -85,7 +96,21 @@ public sealed class VmService
             args.Add("--purge");
         }
 
-        return _cli.Run(args, timeoutMs);
+        return Run(args, timeoutMs, keepWaiting);
+    }
+
+    /// <summary>VM laut <c>multipass list</c>; <c>null</c>, wenn es sie nicht gibt (auch nicht im Papierkorb).</summary>
+    public VmInfo? Find(string name, int timeoutMs = 60_000)
+    {
+        return List(timeoutMs)
+            .FirstOrDefault(vm => string.Equals(vm.Name, name, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private MultipassRunResult Run(IReadOnlyList<string> args, int timeoutMs, Func<bool>? keepWaiting)
+    {
+        return keepWaiting is null
+            ? _cli.Run(args, timeoutMs)
+            : _cli.RunWithExtensions(args, TimeSpan.FromMilliseconds(timeoutMs), keepWaiting);
     }
 
     public MultipassRunResult Exec(string name, string command, int timeoutMs = 600_000)
