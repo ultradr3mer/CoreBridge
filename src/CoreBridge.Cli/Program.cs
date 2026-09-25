@@ -185,9 +185,10 @@ public static class Program
 
     private static ProgramExecutionException Failure(MultipassRunResult result)
     {
-        var message = string.IsNullOrWhiteSpace(result.StdErr)
+        var stdErr = MultipassStdErr.Clean(result.StdErr);
+        var message = string.IsNullOrEmpty(stdErr)
             ? $"multipass beendet mit Exit {result.ExitCode}."
-            : result.StdErr.TrimEnd();
+            : stdErr;
         return new ProgramExecutionException(result.ExitCode, message);
     }
 

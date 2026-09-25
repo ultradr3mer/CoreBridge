@@ -12,12 +12,22 @@ public sealed class VmService
     public IReadOnlyList<VmInfo> List()
     {
         var result = _cli.Run(new[] { "list", "--format", "json" }, 60_000);
+        if (result.ExitCode != 0)
+        {
+            var message = MultipassStdErr.Clean(result.StdErr);
+            throw new MultipassException(string.IsNullOrEmpty(message)
+                ? $"multipass list beendet mit Exit {result.ExitCode}."
+                : $"{message} (multipass Exit {result.ExitCode})");
+        }
+
         return MultipassVmList.Parse(result.StdOut);
     }
 
     public MultipassRunResult Create(string name, string image, string? disk = null, int timeoutMs = 2_400_000, string? cloudInitPath = null)
     {
-        var args = new List<string> { "launch", image, "--name", name };
+        // multipass hat ein eigenes Launch-Timeout (Default 300 s, inkl. cloud-init) —
+        // ohne --timeout bricht es lange vor unserem Prozess-Timeout ab.
+        var args = new List<string> { "launch", image, "--name", name, "--timeout", (timeoutMs / 1000).ToString() };
         if (disk is not null)
         {
             args.Add("--disk");

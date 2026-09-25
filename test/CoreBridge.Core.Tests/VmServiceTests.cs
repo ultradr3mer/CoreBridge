@@ -32,7 +32,7 @@ public class VmServiceTests
 
         service.Create("cbx-test", "core26");
 
-        Assert.Equal(new[] { "launch", "core26", "--name", "cbx-test" }, cli.Calls[0]);
+        Assert.Equal(new[] { "launch", "core26", "--name", "cbx-test", "--timeout", "2400" }, cli.Calls[0]);
     }
 
     [Fact]
@@ -43,7 +43,7 @@ public class VmServiceTests
 
         service.Create("cbx-test", "26.04", "20G");
 
-        Assert.Equal(new[] { "launch", "26.04", "--name", "cbx-test", "--disk", "20G" }, cli.Calls[0]);
+        Assert.Equal(new[] { "launch", "26.04", "--name", "cbx-test", "--timeout", "2400", "--disk", "20G" }, cli.Calls[0]);
     }
 
     [Fact]
