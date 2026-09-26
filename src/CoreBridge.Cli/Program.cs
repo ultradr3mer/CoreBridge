@@ -245,8 +245,28 @@ public static class Program
         CancellationToken cancellationToken)
     {
         InitStore.Initialize(config.Images.StoreRoot);
-        var context = new CommandContext(config, new VmService(), factory, cancellationToken);
+        var context = new CommandContext(config, new VmService(CreateMultipassCli(config.Images.StoreRoot)), factory, cancellationToken);
         await Dispatch(context, options);
+    }
+
+    /// <summary>
+    /// Echter Multipass-Client — oder im Mock-Betrieb (<c>CORE_BRIDGE_MULTIPASS_MOCK=1</c>)
+    /// ein <see cref="MockMultipassCli"/>, der den VM-Zustand im Speicher hält und
+    /// jeden Aufruf als JSON Line protokolliert. So lässt sich die ganze Anwendung
+    /// ohne installiertes Multipass und ohne Wartezeiten durchspielen.
+    /// </summary>
+    private static IMultipassCli CreateMultipassCli(string? storeRoot)
+    {
+        if (!MockMultipassCli.IsEnabled())
+        {
+            return new MultipassCli();
+        }
+
+        var mock = new MockMultipassCli(MockMultipassCli.ResolveLogPath(storeRoot));
+        Console.Error.WriteLine(
+            $"[MockMultipass] aktiv ({MockMultipassCli.EnableEnvironmentVariable}) — "
+            + $"kein echtes Multipass. JSON-Log: {mock.LogPath}");
+        return mock;
     }
 
     private static Task Dispatch(CommandContext context, IOptions options)
@@ -353,7 +373,17 @@ public static class Program
     private static async Task RunMultipassStatus(CommandContext context)
     {
         var events = context.Events;
-        var report = await Task.Run(() => Doctor.Check(), context.CancellationToken);
+
+        // Im Mock-Betrieb gibt es weder Binary noch Daemon: einen erfundenen
+        // Pfad melden, damit der Erfolgspfad (Parsing der Version) durchläuft.
+        var mocking = MockMultipassCli.IsEnabled();
+        var report = await Task.Run(
+            () => mocking
+                ? Doctor.Check(
+                    () => "mock://multipass",
+                    CreateMultipassCli(context.Config.Images.StoreRoot))
+                : Doctor.Check(),
+            context.CancellationToken);
         if (!report.Found)
         {
             var message = new StringBuilder("Multipass nicht gefunden.\n");

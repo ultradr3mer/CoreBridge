@@ -101,24 +101,59 @@ public sealed class CliLifecycleTests
         }, output.WriteLine);
         CliLifecycleFixture.AssertSucceeded(release);
 
-        // Claude wird per cloud-init nachinstalliert und kann kurz nach dem Boot noch fehlen.
-        for (var attempt = 1; attempt <= 6; attempt++)
+        await AssertProvisionedAsync();
+    }
+
+    /// <summary>
+    /// Prüft, dass die per cloud-init bestellten Komponenten im Gast wirklich
+    /// laufen — nicht nur, dass die VM startet. Beides wird mehrmals versucht,
+    /// weil die Paket-/Snap-Installation nach dem Boot noch läuft.
+    /// </summary>
+    [Fact]
+    public async Task Stage05b_ProvisionierungIstVollstaendig()
+    {
+        await AssertProvisionedAsync();
+    }
+
+    private static readonly (string Component, string Probe)[] ProvisioningProbes =
+    [
+        ("claude", "command -v claude >/dev/null && claude --version"),
+        ("dotnet", "command -v dotnet >/dev/null && dotnet --version"),
+        ("claude-marker", "test -f /var/lib/corebridge/claude.ready"),
+        ("dotnet-marker", "test -f /var/lib/corebridge/dotnet.ready")
+    ];
+
+    private async Task AssertProvisionedAsync()
+    {
+        var missing = ProvisioningProbes.Select(p => p.Component).ToList();
+        var seen = new Dictionary<string, string>(StringComparer.Ordinal);
+
+        for (var attempt = 1; attempt <= 12 && missing.Count > 0; attempt++)
         {
-            var claude = await fixture.RunAsync(new VmExecOptions
+            foreach (var (component, probe) in ProvisioningProbes.Where(p => missing.Contains(p.Component)).ToArray())
             {
-                Name = fixture.VmName,
-                Command = "command -v claude >/dev/null && claude --version"
-            }, output.WriteLine);
-            if (claude.ExitCode == 0)
-            {
-                return;
+                var probe1 = await fixture.RunAsync(
+                    new VmExecOptions { Name = fixture.VmName, Command = probe },
+                    output.WriteLine);
+                if (probe1.ExitCode == 0)
+                {
+                    missing.Remove(component);
+                    seen[component] = string.Join(" | ", probe1.Lines);
+                    output.WriteLine($"Provisionierung {component}: OK ({seen[component]})");
+                }
             }
 
-            output.WriteLine($"Claude probe {attempt} fehlgeschlagen (Exit {claude.ExitCode}).");
-            await Task.Delay(TimeSpan.FromSeconds(10));
+            if (missing.Count > 0)
+            {
+                output.WriteLine($"Provisionierung Versuch {attempt}: fehlt noch {string.Join(", ", missing)}.");
+                await Task.Delay(TimeSpan.FromSeconds(15));
+            }
         }
 
-        Assert.Fail("Claude wurde nach der Cloud-init-Provisionierung nicht verfügbar.");
+        Assert.True(
+            missing.Count == 0,
+            "Nach 12 Versuchen fehlen weiterhin: " + string.Join(", ", missing)
+            + ". Vorhanden: " + string.Join("; ", seen.Select(e => $"{e.Key}={e.Value}")));
     }
 
     [Fact]

@@ -22,12 +22,18 @@ public static class Doctor
         "Binary an anderem Ort über die Env-Variable CORE_BRIDGE_MULTIPASS_EXE bekannt geben"
     };
 
-    public static DoctorReport Check(Func<string?>? locate = null)
+    /// <param name="locate">Binary-Auflösung; <c>null</c> = Standard.</param>
+    /// <param name="cli">
+    /// Client für die Versionsabfrage. Standard ist <see cref="MultipassCli"/>;
+    /// im Mock-Betrieb wird hier ein <see cref="MockMultipassCli"/> übergeben.
+    /// </param>
+    public static DoctorReport Check(Func<string?>? locate = null, IMultipassCli? cli = null)
     {
         if (locate is null)
         {
             locate = () => MultipassBinaryLocator.LocateOrNull();
         }
+
         var binary = locate();
         if (binary is null)
         {
@@ -36,8 +42,8 @@ public static class Doctor
 
         try
         {
-            var cli = new MultipassCli(locate);
-            var result = cli.Run(new[] { "version", "--format", "json" }, 60_000, binary);
+            var multipass = cli ?? new MultipassCli(locate);
+            var result = multipass.Run(new[] { "version", "--format", "json" }, 60_000, binary);
             if (result.ExitCode != 0)
             {
                 return new DoctorReport(

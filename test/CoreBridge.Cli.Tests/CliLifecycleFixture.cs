@@ -4,6 +4,7 @@ using System.Text.RegularExpressions;
 using CoreBridge.Cli;
 using CoreBridge.Core.Config;
 using CoreBridge.Core.Inits;
+using CoreBridge.Core.Multipass;
 
 namespace CoreBridge.Cli.Tests;
 
@@ -22,10 +23,17 @@ public sealed class CliLifecycleFixture : IDisposable
 {
     private readonly TempDirectory store;
     private readonly AppConfig config;
+    private readonly string? mockSetting;
     private bool disposed;
 
     public CliLifecycleFixture()
     {
+        // Der Mock darf diesen Lauf nie übernehmen: ein CORE_BRIDGE_MULTIPASS_MOCK
+        // in der Shell des Entwicklers würde sonst echte VMs durch Attrappen
+        // ersetzen und der Test würde grün scheitern, ohne etwas zu prüfen.
+        mockSetting = Environment.GetEnvironmentVariable(MockMultipassCli.EnableEnvironmentVariable);
+        Environment.SetEnvironmentVariable(MockMultipassCli.EnableEnvironmentVariable, "0");
+
         store = new TempDirectory();
         config = new AppConfig
         {
@@ -259,6 +267,7 @@ public sealed class CliLifecycleFixture : IDisposable
         }
         finally
         {
+            Environment.SetEnvironmentVariable(MockMultipassCli.EnableEnvironmentVariable, mockSetting);
             store.Dispose();
         }
     }

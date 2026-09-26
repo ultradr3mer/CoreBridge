@@ -4,9 +4,9 @@ namespace CoreBridge.Core.Vm;
 
 public sealed class VmService
 {
-    private readonly MultipassCli _cli;
+    private readonly IMultipassCli _cli;
 
-    public VmService(MultipassCli? cli = null)
+    public VmService(IMultipassCli? cli = null)
     {
         _cli = cli ?? new MultipassCli();
     }
