@@ -245,7 +245,7 @@ public static class Program
         CancellationToken cancellationToken)
     {
         InitStore.Initialize(config.Images.StoreRoot);
-        var context = new CommandContext(config, new VmService(CreateMultipassCli(config.Images.StoreRoot)), factory, cancellationToken);
+        var context = new CommandContext(config, new VmService(CreateMultipassCli(config.MultipassLogPath)), factory, cancellationToken);
         await Dispatch(context, options);
     }
 
@@ -257,7 +257,7 @@ public static class Program
     /// </summary>
     private static IMultipassCli CreateMultipassCli(string? storeRoot)
     {
-        if (!MockMultipassCli.IsEnabled())
+        if (!string.IsNullOrEmpty(storeRoot))
         {
             return new MultipassCli();
         }

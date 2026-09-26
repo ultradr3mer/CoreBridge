@@ -1,3 +1,5 @@
+using CoreBridge.Core.Multipass;
+
 namespace CoreBridge.Core.Config;
 
 /// <summary>
@@ -23,7 +25,17 @@ public sealed record AppConfig
     /// Standard-Timeout für Multipass-Start/Stop/Restart, z. B. 10s, 1000ms.
     /// </summary>
     public string DefaultTimeout { get; init; } = "10s";
-}
+
+    /// <summary>
+    /// Defining a path activates logging.,
+    /// </summary>
+    public string MultipassLogPath { get; init; } = "mp-log/";
+
+    /// <summary>
+    /// Type Mappings, override for mocking.
+    /// </summary>
+    public Dictionary<string,string> Bottstrap { get; init; } = new Dictionary<string,string> { { typeof(IMultipassCli).FullName, typeof(MultipassCli).FullName } };
+ }
 
 public sealed record ImagesConfig
 {
