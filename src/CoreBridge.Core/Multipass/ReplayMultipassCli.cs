@@ -19,7 +19,7 @@ namespace CoreBridge.Core.Multipass;
 /// <c>transfer vm:… lokal</c>) entstehen nicht; ebenso installiert eine
 /// „angelegte“ VM im Gast nichts.
 /// </remarks>
-public sealed class ReplayMultipassCli : IMultipassCli
+public sealed class ReplayMultipassCli : IMultipassCli, IMultipassDouble
 {
     private readonly object _gate = new();
     private readonly Dictionary<string, Queue<MultipassCallLogEntry>> _answers = new(StringComparer.Ordinal);
@@ -50,6 +50,8 @@ public sealed class ReplayMultipassCli : IMultipassCli
     /// auf, die Konstruktorwahl wäre sonst mehrdeutig.
     /// </summary>
     public static ReplayMultipassCli FromEntries(IEnumerable<MultipassCallLogEntry> entries) => new(entries);
+
+    public string BinaryLabel => "replay://multipass";
 
     public MultipassRunResult Run(IReadOnlyList<string> args, int timeoutMs = 30000, string? exePath = null)
     {

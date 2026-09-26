@@ -15,9 +15,9 @@ public static class MultipassCliFactory
         var config = services.Resolve<AppConfig>();
         var cli = services.Resolve<IMultipassCli>();
 
-        // Die Wiedergabe liest dieses Verzeichnis selbst; es zugleich zu
-        // beschreiben, würde die Quelle mit ihren eigenen Antworten füllen.
-        if (string.IsNullOrWhiteSpace(config.MultipassLogPath) || cli is ReplayMultipassCli)
+        // Doubles werden nicht protokolliert: ihre Antworten sind keine Aufnahme
+        // echten Verhaltens, und die Wiedergabe liest dieses Verzeichnis selbst.
+        if (string.IsNullOrWhiteSpace(config.MultipassLogPath) || cli is IMultipassDouble)
         {
             return cli;
         }

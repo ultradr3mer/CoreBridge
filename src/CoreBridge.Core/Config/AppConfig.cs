@@ -39,6 +39,14 @@ public sealed record AppConfig
     public string? MultipassLogPath { get; init; }
 
     /// <summary>
+    /// Dauer, die <see cref="SimulatedMultipassCli"/> lang laufende Verben
+    /// (launch, start, stop, restart, clone) vorgibt, z. B. <c>4s</c> oder <c>0ms</c>.
+    /// Länger als ein Warteabschnitt (<see cref="DefaultTimeout"/> bzw.
+    /// <see cref="DefaultTimeoutVmCreation"/>) löst die Rückfrage „weiter warten?“ aus.
+    /// </summary>
+    public string MultipassSimulationDelay { get; init; } = "4s";
+
+    /// <summary>
     /// Typ-Zuordnungen für den <see cref="Common.CoreBridgeContainer"/>:
     /// voller Name der Schnittstelle → voller Name der Implementierung.
     /// Zum Mocken z. B. <see cref="IMultipassCli"/> → <see cref="ReplayMultipassCli"/>.

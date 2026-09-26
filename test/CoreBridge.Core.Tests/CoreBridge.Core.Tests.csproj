@@ -19,6 +19,11 @@
     <Using Include="Xunit" />
   </ItemGroup>
 
+  <!-- Echte Multipass-Aufnahmen, gegen die der Simulator geprüft wird. -->
+  <ItemGroup>
+    <None Include="Recordings\**\*.jsonl" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
   <ItemGroup>
     <ProjectReference Include="..\..\src\CoreBridge.Core\CoreBridge.Core.csproj" />
   </ItemGroup>

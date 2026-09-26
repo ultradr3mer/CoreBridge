@@ -250,7 +250,14 @@ public static class Program
     {
         InitStore.Initialize(config.Images.StoreRoot);
         using var services = CoreBridgeContainer.Create(config);
-        var context = new CommandContext(config, new VmService(MultipassCliFactory.Create(services)), factory, cancellationToken);
+        var cli = MultipassCliFactory.Create(services);
+        var context = new CommandContext(config, new VmService(cli), factory, cancellationToken);
+        if (cli is IMultipassDouble multipassDouble && options is not (InitConfigureOptions or InitListOptions or InitDeleteOptions or MultipassRestartOptions))
+        {
+            // Unübersehbar, damit niemand Ergebnisse einer Attrappe für echte VMs hält.
+            await factory.Emit(factory.Err($"[{multipassDouble.BinaryLabel}] kein echtes Multipass ({cli.GetType().Name})."));
+        }
+
         await Dispatch(context, options);
     }
 
@@ -363,12 +370,12 @@ public static class Program
     {
         var events = context.Events;
 
-        // Bei der Wiedergabe gibt es weder Binary noch Daemon: einen erfundenen
-        // Pfad melden, damit der Erfolgspfad (Parsing der Version) durchläuft.
+        // Bei Wiedergabe/Simulation gibt es weder Binary noch Daemon: den
+        // Pseudo-Pfad melden, damit der Erfolgspfad (Parsing der Version) durchläuft.
         var cli = context.Vms.Cli;
         var report = await Task.Run(
-            () => cli is ReplayMultipassCli
-                ? Doctor.Check(() => "replay://multipass", cli)
+            () => cli is IMultipassDouble multipassDouble
+                ? Doctor.Check(() => multipassDouble.BinaryLabel, cli)
                 : Doctor.Check(cli: cli),
             context.CancellationToken);
         if (!report.Found)

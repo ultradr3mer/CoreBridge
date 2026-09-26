@@ -105,7 +105,7 @@ public static class MultipassCallLog
             File.AppendAllText(
                 file,
                 JsonSerializer.Serialize(line, JsonOptions) + Environment.NewLine,
-                Encoding.UTF8);
+                new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
         }
         catch (IOException)
         {
