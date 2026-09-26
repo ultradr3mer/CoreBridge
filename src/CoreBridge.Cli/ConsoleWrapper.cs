@@ -69,15 +69,15 @@ public class ConsoleWrapper
     }
 
     /// <summary>Ja/Nein-Rückfrage auf der Konsole; ohne interaktive Eingabe immer Nein.</summary>
-    private static bool ConfirmOnConsole(string question)
+    private static bool ConfirmOnConsole<Topt>(ChoiceEvent<Topt> event)
     {
-                new ChoiceEvent<ChoiceEvent.YesNoOptions>(message);
+         var e = new ChoiceEvent<ChoiceEvent.YesNoOptions>(question);
 
         
         EndProgressLine();
         if (Console.IsInputRedirected)
         {
-            Console.WriteLine($"{question} [y/n] n (keine interaktive Eingabe)");
+            Console.WriteLine($"{event.ToString()} [y/n] n (keine interaktive Eingabe)");
             return false;
         }
 

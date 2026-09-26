@@ -13,7 +13,7 @@ namespace CoreBridge.Cli;
 public class EventFactory
 {
     private static Stopwatch sw;
-    
+
     public EventFactory(TimeSpan elapsed, string operationTimeout, string userTimeout)
     {
         this.sw = new Stopwatch() { elapsed };
@@ -31,27 +31,17 @@ public class EventFactory
 
     public static CliEvent GetElapsed() => sw.Elapsed.ToString("hh\\:mm\\:ss\\.fff");
 
-    public abstract class CliEvent
-    {
-        public CliEvent(TimeSpan elapsed)
-        {
-            this.EmissionTime = elapsed;
-        }
-
-        public TimeSpan EmissionTime { get; }
-
-        public string Printable { get; }
-    }
 }
+
 
 public abstract class CliEvent
 {
-    public CliEvent()
+    public CliEvent(TimeSpan elapsed)
     {
-        this.Timestamp = DateTime.UtcNow;
+        this.EmissionTime = elapsed;
     }
 
-    public DateTime Timestamp { get; }
+    public TimeSpan EmissionTime { get; }
 
     public string Printable { get; }
 }
