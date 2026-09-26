@@ -1,0 +1,12 @@
+{
+  "Id": "T12",
+  "Title": "image-configure \u2014 Modell \u002B generierte cloud-init",
+  "Command": "image-configure --name cbx-t12-agent -c claude,dotnet",
+  "Binary": "C:\\Program Files\\Multipass\\bin\\multipass.exe",
+  "ExitCode": 0,
+  "DurationMs": 0,
+  "StartedAt": "2026-09-17T08:11:50.1885773+02:00",
+  "Observation": "Snaps: claude-code, dotnet-sdk-100; cloud-init: F:\\source\\CoreBridge\\artifacts\\models\\cbx-t12-agent\\cloud-init.yaml",
+  "StdOut": "#cloud-config\r\n# Generiert von \u0060cb image-configure --name cbx-t12-agent\u0060.\r\n# Vollst\u00E4ndiger Bootstrap beim Launch (cloud-init l\u00E4uft als root, kein sudo n\u00F6tig):\r\n#   cb vm-create --name \u003Cvm\u003E --cloud-init \u003Cdiese-datei\u003E\r\n# (Image-Bau via \u0060image-build\u0060 optional \u2014 Snaps sind hier ohnehin enthalten und\r\n#  eine gebackene Version w\u00E4re idempotent.)\r\n\r\n# Store-Snaps (als root installiert)\r\nsnap:\r\n  commands:\r\n    - snap install claude-code\r\n    - snap install dotnet-sdk-100\r\n\r\n# .profile-Erweiterungen\r\nwrite_files:\r\n  - path: /home/ubuntu/.profile\r\n    append: true\r\n    owner: ubuntu:ubuntu\r\n    content: |\r\n      export DOTNET_ROOT=/snap/dotnet-sdk-100/current/usr/lib/dotnet\r\n      export LD_LIBRARY_PATH=$HOME/.local/lib:$LD_LIBRARY_PATH\r\n\r\nruncmd:\r\n  - mkdir -p /home/ubuntu/.local/bin\r\n  - ln -sf /snap/bin/claude-code /home/ubuntu/.local/bin/claude\r\n  - mkdir -p /home/ubuntu/.local/bin\r\n  - ln -sf /snap/dotnet-sdk-100/current/usr/bin/dotnet /home/ubuntu/.local/bin/dotnet\r\n  - |\r\n    ldd /snap/dotnet-sdk-100/current/usr/bin/dotnet 2\u003E/dev/null | grep -q \u0022not found\u0022 || exit 0\r\n    cd /home/ubuntu \u0026\u0026 rm -rf vm-libs \u0026\u0026 mkdir vm-libs \u0026\u0026 cd vm-libs\r\n    for p in \u0022libunwind8\u0022 \u0022libicu78\u0022 \u0022libbrotli1\u0022 \u0022libgssapi-krb5-2\u0022 \u0022libssl3t64\u0022 \u0022zlib1g\u0022; do apt-get download \u0022$p\u0022 2\u003E/dev/null || echo \u0022SKIP $p\u0022; done\r\n    for d in *.deb; do dpkg -x \u0022$d\u0022 \u0022ex-$d\u0022; done\r\n    cp ex-*.deb/usr/lib/x86_64-linux-gnu/*.so.* /home/ubuntu/.local/lib/ 2\u003E/dev/null\r\n    cd /home/ubuntu \u0026\u0026 rm -rf vm-libs\r\n  - chown -R ubuntu:ubuntu /home/ubuntu\r\n",
+  "StdErr": ""
+}
