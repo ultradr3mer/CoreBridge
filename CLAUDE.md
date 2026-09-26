@@ -16,7 +16,7 @@ dotnet test test/CoreBridge.Core.Tests                               # unit test
 dotnet test test/CoreBridge.Core.Tests --filter "FullyQualifiedName~ImageTests"   # single class
 dotnet test test/CoreBridge.Core.Tests --filter "FullyQualifiedName~ImageTests.SomeMethod"
 dotnet test test/CoreBridge.Cli.Tests                                # full VM lifecycle (Category=Integration), needs Multipass
-dotnet test --filter "Category!=Integration"                         # fast run: skips Cli.Tests + Multipass.Experiments
+dotnet test --filter "Category!=Integration"                         # fast run: skips the Cli.Tests lifecycle
 dotnet run --project src/CoreBridge.Cli -- vm-list                   # run a CLI verb
 dotnet run --project src/CoreBridge.Tui                              # TUI app
 ```
@@ -41,5 +41,6 @@ CLI verbs (CommandLineParser): `multipass-status|restart` (restart asks to relau
 
 - **CoreBridge.Core.Tests** — xUnit unit tests; Multipass calls are faked via `MultipassCli` subclasses / locator parameters.
 - **CoreBridge.Cli.Tests** — one ordered integration lifecycle (`CliLifecycleTests`, `[Trait("Category","Integration")]`): methods are named `_0_…`, `_1_…` and sorted ordinally by `LifecycleTestCaseOrderer`; each stage depends on the previous one via the shared `CliLifecycleFixture`. It calls `Program.Run` in-process (no child CLI process), uses a temp `ImageStore`, creates real VMs/images named `cbx-cli-*`, and skips itself when Multipass is unavailable. Run the whole class, not individual stages.
-- **Multipass.Experiments** — exploratory tests T01–T11 against real Multipass (`[MultipassFact]` skips when not installed). Every class carries `[Trait("Category","Integration")]`, so `dotnet test --filter "Category!=Integration"` skips them: they launch, measure, transfer and delete real VMs and take a very long time. **An unfiltered `dotnet test` on the solution therefore looks like it hangs** — it is running these, not stuck. Each run writes raw JSON to `experiment-data/` and appends to `EXPERIMENT_LOG.md` at the repo root; the log is append-only by design.
 - VMs created by tests use the `cbx-` prefix; `scripts/group-vms.ps1` groups them into a Hyper-V VM group (`-Remove` to undo).
+
+The exploratory Multipass experiments (`test/Multipass.Experiments`) were removed on 2026-09-26; they were scaffolding for discovering Multipass behaviour, and an unfiltered `dotnet test` on the solution now only runs the two test projects above. The `Category!=Integration` filter is therefore only needed to skip the `CoreBridge.Cli.Tests` lifecycle.
