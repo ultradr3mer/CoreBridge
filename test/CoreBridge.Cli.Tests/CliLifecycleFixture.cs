@@ -125,18 +125,36 @@ public sealed class CliLifecycleFixture : IDisposable
         var lines = new List<string>();
         try
         {
-            // Rückfragen (VM starten/stoppen/löschen, weiter warten) werden im
-            // automatisierten Lauf bejaht und protokolliert.
-            bool Confirm(string question)
+            // Der Test ist der Konsument des Ereignisstroms — dieselbe Rolle wie
+            // die ConsoleAdapter in der echten CLI: Ausgabe sammeln und
+            // Rückfragen beantworten.
+            await foreach (var cliEvent in Program.Run(config, options))
             {
-                log($"{question} [y/n] y (Test)");
-                return true;
-            }
-
-            await foreach (var line in Program.Run(config, options, confirm: Confirm))
-            {
-                log(line);
-                lines.Add(line);
+                switch (cliEvent)
+                {
+                    // Reihenfolge zählt: InteractionEvent erbt von StdEvent.
+                    case ChoiceEvent<YesNoOptions> yesNo:
+                        log($"{yesNo.Printable} [y/n] y (Test)");
+                        yesNo.SetResult(YesNoOptions.Yes);
+                        break;
+                    case TextEvent text:
+                        log($"{text.Printable}(Test: keine Eingabe)");
+                        text.SetResult(null);
+                        break;
+                    case ProgressEvent:
+                        break;
+                    case StdEvent std:
+                        log(std.Printable);
+                        lines.Add(std.Printable);
+                        break;
+                    case ErrEvent err:
+                        log(err.Printable);
+                        break;
+                    default:
+                        log(cliEvent.Printable);
+                        lines.Add(cliEvent.Printable);
+                        break;
+                }
             }
 
             return new CliRunResult(0, lines);

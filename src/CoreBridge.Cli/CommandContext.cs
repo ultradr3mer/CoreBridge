@@ -11,16 +11,35 @@ namespace CoreBridge.Cli;
 /// </summary>
 /// <param name="Config">Gemeinsame CLI-/TUI-Konfiguration.</param>
 /// <param name="Vms">Multipass-VM-Verben.</param>
-/// <param name="Confirm">Ja/Nein-Rückfrage an den Benutzer; <c>true</c> = Ja.</param>
-/// <param name="Prompt">Freitext-Eingabe des Benutzers; <c>null</c> = keine Eingabe.</param>
+/// <param name="Events">
+/// Erzeugt die Ereignisse dieses Kommandos und reicht sie an den Konsumenten
+/// weiter; beantwortet werden sie über <c>Ask</c>/<c>AskAsync</c>.
+/// </param>
 /// <param name="CancellationToken">Abbruch per Strg+C.</param>
 public sealed record CommandContext(
     AppConfig Config,
     VmService Vms,
-    Func<string, bool> Confirm,
-    Func<string, string?> Prompt,
+    EventFactory Events,
     CancellationToken CancellationToken)
 {
     /// <summary><c>DefaultTimeout</c> (ggf. per <c>--timeout</c> ersetzt) in Millisekunden.</summary>
     public int DefaultTimeoutMs => (int)Config.DefaultTimeout.ReadTime().TotalMilliseconds;
+
+    /// <summary>
+    /// Ja/Nein-Rückfrage, die <c>await</c>en kann — für Kommandos, die nicht
+    /// in einem Core-Callback festhängen.
+    /// </summary>
+    public async ValueTask<bool> ConfirmAsync(string question, TimeSpan? timeout = null)
+    {
+        return await this.Events.AskAsync(this.Events.Choice<YesNoOptions>(question, timeout))
+            == YesNoOptions.Yes;
+    }
+
+    /// <summary>
+    /// Freitext-Eingabe, die <c>await</c>en kann; <c>null</c> = keine Eingabe.
+    /// </summary>
+    public ValueTask<string?> PromptAsync(string question, TimeSpan? timeout = null)
+    {
+        return this.Events.AskAsync(this.Events.Text(question, timeout));
+    }
 }

@@ -4,6 +4,7 @@ using CoreBridge.Core.Vm;
 namespace Multipass.Experiments;
 
 [Collection("MultipassExperiments")]
+[Trait("Category", "Integration")]
 public class T03LaunchLatencyTests : MultipassExperiment
 {
     private const string Image = "core26";

@@ -4,6 +4,7 @@ using CoreBridge.Core.Vm;
 namespace Multipass.Experiments;
 
 [Collection("MultipassExperiments")]
+[Trait("Category", "Integration")]
 public class T11LocalImageTests : MultipassExperiment
 {
     private const string VmName = "cbx-t11-local";

@@ -5,6 +5,7 @@ using CoreBridge.Core.Vm;
 namespace Multipass.Experiments;
 
 [Collection("MultipassExperiments")]
+[Trait("Category", "Integration")]
 public class T06CloudInitTests : MultipassExperiment
 {
     private const string Vm = "cbx-t06";

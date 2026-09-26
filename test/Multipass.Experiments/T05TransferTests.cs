@@ -4,6 +4,7 @@ using CoreBridge.Core.Vm;
 namespace Multipass.Experiments;
 
 [Collection("MultipassExperiments")]
+[Trait("Category", "Integration")]
 public class T05TransferTests : MultipassExperiment
 {
     private const string Vm = "cbx-t03-b";

@@ -4,6 +4,7 @@ using CoreBridge.Core.Vm;
 namespace Multipass.Experiments;
 
 [Collection("MultipassExperiments")]
+[Trait("Category", "Integration")]
 public class T10CleanupTests : MultipassExperiment
 {
     private const string Prefix = "cbx-";

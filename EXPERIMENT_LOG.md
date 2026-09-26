@@ -485,3 +485,609 @@ Roh-Ausgabe:
     }
 }
 ```
+
+## T11 — Custom-Image-Launch des lokal gebauten core26-Images — 2026-09-26 04:47:02
+
+- Kommando: `multipass launch <image-url> --name cbx-t11-local`
+- Binary: `C:\Program Files\Multipass\bin\multipass.exe`
+- Exit-Code: 0
+- Dauer: 0 ms
+- Rohdaten: `experiment-data/T11-20260926-044702-934.json`
+- Beobachtung: Übersprungen — CORE_BRIDGE_T11_IMAGE_URL nicht gesetzt. Hinweis: Windows-file:// ist in multipass 1.16.3 unbrauchbar (Client mangled Laufwerkspfad, Daemon verwirft host != leer) — Image daher per http:// (z. B. `python -m http.server`) servieren.
+
+Roh-Ausgabe:
+
+```
+
+
+StdErr:
+Keine Image-URL
+```
+
+## T10 — Cleanup — löscht nur cbx-* — 2026-09-26 04:47:03
+
+- Kommando: `multipass delete <cbx-*> (keine aktiv vorhanden)`
+- Binary: `C:\Program Files\Multipass\bin\multipass.exe`
+- Exit-Code: 0
+- Dauer: 0 ms
+- Rohdaten: `experiment-data/T10-20260926-044703-052.json`
+- Beobachtung: Nichts zu löschen — bereits im Papierkorb: cbx-t03-a, cbx-t03-b, cbx-t06.
+
+Roh-Ausgabe:
+
+```
+
+```
+
+## T09 — Lifecycle — stop/start/delete — 2026-09-26 04:47:03
+
+- Kommando: `multipass stop/start/delete cbx-t03-a`
+- Binary: `C:\Program Files\Multipass\bin\multipass.exe`
+- Exit-Code: 0
+- Dauer: 0 ms
+- Rohdaten: `experiment-data/T09-20260926-044703-136.json`
+- Beobachtung: Übersprungen — VM existiert nicht (oder nur im Papierkorb): cbx-t03-a
+
+Roh-Ausgabe:
+
+```
+
+```
+
+## T06 — `launch --cloud-init` — write_files — 2026-09-26 04:47:03
+
+- Kommando: `multipass launch --name cbx-t06 --cloud-init <yaml> core26`
+- Binary: `C:\Program Files\Multipass\bin\multipass.exe`
+- Exit-Code: 0
+- Dauer: 0 ms
+- Rohdaten: `experiment-data/T06-20260926-044703-307.json`
+- Beobachtung: Launch übersprungen — VM existierte bereits: cbx-t06
+
+Roh-Ausgabe:
+
+```
+
+```
+
+## T05 — `transfer` — Host -> VM — 2026-09-26 04:47:03
+
+- Kommando: `multipass transfer C:\Users\Clara\AppData\Local\Temp\cbx-t05-ad9ded2851ea4cf38291865f16f92ade\payload.txt cbx-t03-b:/tmp/cbx-t05-payload.txt`
+- Binary: `C:\Program Files\Multipass\bin\multipass.exe`
+- Exit-Code: 2
+- Dauer: 67 ms
+- Rohdaten: `experiment-data/T05-20260926-044703-463.json`
+- Beobachtung: Dauer: 67 ms
+
+Roh-Ausgabe:
+
+```
+
+
+StdErr:
+transfer failed: The following errors occurred:
+instance "cbx-t03-b" is deleted
+```
+
+## T04 — `exec` — /bin/sh Verfügbarkeit — 2026-09-26 04:47:03
+
+- Kommando: `multipass exec cbx-t03-a -- /bin/sh -c 'echo shell-ok'`
+- Binary: `C:\Program Files\Multipass\bin\multipass.exe`
+- Exit-Code: 2
+- Dauer: 102 ms
+- Rohdaten: `experiment-data/T04-20260926-044703-658.json`
+- Beobachtung: Dauer: 102 ms
+
+Roh-Ausgabe:
+
+```
+
+
+StdErr:
+exec failed: The following errors occurred:
+instance "cbx-t03-a" is deleted
+```
+
+## T03 — `launch` — kalt (erster Launch des Images, inkl. Download) — 2026-09-26 04:47:04
+
+- Kommando: `multipass launch core26 --name cbx-t03-a`
+- Binary: `C:\Program Files\Multipass\bin\multipass.exe`
+- Exit-Code: 2
+- Dauer: 335 ms
+- Rohdaten: `experiment-data/T03-20260926-044704-081.json`
+- Beobachtung: Dauer: 335 ms — VMs vor Launch: [keine]
+
+Roh-Ausgabe:
+
+```
+[2K[0A[0E[2K[0A[0E
+
+StdErr:
+launch failed: instance "cbx-t03-a" already exists
+```
+
+## T02 — `find --format json` — Image-Katalog — 2026-09-26 04:47:04
+
+- Kommando: `multipass find --format json`
+- Binary: `C:\Program Files\Multipass\bin\multipass.exe`
+- Exit-Code: 0
+- Dauer: 89 ms
+- Rohdaten: `experiment-data/T02-20260926-044704-175.json`
+- Beobachtung: 15 Images, 7 (deprecated) Blueprints. Ubuntu Core IST im Katalog: core, core18, core20, core22, core24, core26.
+22.04 (OS: Ubuntu, Release: 22.04 LTS, Aliases: jammy)
+24.04 (OS: Ubuntu, Release: 24.04 LTS, Aliases: noble)
+26.04 (OS: Ubuntu, Release: 26.04 LTS, Aliases: resolute, lts)
+appliance:adguard-home (OS: Ubuntu, Release: AdGuard Home Appliance, Aliases: )
+appliance:mosquitto (OS: Ubuntu, Release: Mosquitto Appliance, Aliases: )
+appliance:nextcloud (OS: Ubuntu, Release: Nextcloud Appliance, Aliases: )
+appliance:openhab (OS: Ubuntu, Release: openHAB Home Appliance, Aliases: )
+appliance:plexmediaserver (OS: Ubuntu, Release: Plex Media Server Appliance, Aliases: )
+core (OS: Ubuntu, Release: Core 16, Aliases: core16)
+core18 (OS: Ubuntu, Release: Core 18, Aliases: )
+core20 (OS: Ubuntu, Release: Core 20, Aliases: )
+core22 (OS: Ubuntu, Release: Core 22, Aliases: )
+core24 (OS: Ubuntu, Release: Core 24, Aliases: )
+core26 (OS: Ubuntu, Release: Core 26, Aliases: )
+daily:26.10 (OS: Ubuntu, Release: 26.10, Aliases: stonking, devel)
+
+Roh-Ausgabe:
+
+```
+{
+    "blueprints (deprecated)": {
+        "anbox-cloud-appliance": {
+            "aliases": [
+            ],
+            "os": "",
+            "release": "Anbox Cloud Appliance",
+            "remote": "",
+            "version": "latest"
+        },
+        "charm-dev": {
+            "aliases": [
+            ],
+            "os": "",
+            "release": "A development and testing environment for charmers",
+... [161 Zeilen gekürzt] ...
+            "remote": "",
+            "version": "20260506"
+        },
+        "daily:26.10": {
+            "aliases": [
+                "stonking",
+                "devel"
+            ],
+            "os": "Ubuntu",
+            "release": "26.10",
+            "remote": "daily",
+            "version": "20260919"
+        }
+    }
+}
+```
+
+## T01 — Installation & `version` — 2026-09-26 04:47:04
+
+- Kommando: `multipass version --format json`
+- Binary: `C:\Program Files\Multipass\bin\multipass.exe`
+- Exit-Code: 0
+- Dauer: 48 ms
+- Rohdaten: `experiment-data/T01-20260926-044704-227.json`
+- Beobachtung: client=1.16.3+win, daemon=1.16.3+win
+
+Roh-Ausgabe:
+
+```
+{
+    "multipass": "1.16.3+win",
+    "multipassd": "1.16.3+win",
+    "update": {
+        "description": "Fully open source, custom image launch, GUI improvements, and many fixes.",
+        "title": "Multipass 1.16.4 release",
+        "url": "https://github.com/canonical/multipass/releases/tag/v1.16.4"
+    }
+}
+```
+
+## T11 — Custom-Image-Launch des lokal gebauten core26-Images — 2026-09-26 04:47:15
+
+- Kommando: `multipass launch <image-url> --name cbx-t11-local`
+- Binary: `C:\Program Files\Multipass\bin\multipass.exe`
+- Exit-Code: 0
+- Dauer: 0 ms
+- Rohdaten: `experiment-data/T11-20260926-044715-450.json`
+- Beobachtung: Übersprungen — CORE_BRIDGE_T11_IMAGE_URL nicht gesetzt. Hinweis: Windows-file:// ist in multipass 1.16.3 unbrauchbar (Client mangled Laufwerkspfad, Daemon verwirft host != leer) — Image daher per http:// (z. B. `python -m http.server`) servieren.
+
+Roh-Ausgabe:
+
+```
+
+
+StdErr:
+Keine Image-URL
+```
+
+## T10 — Cleanup — löscht nur cbx-* — 2026-09-26 04:47:15
+
+- Kommando: `multipass delete <cbx-*> (keine aktiv vorhanden)`
+- Binary: `C:\Program Files\Multipass\bin\multipass.exe`
+- Exit-Code: 0
+- Dauer: 0 ms
+- Rohdaten: `experiment-data/T10-20260926-044715-563.json`
+- Beobachtung: Nichts zu löschen — bereits im Papierkorb: cbx-t03-a, cbx-t03-b, cbx-t06.
+
+Roh-Ausgabe:
+
+```
+
+```
+
+## T09 — Lifecycle — stop/start/delete — 2026-09-26 04:47:15
+
+- Kommando: `multipass stop/start/delete cbx-t03-a`
+- Binary: `C:\Program Files\Multipass\bin\multipass.exe`
+- Exit-Code: 0
+- Dauer: 0 ms
+- Rohdaten: `experiment-data/T09-20260926-044715-682.json`
+- Beobachtung: Übersprungen — VM existiert nicht (oder nur im Papierkorb): cbx-t03-a
+
+Roh-Ausgabe:
+
+```
+
+```
+
+## T06 — `launch --cloud-init` — write_files — 2026-09-26 04:47:15
+
+- Kommando: `multipass launch --name cbx-t06 --cloud-init <yaml> core26`
+- Binary: `C:\Program Files\Multipass\bin\multipass.exe`
+- Exit-Code: 0
+- Dauer: 0 ms
+- Rohdaten: `experiment-data/T06-20260926-044715-847.json`
+- Beobachtung: Launch übersprungen — VM existierte bereits: cbx-t06
+
+Roh-Ausgabe:
+
+```
+
+```
+
+## T05 — `transfer` — Host -> VM — 2026-09-26 04:47:15
+
+- Kommando: `multipass transfer C:\Users\Clara\AppData\Local\Temp\cbx-t05-ddc83f40542f4d31b37ac87840bbd17c\payload.txt cbx-t03-b:/tmp/cbx-t05-payload.txt`
+- Binary: `C:\Program Files\Multipass\bin\multipass.exe`
+- Exit-Code: 2
+- Dauer: 61 ms
+- Rohdaten: `experiment-data/T05-20260926-044715-993.json`
+- Beobachtung: Dauer: 61 ms
+
+Roh-Ausgabe:
+
+```
+
+
+StdErr:
+transfer failed: The following errors occurred:
+instance "cbx-t03-b" is deleted
+```
+
+## T04 — `exec` — /bin/sh Verfügbarkeit — 2026-09-26 04:47:16
+
+- Kommando: `multipass exec cbx-t03-a -- /bin/sh -c 'echo shell-ok'`
+- Binary: `C:\Program Files\Multipass\bin\multipass.exe`
+- Exit-Code: 2
+- Dauer: 75 ms
+- Rohdaten: `experiment-data/T04-20260926-044716-158.json`
+- Beobachtung: Dauer: 75 ms
+
+Roh-Ausgabe:
+
+```
+
+
+StdErr:
+exec failed: The following errors occurred:
+instance "cbx-t03-a" is deleted
+```
+
+## T03 — `launch` — kalt (erster Launch des Images, inkl. Download) — 2026-09-26 04:47:16
+
+- Kommando: `multipass launch core26 --name cbx-t03-a`
+- Binary: `C:\Program Files\Multipass\bin\multipass.exe`
+- Exit-Code: 2
+- Dauer: 63 ms
+- Rohdaten: `experiment-data/T03-20260926-044716-304.json`
+- Beobachtung: Dauer: 63 ms — VMs vor Launch: [keine]
+
+Roh-Ausgabe:
+
+```
+[2K[0A[0E[2K[0A[0E
+
+StdErr:
+launch failed: instance "cbx-t03-a" already exists
+```
+
+## T02 — `find --format json` — Image-Katalog — 2026-09-26 04:47:16
+
+- Kommando: `multipass find --format json`
+- Binary: `C:\Program Files\Multipass\bin\multipass.exe`
+- Exit-Code: 0
+- Dauer: 100 ms
+- Rohdaten: `experiment-data/T02-20260926-044716-408.json`
+- Beobachtung: 15 Images, 7 (deprecated) Blueprints. Ubuntu Core IST im Katalog: core, core18, core20, core22, core24, core26.
+22.04 (OS: Ubuntu, Release: 22.04 LTS, Aliases: jammy)
+24.04 (OS: Ubuntu, Release: 24.04 LTS, Aliases: noble)
+26.04 (OS: Ubuntu, Release: 26.04 LTS, Aliases: resolute, lts)
+appliance:adguard-home (OS: Ubuntu, Release: AdGuard Home Appliance, Aliases: )
+appliance:mosquitto (OS: Ubuntu, Release: Mosquitto Appliance, Aliases: )
+appliance:nextcloud (OS: Ubuntu, Release: Nextcloud Appliance, Aliases: )
+appliance:openhab (OS: Ubuntu, Release: openHAB Home Appliance, Aliases: )
+appliance:plexmediaserver (OS: Ubuntu, Release: Plex Media Server Appliance, Aliases: )
+core (OS: Ubuntu, Release: Core 16, Aliases: core16)
+core18 (OS: Ubuntu, Release: Core 18, Aliases: )
+core20 (OS: Ubuntu, Release: Core 20, Aliases: )
+core22 (OS: Ubuntu, Release: Core 22, Aliases: )
+core24 (OS: Ubuntu, Release: Core 24, Aliases: )
+core26 (OS: Ubuntu, Release: Core 26, Aliases: )
+daily:26.10 (OS: Ubuntu, Release: 26.10, Aliases: stonking, devel)
+
+Roh-Ausgabe:
+
+```
+{
+    "blueprints (deprecated)": {
+        "anbox-cloud-appliance": {
+            "aliases": [
+            ],
+            "os": "",
+            "release": "Anbox Cloud Appliance",
+            "remote": "",
+            "version": "latest"
+        },
+        "charm-dev": {
+            "aliases": [
+            ],
+            "os": "",
+            "release": "A development and testing environment for charmers",
+... [161 Zeilen gekürzt] ...
+            "remote": "",
+            "version": "20260506"
+        },
+        "daily:26.10": {
+            "aliases": [
+                "stonking",
+                "devel"
+            ],
+            "os": "Ubuntu",
+            "release": "26.10",
+            "remote": "daily",
+            "version": "20260919"
+        }
+    }
+}
+```
+
+## T01 — Installation & `version` — 2026-09-26 04:47:16
+
+- Kommando: `multipass version --format json`
+- Binary: `C:\Program Files\Multipass\bin\multipass.exe`
+- Exit-Code: 0
+- Dauer: 56 ms
+- Rohdaten: `experiment-data/T01-20260926-044716-469.json`
+- Beobachtung: client=1.16.3+win, daemon=1.16.3+win
+
+Roh-Ausgabe:
+
+```
+{
+    "multipass": "1.16.3+win",
+    "multipassd": "1.16.3+win",
+    "update": {
+        "description": "Fully open source, custom image launch, GUI improvements, and many fixes.",
+        "title": "Multipass 1.16.4 release",
+        "url": "https://github.com/canonical/multipass/releases/tag/v1.16.4"
+    }
+}
+```
+
+## T11 — Custom-Image-Launch des lokal gebauten core26-Images — 2026-09-26 04:47:30
+
+- Kommando: `multipass launch <image-url> --name cbx-t11-local`
+- Binary: `C:\Program Files\Multipass\bin\multipass.exe`
+- Exit-Code: 0
+- Dauer: 0 ms
+- Rohdaten: `experiment-data/T11-20260926-044730-406.json`
+- Beobachtung: Übersprungen — CORE_BRIDGE_T11_IMAGE_URL nicht gesetzt. Hinweis: Windows-file:// ist in multipass 1.16.3 unbrauchbar (Client mangled Laufwerkspfad, Daemon verwirft host != leer) — Image daher per http:// (z. B. `python -m http.server`) servieren.
+
+Roh-Ausgabe:
+
+```
+
+
+StdErr:
+Keine Image-URL
+```
+
+## T10 — Cleanup — löscht nur cbx-* — 2026-09-26 04:47:30
+
+- Kommando: `multipass delete <cbx-*> (keine aktiv vorhanden)`
+- Binary: `C:\Program Files\Multipass\bin\multipass.exe`
+- Exit-Code: 0
+- Dauer: 0 ms
+- Rohdaten: `experiment-data/T10-20260926-044730-514.json`
+- Beobachtung: Nichts zu löschen — bereits im Papierkorb: cbx-t03-a, cbx-t03-b, cbx-t06.
+
+Roh-Ausgabe:
+
+```
+
+```
+
+## T09 — Lifecycle — stop/start/delete — 2026-09-26 04:47:30
+
+- Kommando: `multipass stop/start/delete cbx-t03-a`
+- Binary: `C:\Program Files\Multipass\bin\multipass.exe`
+- Exit-Code: 0
+- Dauer: 0 ms
+- Rohdaten: `experiment-data/T09-20260926-044730-594.json`
+- Beobachtung: Übersprungen — VM existiert nicht (oder nur im Papierkorb): cbx-t03-a
+
+Roh-Ausgabe:
+
+```
+
+```
+
+## T06 — `launch --cloud-init` — write_files — 2026-09-26 04:47:30
+
+- Kommando: `multipass launch --name cbx-t06 --cloud-init <yaml> core26`
+- Binary: `C:\Program Files\Multipass\bin\multipass.exe`
+- Exit-Code: 0
+- Dauer: 0 ms
+- Rohdaten: `experiment-data/T06-20260926-044730-764.json`
+- Beobachtung: Launch übersprungen — VM existierte bereits: cbx-t06
+
+Roh-Ausgabe:
+
+```
+
+```
+
+## T05 — `transfer` — Host -> VM — 2026-09-26 04:47:30
+
+- Kommando: `multipass transfer C:\Users\Clara\AppData\Local\Temp\cbx-t05-7cd96a1287934b57a430b3d4fa8d02fd\payload.txt cbx-t03-b:/tmp/cbx-t05-payload.txt`
+- Binary: `C:\Program Files\Multipass\bin\multipass.exe`
+- Exit-Code: 2
+- Dauer: 64 ms
+- Rohdaten: `experiment-data/T05-20260926-044730-924.json`
+- Beobachtung: Dauer: 64 ms
+
+Roh-Ausgabe:
+
+```
+
+
+StdErr:
+transfer failed: The following errors occurred:
+instance "cbx-t03-b" is deleted
+```
+
+## T04 — `exec` — /bin/sh Verfügbarkeit — 2026-09-26 04:47:31
+
+- Kommando: `multipass exec cbx-t03-a -- /bin/sh -c 'echo shell-ok'`
+- Binary: `C:\Program Files\Multipass\bin\multipass.exe`
+- Exit-Code: 2
+- Dauer: 75 ms
+- Rohdaten: `experiment-data/T04-20260926-044731-098.json`
+- Beobachtung: Dauer: 75 ms
+
+Roh-Ausgabe:
+
+```
+
+
+StdErr:
+exec failed: The following errors occurred:
+instance "cbx-t03-a" is deleted
+```
+
+## T03 — `launch` — kalt (erster Launch des Images, inkl. Download) — 2026-09-26 04:47:31
+
+- Kommando: `multipass launch core26 --name cbx-t03-a`
+- Binary: `C:\Program Files\Multipass\bin\multipass.exe`
+- Exit-Code: 2
+- Dauer: 59 ms
+- Rohdaten: `experiment-data/T03-20260926-044731-238.json`
+- Beobachtung: Dauer: 59 ms — VMs vor Launch: [keine]
+
+Roh-Ausgabe:
+
+```
+[2K[0A[0E[2K[0A[0E
+
+StdErr:
+launch failed: instance "cbx-t03-a" already exists
+```
+
+## T02 — `find --format json` — Image-Katalog — 2026-09-26 04:47:31
+
+- Kommando: `multipass find --format json`
+- Binary: `C:\Program Files\Multipass\bin\multipass.exe`
+- Exit-Code: 0
+- Dauer: 89 ms
+- Rohdaten: `experiment-data/T02-20260926-044731-332.json`
+- Beobachtung: 15 Images, 7 (deprecated) Blueprints. Ubuntu Core IST im Katalog: core, core18, core20, core22, core24, core26.
+22.04 (OS: Ubuntu, Release: 22.04 LTS, Aliases: jammy)
+24.04 (OS: Ubuntu, Release: 24.04 LTS, Aliases: noble)
+26.04 (OS: Ubuntu, Release: 26.04 LTS, Aliases: resolute, lts)
+appliance:adguard-home (OS: Ubuntu, Release: AdGuard Home Appliance, Aliases: )
+appliance:mosquitto (OS: Ubuntu, Release: Mosquitto Appliance, Aliases: )
+appliance:nextcloud (OS: Ubuntu, Release: Nextcloud Appliance, Aliases: )
+appliance:openhab (OS: Ubuntu, Release: openHAB Home Appliance, Aliases: )
+appliance:plexmediaserver (OS: Ubuntu, Release: Plex Media Server Appliance, Aliases: )
+core (OS: Ubuntu, Release: Core 16, Aliases: core16)
+core18 (OS: Ubuntu, Release: Core 18, Aliases: )
+core20 (OS: Ubuntu, Release: Core 20, Aliases: )
+core22 (OS: Ubuntu, Release: Core 22, Aliases: )
+core24 (OS: Ubuntu, Release: Core 24, Aliases: )
+core26 (OS: Ubuntu, Release: Core 26, Aliases: )
+daily:26.10 (OS: Ubuntu, Release: 26.10, Aliases: stonking, devel)
+
+Roh-Ausgabe:
+
+```
+{
+    "blueprints (deprecated)": {
+        "anbox-cloud-appliance": {
+            "aliases": [
+            ],
+            "os": "",
+            "release": "Anbox Cloud Appliance",
+            "remote": "",
+            "version": "latest"
+        },
+        "charm-dev": {
+            "aliases": [
+            ],
+            "os": "",
+            "release": "A development and testing environment for charmers",
+... [161 Zeilen gekürzt] ...
+            "remote": "",
+            "version": "20260506"
+        },
+        "daily:26.10": {
+            "aliases": [
+                "stonking",
+                "devel"
+            ],
+            "os": "Ubuntu",
+            "release": "26.10",
+            "remote": "daily",
+            "version": "20260919"
+        }
+    }
+}
+```
+
+## T01 — Installation & `version` — 2026-09-26 04:47:31
+
+- Kommando: `multipass version --format json`
+- Binary: `C:\Program Files\Multipass\bin\multipass.exe`
+- Exit-Code: 0
+- Dauer: 47 ms
+- Rohdaten: `experiment-data/T01-20260926-044731-383.json`
+- Beobachtung: client=1.16.3+win, daemon=1.16.3+win
+
+Roh-Ausgabe:
+
+```
+{
+    "multipass": "1.16.3+win",
+    "multipassd": "1.16.3+win",
+    "update": {
+        "description": "Fully open source, custom image launch, GUI improvements, and many fixes.",
+        "title": "Multipass 1.16.4 release",
+        "url": "https://github.com/canonical/multipass/releases/tag/v1.16.4"
+    }
+}
+```

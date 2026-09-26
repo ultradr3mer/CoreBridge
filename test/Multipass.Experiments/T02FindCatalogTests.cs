@@ -3,6 +3,7 @@ using System.Text.Json;
 namespace Multipass.Experiments;
 
 [Collection("MultipassExperiments")]
+[Trait("Category", "Integration")]
 public class T02FindCatalogTests : MultipassExperiment
 {
     [MultipassFact]
