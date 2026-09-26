@@ -207,7 +207,7 @@ public static class Program
     /// Freitext-Eingabe, z. B. das Folgekommando nach abgebrochenem Warten in
     /// vm-create. Ohne Angabe gibt es keine Eingabe (<c>null</c>).
     /// </param>
-    public static IAsyncEnumerable<string> Run(
+    public static IAsyncEnumerable<CliEvent> Run(
         AppConfig config,
         IOptions options,
         CancellationToken cancellationToken = default,

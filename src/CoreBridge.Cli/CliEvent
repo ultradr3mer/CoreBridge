@@ -10,6 +10,40 @@ using Microsoft.Extensions.Configuration;
 
 namespace CoreBridge.Cli;
 
+public class EventFactory
+{
+    private static Stopwatch sw;
+    
+    public EventFactory(TimeSpan elapsed, string operationTimeout, string userTimeout)
+    {
+        this.sw = new Stopwatch() { elapsed };
+        sw.Start();
+
+        this.operationTimeout = TimeSpan.Parse(operationTimeout);
+        this.userTimeout = TimeSpan.Parse(userTimeout);
+    }
+
+    public static CliEvent Std(string data) => new StdEvent(data);
+    public static CliEvent Err(string data) => new ErrEvent(data);
+    public static InteractionEvent<T> Interaction<T>(string message, string timeout) => new InteractionEvent<T>(message, timeout);
+
+    public static ChoiceEvent<T> Choice<T>(string message, string timeout) => new ChoiceEvent<T>(message, timeout);
+
+    public static CliEvent GetElapsed() => sw.Elapsed.ToString("hh\\:mm\\:ss\\.fff");
+
+    public abstract class CliEvent
+    {
+        public CliEvent(TimeSpan elapsed)
+        {
+            this.EmissionTime = elapsed;
+        }
+
+        public TimeSpan EmissionTime { get; }
+
+        public string Printable { get; }
+    }
+}
+
 public abstract class CliEvent
 {
     public CliEvent()
@@ -18,78 +52,169 @@ public abstract class CliEvent
     }
 
     public DateTime Timestamp { get; }
+
+    public string Printable { get; }
 }
 
 public class StdEvent : CliEvent
 {
-    private string data;
-
-
-    public StdEvent(string data)
+    public StdEvent(string printable)
     {
-        this.data = data;
+        this.Printable = printable;
     }
 }
 
 public class ErrEvent : CliEvent
 {
-    private string data;
-
-
-    public ErrEvent(string data)
+    public ErrEvent(string printable)
     {
-        this.data = data;
+        this.Printable = printable;
     }
 }
 
-public class InteractionEvent<T> : StdEvent, IAwaitable<T>
+public abstract class InteractionEvent<T> : StdEvent, Task<T>
 {
-    private T? result;
 
-    public InteractionEvent(string message)
-        : base(message)
+    public InteractionEvent(string message, string timeout)
+       : base(message)
     {
+        tcs = new TaskCompletionSource<T>();
     }
 
-    public IAwaiter<T> GetAwaiter()
+    TaskCompletionSource<T> tcs;
+
+    public async Task<T> GetAwaiter()
     {
-        return this.result ?? throw new InvalidOperationException("Result not set yet.");
+        return tcs.Task;
     }
 
-    protected T Result { set => this.result = value; }
+    protected void SetResult(T value)
+    {
+        this.tcs.SetResult(value);
+    }
+
+    public void SetCanceled()
+    {
+        this.tcs.SetCanceled();
+    }
 }
 
-public class QuestionEvent<T> : InteractionEvent
+public class OptionDef : Attribute
 {
-    private static abstract class Options<T>
+    private readonly string[] patterns;
+    private readonly string display;
+
+    public OptionDef(string display, string pattern)
     {
-        public static T[] Values { get; }
-        public static string[] Display { get; }
+        this.patterns = pattern.Split(",").ToArray();
+        this.display = display;
     }
 
-    public static class YesNoOptions : Options
+    public bool IsMatch(string input)
     {
-        public static string[] Values { get => ["y", "n"] };
+        return this.patterns.Any(p => p.Equals(input, StringComparison.OrdinalIgnoreCase));
     }
 
-    public static class OkCancelOptions : Options
+    public static bool IsMatch<T>(string input) where T : Enum
     {
-        public static string[] Values { get => ["ok", "cancel"] };
+        return FromAttribute(option).IsMatch(input);
     }
 
-    private T? result;
-
-
-    public IAwaiter<T> GetAwaiter()
+    public static bool IsMatch<T>(string input, out OptionDef def) where T : Enum
     {
-        return this.result ?? throw new InvalidOperationException("Result not set yet.");
+        var opt = Enum.GetValues(typeof(T)).Cast<T>().ToArray();
+        return FromAttribute(option).IsMatch(input);
     }
 
-    protected T Result { set => this.result = value; }
+    public static bool HasMatch<T>(string input, out OptionDef def, params T[] option) where T : Enum
+    {
+        def = null;
+        var m = (from o in option
+                 let attr = FromAttribute(o)
+                 where attr.IsMatch(input)
+                 select attr).GetEnumerator();
+
+        if (m.MoveNext())
+        {
+            def = m.Current;
+            return true;
+        }
+
+        def = null;
+        return false;
+    }
+
+    private static OptionDef FromAttribute<T>(T option) where T : Enum
+    {
+        return (OptionDef)option.GetType().GetCustomAttributes(typeof(OptionDef), false).Single();
+    }
+
+    // private static OptionDef? GetAttributeOrNull<T>(T option) where T : Enum
+    // {
+    //     return option.GetType().GetCustomAttributes(typeof(OptionMatches), false).FirstOrDefault() as OptionMatches;
+    // }
+
+    public string GetPatterns(int count, bool compact) => compact ? string.Join(",", this.patterns.Take(count))
+                                                                : (string.Join(", ", this.patterns.Take(count - 1)) + " or " + this.patterns.Last());
+
+    public override string ToString()
+    {
+        return this.display;
+    }
 }
 
-public interface IUserInteractionCallback
+public class ChoiceEvent<T> : InteractionEvent<T>
 {
-    public string AskForAnswer(string message);
-    public bool AskYesNo(string message);
+    public enum YesNoOptions : bool
+    {
+        [OptionDef("Yes", "y,yes,j,ja", [Keys.Enter])]
+        Yes = true,
+        [OptionDef("No", "n,no,nein", [Keys.Esc, Keys.Ctrl | Keys.C, Keys.Backspace])]
+        No = false
+    }
+
+    public enum OkCancelOptions : bool
+    {
+        [OptionDef("Ok", "ok,k", [Keys.Enter])]
+        Ok = true,
+        [OptionDef("Cancel", "cancel,c", [Keys.Esc, Keys.Ctrl | Keys.C, Keys.Backspace])]
+        Cancel = false
+    }
+
+    public CliEvent()
+    {
+        this.Options = Enum.GetValues(typeof(T)).Cast<T>().ToList();
+    }
+
+    TaskCompletionSource<T> tcs;
+
+    public async Task<T> GetAwaiter()
+    {
+        return tcs.Task;
+    }
+
+    public List<OptionDef> Options { get; }
+
+    public string PrintOptions()
+    {
+        var sbDisplay = new StringBuilder();
+        var sbInput = new StringBuilder();
+        this.Options.Select(opt =>
+            new { opt.ToString(), opt.Patterns }).ToList().ForEach(opt =>;
+        foreach (var opt in this.Options)
+        {
+            var display = opt.ToString();
+            sb.Append($"[{attr}] ");
+        }
+        return sb.ToString();
+    }
+
+    protected T Result { set => this.tcs.SetResult(value); }
 }
+
+// public interface IUserInteractionCallback
+// {
+//     public string AskForAnswer(string message);
+//     public bool AskYesNo(string message);
+// }
+
