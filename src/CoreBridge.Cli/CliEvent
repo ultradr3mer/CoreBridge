@@ -73,9 +73,9 @@ public abstract class InteractionEvent<T> : StdEvent
 
     TaskCompletionSource<T> tcs;
 
-    public async Task<T> GetAwaitable()
+    public TaskAwaiter<T> GetUserInputAsync()
     {
-        return tcs.Task();
+        return tcs.Task().GetAwaiter();
     }
 
     protected void SetResult(T value)
@@ -131,7 +131,7 @@ public class OptionDef : Attribute
         return FromAttribute(option).IsMatch(input);
     }
 
-    public static bool HasMatch<T>(string input, out  OptionDefWithValue<T> def, params T[] option) where T : Enum
+    public static bool HasMatch<T>(string input, out OptionDefWithValue<T> def, params T[] option) where T : Enum
     {
         def = null;
         var m = (from o in option
@@ -200,27 +200,35 @@ public class ChoiceEvent<T> : InteractionEvent<T>
         this.Options = Enum.GetValues(typeof(T)).Cast<T>().ToList();
     }
 
-    public bool IsChoice(string input)
+    public bool TryParseChoice(string input, out T choice)
     {
-        bool hasMatch = OptionDef.HasMatch<T>(input, out var def);
-        this.SetResult(def.Value);
+        bool hasMatch = OptionDef.HasMatch<T>(input, out T choice);
+        this.SetResult(choice.Value);
         return hasMatch;
     }
 
     public List<OptionDefWithValue<T>> Options { get; }
 
-    public string PrintOptions()
+    public string PrintOptions(bool display, bool values = true)
     {
-        var sbDisplay = new StringBuilder();
-        var sbInput = new StringBuilder();
-        this.Options.Select(opt =>
-            new { opt.ToString(), opt.Patterns }).ToList().ForEach(opt =>;
-        foreach (var opt in this.Options)
+        var valuesStr = string.Join("; ", this.Options.Select(opt => opt.GetPatterns(2, true)));
+
+        var result  = new StringBuilder();
+        if(display)
         {
-            var display = opt.ToString();
-            sb.Append($"[{attr}] ");
+            result.AppendLine(string.Join("; ", this.Options.Select(opt => opt.ToString())));
         }
-        return sb.ToString();
+        if(display && values)
+        {
+            result.AppendLine(" ");
+        }
+        else
+        if(values)
+        {
+            var valuesStr = string.Join("; ", this.Options.Select(opt => opt.GetPatterns(2, true)));
+            result.AppendLine($"[{valuesStr}]");
+        }
+        return result.ToString();
     }
 }
 
