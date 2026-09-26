@@ -151,3 +151,43 @@ public sealed class VmPutOptions : MultipassOptions
     [Option('d', "destination", HelpText = "Zielpfad in der VM, relativ zu $HOME (Standard: Dateiname).")]
     public string? Destination { get; set; }
 }
+
+[Verb("vm-clone", HelpText = "Klont eine VM (multipass clone) — samt allem, was cloud-init darin installiert hat; eine laufende Quelle wird nach Rückfrage gestoppt.")]
+public sealed class VmCloneOptions : MultipassOptions
+{
+    [Option('s', "source", Required = true, HelpText = "Name der Quell-VM.")]
+    public string Source { get; set; } = string.Empty;
+
+    [Option('n', "name", HelpText = "Name des Klons (Standard von Multipass: <source>-cloneN).")]
+    public string? Name { get; set; }
+}
+
+[Verb("vm-snapshot", HelpText = "Sichert den Stand einer VM als Snapshot (multipass snapshot); eine laufende VM wird nach Rückfrage gestoppt.")]
+public sealed class VmSnapshotOptions : MultipassOptions
+{
+    [Option('n', "name", Required = true, HelpText = "Name der VM.")]
+    public string Name { get; set; } = string.Empty;
+
+    [Option('s', "snapshot", HelpText = "Name des Snapshots (Standard von Multipass: snapshotN).")]
+    public string? Snapshot { get; set; }
+
+    [Option('m', "comment", HelpText = "Freitext zum Snapshot.")]
+    public string? Comment { get; set; }
+}
+
+[Verb("vm-snapshots", HelpText = "Listet die Snapshots aller VMs oder einer VM (multipass list --snapshots).")]
+public sealed class VmSnapshotsOptions : MultipassOptions
+{
+    [Option('n', "name", HelpText = "Nur die Snapshots dieser VM.")]
+    public string? Name { get; set; }
+}
+
+[Verb("vm-restore", HelpText = "Setzt eine VM auf einen Snapshot zurück (multipass restore); fragt, ob der aktuelle Stand vorher gesichert werden soll.")]
+public sealed class VmRestoreOptions : MultipassOptions
+{
+    [Option('n', "name", Required = true, HelpText = "Name der VM.")]
+    public string Name { get; set; } = string.Empty;
+
+    [Option('s', "snapshot", Required = true, HelpText = "Name des Snapshots (aus vm-snapshots).")]
+    public string Snapshot { get; set; } = string.Empty;
+}

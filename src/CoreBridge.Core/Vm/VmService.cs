@@ -102,6 +102,91 @@ public sealed class VmService
         return Run(args, timeoutMs, keepWaiting);
     }
 
+    /// <summary>
+    /// <c>multipass clone</c>: unabhängige Kopie einer <em>gestoppten</em> VM —
+    /// samt allem, was cloud-init darin schon installiert hat. Ohne
+    /// <paramref name="destination"/> vergibt Multipass <c>&lt;source&gt;-cloneN</c>.
+    /// </summary>
+    /// <inheritdoc cref="Start"/>
+    public MultipassRunResult Clone(
+        string source,
+        string? destination = null,
+        int timeoutMs = 600_000,
+        Func<bool>? keepWaiting = null)
+    {
+        var args = new List<string> { "clone", source };
+        if (destination is not null)
+        {
+            args.Add("--name");
+            args.Add(destination);
+        }
+
+        return Run(args, timeoutMs, keepWaiting);
+    }
+
+    /// <summary>
+    /// <c>multipass snapshot</c> einer <em>gestoppten</em> VM. Ohne
+    /// <paramref name="snapshot"/> vergibt Multipass <c>snapshotN</c>.
+    /// </summary>
+    /// <inheritdoc cref="Start"/>
+    public MultipassRunResult Snapshot(
+        string name,
+        string? snapshot = null,
+        string? comment = null,
+        int timeoutMs = 600_000,
+        Func<bool>? keepWaiting = null)
+    {
+        var args = new List<string> { "snapshot", name };
+        if (snapshot is not null)
+        {
+            args.Add("--name");
+            args.Add(snapshot);
+        }
+
+        if (comment is not null)
+        {
+            args.Add("--comment");
+            args.Add(comment);
+        }
+
+        return Run(args, timeoutMs, keepWaiting);
+    }
+
+    /// <summary>
+    /// <c>multipass restore &lt;vm&gt;.&lt;snapshot&gt; --destructive</c> auf einer
+    /// <em>gestoppten</em> VM. Immer <c>--destructive</c>: ohne fragt Multipass
+    /// interaktiv, ob der aktuelle Stand gesichert werden soll — mit umgeleiteter
+    /// Ausgabe sähe niemand die Frage und der Aufruf hinge. Das Sichern übernimmt
+    /// bei Bedarf der Aufrufer vorher per <see cref="Snapshot"/>.
+    /// </summary>
+    /// <inheritdoc cref="Start"/>
+    public MultipassRunResult Restore(
+        string name,
+        string snapshot,
+        int timeoutMs = 600_000,
+        Func<bool>? keepWaiting = null)
+    {
+        return Run(new[] { "restore", $"{name}.{snapshot}", "--destructive" }, timeoutMs, keepWaiting);
+    }
+
+    /// <summary>Snapshots laut <c>multipass list --snapshots</c>, optional nur die einer VM.</summary>
+    public IReadOnlyList<VmSnapshotInfo> ListSnapshots(string? name = null, int timeoutMs = 60_000)
+    {
+        var result = _cli.Run(new[] { "list", "--snapshots", "--format", "json" }, timeoutMs);
+        if (result.ExitCode != 0)
+        {
+            var message = MultipassStdErr.Clean(result.StdErr);
+            throw new MultipassException(string.IsNullOrEmpty(message)
+                ? $"multipass list --snapshots beendet mit Exit {result.ExitCode}."
+                : $"{message} (multipass Exit {result.ExitCode})");
+        }
+
+        var snapshots = MultipassSnapshotList.Parse(result.StdOut);
+        return name is null
+            ? snapshots
+            : snapshots.Where(s => string.Equals(s.Instance, name, StringComparison.OrdinalIgnoreCase)).ToArray();
+    }
+
     /// <summary>VM laut <c>multipass list</c>; <c>null</c>, wenn es sie nicht gibt (auch nicht im Papierkorb).</summary>
     public VmInfo? Find(string name, int timeoutMs = 60_000)
     {

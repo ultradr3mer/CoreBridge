@@ -31,6 +31,10 @@ public static class Program
         typeof(VmConnectOptions),
         typeof(VmPutOptions),
         typeof(VmGetOptions),
+        typeof(VmCloneOptions),
+        typeof(VmSnapshotOptions),
+        typeof(VmSnapshotsOptions),
+        typeof(VmRestoreOptions),
         typeof(InitConfigureOptions),
         typeof(InitListOptions),
         typeof(InitDeleteOptions)
@@ -265,6 +269,10 @@ public static class Program
             VmConnectOptions o => RunVmConnect(context, o),
             VmPutOptions o => RunVmPut(context, o),
             VmGetOptions o => RunVmGet(context, o),
+            VmCloneOptions o => RunVmClone(context, o),
+            VmSnapshotOptions o => RunVmSnapshot(context, o),
+            VmSnapshotsOptions o => RunVmSnapshots(context, o),
+            VmRestoreOptions o => RunVmRestore(context, o),
             InitConfigureOptions o => RunInitConfigure(context, o),
             InitListOptions => RunInitList(context),
             InitDeleteOptions o => RunInitDelete(context, o),
@@ -901,6 +909,212 @@ public static class Program
         if (result.ExitCode != 0)
         {
             await events.Emit(events.Std($"Hinweis: Exit-Code {result.ExitCode} — {result.StdErr.Trim()}"));
+        }
+    }
+
+    /// <summary>
+    /// Klont eine gestoppte VM (<c>multipass clone</c>); der Klon bringt alles mit,
+    /// was cloud-init in der Quelle installiert hat. Ein vorhandener Klon-Name wird
+    /// wie bei vm-create nur nach Rückfrage ersetzt.
+    /// </summary>
+    private static async Task RunVmClone(CommandContext context, VmCloneOptions options)
+    {
+        var source = options.Source;
+        var destination = string.IsNullOrWhiteSpace(options.Name) ? null : options.Name.Trim();
+        if (destination is not null)
+        {
+            RequireValidName(destination);
+            if (string.Equals(source, destination, StringComparison.OrdinalIgnoreCase))
+            {
+                throw new ProgramExecutionException(1, $"The clone needs a name other than its source `{source}`.");
+            }
+        }
+
+        var vm = await RequireVm(context, source);
+        await EnsureStopped(context, vm, "cloning");
+        if (destination is not null)
+        {
+            await ReplaceExistingVm(context, destination);
+        }
+
+        // Ein Klon kopiert die ganze Disk — dafür ist DefaultTimeout zu knapp; wie
+        // vm-create wird in Abschnitten von DefaultTimeoutVmCreation gewartet.
+        var label = destination is null ? $"clone {source}" : $"clone {source} → {destination}";
+        var waitMs = (int)context.Config.DefaultTimeoutVmCreation.ReadTime().TotalMilliseconds;
+        MultipassRunResult result;
+        try
+        {
+            result = await RunReported(
+                context,
+                label,
+                () => context.Vms.Clone(source, destination, waitMs, KeepWaiting(context, label)));
+        }
+        catch (MultipassTimeoutException)
+        {
+            await context.Events.Emit(context.Events.Std(
+                "Stopped waiting — Multipass keeps cloning in the background (check with `cb vm-list`)."));
+            return;
+        }
+
+        var cloned = destination ?? ParseCloneName(result.StdOut);
+        await context.Events.Emit(context.Events.Std(cloned is null
+            ? $"{label}: OK ({result.DurationMs / 1000.0:F1} s)"
+            : await Completed(context.Vms, cloned, destination is null ? $"{label} → {cloned}" : label, result, context.CancellationToken)));
+        await context.Events.Emit(context.Events.Std($"Source `{source}` stays stopped — start it with `cb vm-start -n {source}`."));
+    }
+
+    /// <summary>Klon-Name aus „Cloned from &lt;source&gt; to &lt;name&gt;.“; <c>null</c>, wenn die Zeile fehlt.</summary>
+    private static string? ParseCloneName(string stdOut)
+    {
+        var match = System.Text.RegularExpressions.Regex.Match(stdOut, @"\bto\s+""?([A-Za-z][A-Za-z0-9-]*)");
+        return match.Success ? match.Groups[1].Value : null;
+    }
+
+    /// <summary>Sichert den Stand einer gestoppten VM (<c>multipass snapshot</c>).</summary>
+    private static async Task RunVmSnapshot(CommandContext context, VmSnapshotOptions options)
+    {
+        var name = options.Name;
+        var snapshot = string.IsNullOrWhiteSpace(options.Snapshot) ? null : options.Snapshot.Trim();
+        if (snapshot is not null)
+        {
+            RequireValidName(snapshot);
+        }
+
+        var vm = await RequireVm(context, name);
+        if (snapshot is not null)
+        {
+            var existing = await Task.Run(() => context.Vms.ListSnapshots(name, context.DefaultTimeoutMs), context.CancellationToken);
+            if (existing.Any(s => string.Equals(s.Name, snapshot, StringComparison.OrdinalIgnoreCase)))
+            {
+                throw new ProgramExecutionException(
+                    1,
+                    $"VM `{name}` already has a snapshot `{snapshot}` — pick another name (existing: {string.Join(", ", existing.Select(s => s.Name))}).");
+            }
+        }
+
+        await EnsureStopped(context, vm, "the snapshot");
+
+        var label = snapshot is null ? $"snapshot {name}" : $"snapshot {name}.{snapshot}";
+        var result = await RunReported(
+            context,
+            label,
+            () => context.Vms.Snapshot(name, snapshot, options.Comment, context.DefaultTimeoutMs, KeepWaiting(context, label)));
+        await context.Events.Emit(context.Events.Std(await Completed(context.Vms, name, label, result, context.CancellationToken)));
+    }
+
+    private static async Task RunVmSnapshots(CommandContext context, VmSnapshotsOptions options)
+    {
+        var events = context.Events;
+        var name = string.IsNullOrWhiteSpace(options.Name) ? null : options.Name.Trim();
+        if (name is not null)
+        {
+            await RequireVm(context, name);
+        }
+
+        var snapshots = await Task.Run(() => context.Vms.ListSnapshots(name, context.DefaultTimeoutMs), context.CancellationToken);
+        if (snapshots.Count == 0)
+        {
+            await events.Emit(events.Std(name is null
+                ? "No snapshots — take one with `cb vm-snapshot -n <vm>`."
+                : $"VM `{name}` has no snapshots — take one with `cb vm-snapshot -n {name}`."));
+            return;
+        }
+
+        await events.Emit(events.Std($"{"VM",-30} {"Snapshot",-20} {"Parent",-20} Comment"));
+        foreach (var snapshot in snapshots)
+        {
+            await events.Emit(events.Std($"{snapshot.Instance,-30} {snapshot.Name,-20} {(string.IsNullOrEmpty(snapshot.Parent) ? "--" : snapshot.Parent),-20} {snapshot.Comment}"));
+        }
+    }
+
+    /// <summary>
+    /// Setzt eine gestoppte VM auf einen Snapshot zurück. Der aktuelle Stand wird
+    /// vorher als Snapshot gesichert, außer der Benutzer verwirft ihn ausdrücklich —
+    /// ohne interaktive Eingabe (Antwort Nein) wird also immer gesichert.
+    /// </summary>
+    private static async Task RunVmRestore(CommandContext context, VmRestoreOptions options)
+    {
+        var events = context.Events;
+        var (name, snapshot) = (options.Name, options.Snapshot);
+        var vm = await RequireVm(context, name);
+        var snapshots = await Task.Run(() => context.Vms.ListSnapshots(name, context.DefaultTimeoutMs), context.CancellationToken);
+        if (!snapshots.Any(s => string.Equals(s.Name, snapshot, StringComparison.OrdinalIgnoreCase)))
+        {
+            throw new ProgramExecutionException(
+                1,
+                $"VM `{name}` has no snapshot `{snapshot}`. "
+                + (snapshots.Count == 0
+                    ? $"Take one with `cb vm-snapshot -n {name}`."
+                    : $"Existing snapshots: {string.Join(", ", snapshots.Select(s => s.Name))}."));
+        }
+
+        await EnsureStopped(context, vm, "the restore");
+
+        if (!await context.ConfirmAsync($"Discard the current state of `{name}` without a backup snapshot?"))
+        {
+            var backupLabel = $"snapshot {name} (backup before restore)";
+            var backup = await RunReported(
+                context,
+                backupLabel,
+                () => context.Vms.Snapshot(
+                    name,
+                    comment: $"Backup before restore to {snapshot}",
+                    timeoutMs: context.DefaultTimeoutMs,
+                    keepWaiting: KeepWaiting(context, backupLabel)));
+            await events.Emit(events.Std($"{backupLabel}: OK ({backup.DurationMs / 1000.0:F1} s)"));
+        }
+
+        var label = $"restore {name}.{snapshot}";
+        var result = await RunReported(
+            context,
+            label,
+            () => context.Vms.Restore(name, snapshot, context.DefaultTimeoutMs, KeepWaiting(context, label)));
+        await events.Emit(events.Std(await Completed(context.Vms, name, label, result, context.CancellationToken)));
+    }
+
+    /// <summary>
+    /// Clone, Snapshot und Restore gehen nur auf gestoppten VMs: eine laufende
+    /// wird nach Rückfrage gestoppt, eine im Papierkorb abgewiesen.
+    /// </summary>
+    private static async Task EnsureStopped(CommandContext context, VmInfo vm, string purpose)
+    {
+        if (vm.IsDeleted)
+        {
+            throw InTrash(vm.Name);
+        }
+
+        if (vm.IsStopped)
+        {
+            return;
+        }
+
+        if (!await context.ConfirmAsync($"VM `{vm.Name}` is {vm.State} — stop it for {purpose}?"))
+        {
+            throw new ProgramExecutionException(1, $"Cancelled — {purpose} needs a stopped VM; `{vm.Name}` is {vm.State}.");
+        }
+
+        await StopVm(context, vm);
+    }
+
+    /// <summary>Kündigt das Kommando an, führt es aus und meldet stdout; bei Exit ≠ 0 folgt die fertige Fehlermeldung.</summary>
+    private static async Task<MultipassRunResult> RunReported(
+        CommandContext context,
+        string label,
+        Func<MultipassRunResult> action)
+    {
+        await context.Events.Emit(context.Events.Std($"{label} ..."));
+        var result = await Task.Run(action, context.CancellationToken);
+        await Report(context.Events, result);
+        return result;
+    }
+
+    private static void RequireValidName(string name)
+    {
+        if (!VmNamePattern.IsMatch(name))
+        {
+            throw new ProgramExecutionException(
+                1,
+                $"Invalid name `{name}` — use letters, digits and hyphens, starting with a letter and not ending with a hyphen (e.g. dev-01).");
         }
     }
 
