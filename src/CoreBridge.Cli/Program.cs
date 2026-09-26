@@ -550,7 +550,8 @@ public static class Program
         MultipassRunResult? result;
         try
         {
-            result = await Task.Run(
+            result = await WithProgress(
+                context,
                 () => vms.Create(
                     options.Name,
                     launchImage,
@@ -558,8 +559,7 @@ public static class Program
                     cloudInit,
                     waitSlice,
                     () => context.Events.Ask(context.Events.Choice<YesNoOptions>(
-                        $"VM `{options.Name}` is not ready after {stopwatch.Elapsed.TotalSeconds:F0} s — keep waiting?")) == YesNoOptions.Yes),
-                cancellationToken);
+                        $"VM `{options.Name}` is not ready after {stopwatch.Elapsed.TotalSeconds:F0} s — keep waiting?")) == YesNoOptions.Yes));
         }
         catch (MultipassTimeoutException)
         {
@@ -608,9 +608,9 @@ public static class Program
     {
         await EnsureRunning(context, options.Name);
 
-        var result = await Task.Run(
-            () => context.Vms.Exec(options.Name, options.Command, context.DefaultTimeoutMs),
-            context.CancellationToken);
+        var result = await WithProgress(
+            context,
+            () => context.Vms.Exec(options.Name, options.Command, context.DefaultTimeoutMs));
         await Report(context.Events, result);
     }
 
@@ -826,6 +826,31 @@ public static class Program
             $"`{label}` is still running after {stopwatch.Elapsed.TotalSeconds:F0} s — keep waiting?")) == YesNoOptions.Yes;
     }
 
+    /// <summary>Abstand der Fortschritts-Ticks während einer lang laufenden Multipass-Aktion.</summary>
+    private static readonly TimeSpan ProgressInterval = TimeSpan.FromMilliseconds(200);
+
+    /// <summary>
+    /// Führt eine blockierende Multipass-Aktion auf dem Threadpool aus und meldet
+    /// währenddessen alle <see cref="ProgressInterval"/> einen Tick, den der
+    /// <see cref="ConsoleAdapter"/> als Spinner zeichnet. Solange eine Rückfrage
+    /// offen ist (etwa „weiter warten?“ aus <c>keepWaiting</c>), pausiert er —
+    /// sonst schriebe er in die Eingabezeile.
+    /// </summary>
+    private static async Task<T> WithProgress<T>(CommandContext context, Func<T> action)
+    {
+        var events = context.Events;
+        var work = Task.Run(action, context.CancellationToken);
+        while (await Task.WhenAny(work, Task.Delay(ProgressInterval, context.CancellationToken)) != work)
+        {
+            if (events.OpenInteractionCount == 0)
+            {
+                await events.Emit(events.Tick());
+            }
+        }
+
+        return await work;
+    }
+
     /// <summary>
     /// Führt ein zustandsänderndes VM-Kommando aus und meldet zum Schluss
     /// Erfolg, Dauer und den neuen State laut vm-list.
@@ -838,7 +863,22 @@ public static class Program
     {
         var events = context.Events;
         await events.Emit(events.Std($"{label} ..."));
-        var result = await Task.Run(action, context.CancellationToken);
+        MultipassRunResult result;
+        try
+        {
+            result = await WithProgress(context, action);
+        }
+        catch (MultipassTimeoutException)
+        {
+            // Hier endet ein Timeout nur, wenn der Benutzer "weiter warten?" verneint
+            // hat — der Daemon arbeitet weiter, der Dienst hängt nicht. Exit 1, weil
+            // ein folgender Schritt (Löschen nach Stopp, exec nach Start) nicht auf
+            // einem unfertigen Zustand aufsetzen darf.
+            throw new ProgramExecutionException(
+                1,
+                $"Stopped waiting — Multipass keeps running `{label}` in the background (check with `cb vm-list`).");
+        }
+
         if (result.ExitCode != 0)
         {
             await Report(events, result);
@@ -879,9 +919,9 @@ public static class Program
         await EnsureRunning(context, options.Name);
 
         await events.Emit(events.Std($"transfer {options.Source} → {options.Name} ..."));
-        var result = await Task.Run(
-            () => context.Vms.Put(options.Source, options.Name, options.Destination, context.DefaultTimeoutMs),
-            context.CancellationToken);
+        var result = await WithProgress(
+            context,
+            () => context.Vms.Put(options.Source, options.Name, options.Destination, context.DefaultTimeoutMs));
         if (result.ExitCode != 0)
         {
             await Report(events, result);
@@ -902,9 +942,9 @@ public static class Program
         }
 
         await events.Emit(events.Std($"transfer {options.Name}:{options.Remote} → {options.Destination} ..."));
-        var result = await Task.Run(
-            () => context.Vms.Get(options.Name, options.Remote, options.Destination, context.DefaultTimeoutMs),
-            context.CancellationToken);
+        var result = await WithProgress(
+            context,
+            () => context.Vms.Get(options.Name, options.Remote, options.Destination, context.DefaultTimeoutMs));
         if (!File.Exists(options.Destination))
         {
             await Report(events, result);
@@ -1110,7 +1150,7 @@ public static class Program
         Func<MultipassRunResult> action)
     {
         await context.Events.Emit(context.Events.Std($"{label} ..."));
-        var result = await Task.Run(action, context.CancellationToken);
+        var result = await WithProgress(context, action);
         await Report(context.Events, result);
         return result;
     }

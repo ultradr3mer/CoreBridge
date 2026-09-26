@@ -69,9 +69,8 @@ public class ConsoleAdapter
                 this.EndProgressLine();
                 Console.Error.WriteLine(err.Printable);
                 break;
-            case ProgressEvent:
-                Console.Write(Progress.ProgressTick);
-                this._midProgressLine = true;
+            case ProgressEvent progress:
+                this.WriteProgress(progress);
                 break;
             case StdEvent std:
                 this.WriteOutput(std.Printable);
@@ -83,12 +82,52 @@ public class ConsoleAdapter
         }
     }
 
+    /// <summary>Spinner-Bilder, reihum: <c>- / | \</c>.</summary>
+    private static readonly char[] SpinnerFrames = ['-', '/', '|', '\\'];
+
     /// <summary>
-    /// Schreibt eine Meldung; eine laufende Punktezeile wird vorher abgeschlossen.
+    /// An einer echten Konsole dreht sich ein Spinner an Ort und Stelle; bei
+    /// umgeleiteter Ausgabe (Datei, Pipe) bleiben es Punkte, damit kein
+    /// Wagenrücklauf-Müll im Log landet.
+    /// </summary>
+    private static readonly bool UseSpinner = !Console.IsOutputRedirected;
+
+    private bool _midProgressLine;
+    private int _spinnerFrame;
+    private TimeSpan _progressStart;
+
+    /// <summary>
+    /// Ein Fortschritts-Tick: Spinner mit Wartezeit seit dem ersten Tick
+    /// dieser Zeile (<c>| 12 s</c>), sonst ein Punkt.
+    /// </summary>
+    private void WriteProgress(ProgressEvent progress)
+    {
+        if (!this._midProgressLine)
+        {
+            this._progressStart = progress.EmissionTime;
+            this._spinnerFrame = 0;
+        }
+
+        if (UseSpinner)
+        {
+            var frame = SpinnerFrames[this._spinnerFrame++ % SpinnerFrames.Length];
+            var waited = progress.EmissionTime - this._progressStart;
+            Console.Write($"\r{frame} {waited.TotalSeconds:F0} s ");
+        }
+        else
+        {
+            Console.Write(Progress.ProgressTick);
+        }
+
+        this._midProgressLine = true;
+    }
+
+    /// <summary>
+    /// Schreibt eine Meldung; eine laufende Fortschrittszeile wird vorher abgeschlossen.
     /// </summary>
     private void WriteOutput(string line)
     {
-        if (this._midProgressLine && line == "OK")
+        if (this._midProgressLine && line == "OK" && !UseSpinner)
         {
             Console.WriteLine(line);
             this._midProgressLine = false;
@@ -99,17 +138,28 @@ public class ConsoleAdapter
         Console.WriteLine(line);
     }
 
-    /// <summary>Schließt eine offene Punktezeile ab, bevor anderer Text folgt.</summary>
+    /// <summary>
+    /// Schließt eine offene Fortschrittszeile ab, bevor anderer Text folgt:
+    /// den Spinner wegwischen, eine Punktezeile umbrechen.
+    /// </summary>
     private void EndProgressLine()
     {
-        if (this._midProgressLine)
+        if (!this._midProgressLine)
+        {
+            return;
+        }
+
+        if (UseSpinner)
+        {
+            Console.Write("\r" + new string(' ', 16) + "\r");
+        }
+        else
         {
             Console.WriteLine();
-            this._midProgressLine = false;
         }
-    }
 
-    private bool _midProgressLine;
+        this._midProgressLine = false;
+    }
 
     /// <summary>
     /// Fragt nach einer Auswahl und beantwortet das Ereignis. Unbekannte Eingabe

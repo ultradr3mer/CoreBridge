@@ -2,6 +2,7 @@ using System.Text.RegularExpressions;
 using CoreBridge.Core.Common;
 using CoreBridge.Core.Config;
 using CoreBridge.Core.Multipass;
+using CoreBridge.Simulation;
 using CoreBridge.Core.Vm;
 
 namespace CoreBridge.Core.Tests;
@@ -54,6 +55,20 @@ public class SimulatedMultipassCliTests
         Assert.Equal("Deleted", service.Find("sim-b")!.State);
         service.Delete("sim-b", purge: true);
         Assert.Null(service.Find("sim-b"));
+    }
+
+    [Fact]
+    public void UnbekanntesImageScheitertWieMultipass()
+    {
+        using var temp = new TempDirectory();
+        var cli = Simulator(temp);
+
+        var typo = cli.Run(["launch", "dve", "--name", "sim-a"]);
+
+        Assert.Equal(2, typo.ExitCode);
+        Assert.Equal("launch failed: Unable to find an image matching \"dve\" in remote \"\".\n", typo.StdErr);
+        Assert.Equal(0, cli.Run(["launch", "noble", "--name", "sim-b"]).ExitCode);
+        Assert.Equal(0, cli.Run(["launch", "24.04", "--name", "sim-c"]).ExitCode);
     }
 
     [Fact]

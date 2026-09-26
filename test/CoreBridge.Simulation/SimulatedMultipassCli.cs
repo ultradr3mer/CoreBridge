@@ -4,8 +4,9 @@ using System.Text.Json;
 using System.Text.RegularExpressions;
 using CoreBridge.Core.Common;
 using CoreBridge.Core.Config;
+using CoreBridge.Core.Multipass;
 
-namespace CoreBridge.Core.Multipass;
+namespace CoreBridge.Simulation;
 
 /// <summary>
 /// Multipass-Simulator zum freien Durchspielen der CLI ohne echtes Multipass:
@@ -236,6 +237,12 @@ public sealed class SimulatedMultipassCli : IMultipassCli, IMultipassDouble
     {
         var positionals = Positionals(args);
         var image = positionals.FirstOrDefault() ?? "daily:26.10";
+        if (!IsKnownImage(image))
+        {
+            var remote = image.Contains(':') ? image[..image.IndexOf(':')] : string.Empty;
+            return Fail($"launch failed: Unable to find an image matching \"{image}\" in remote \"{remote}\".");
+        }
+
         var name = Value(args, "--name", "-n") ?? $"sim-{state.Vms.Count + 1}";
         if (Find(state, name) is not null)
         {
@@ -700,6 +707,19 @@ public sealed class SimulatedMultipassCli : IMultipassCli, IMultipassDouble
     private static SimVm? Find(SimState state, string name)
     {
         return state.Vms.FirstOrDefault(vm => string.Equals(vm.Name, name, StringComparison.OrdinalIgnoreCase));
+    }
+
+    /// <summary>
+    /// Katalog laut <c>multipass find</c> (1.16.3): Versionen, Aliase, Core,
+    /// Appliances, <c>daily:</c>/<c>release:</c>-Versionen sowie Datei/URL.
+    /// Ein vertippter Profilname landet so wie in echt bei „Unable to find an image“.
+    /// </summary>
+    private static bool IsKnownImage(string image)
+    {
+        return Regex.IsMatch(
+            image,
+            @"^((daily|release):)?\d{2}\.\d{2}$|^(jammy|noble|resolute|lts|stonking|devel)$|^core\d*$|^appliance:[a-z-]+$|^(file|https?)://",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     }
 
     private static string ReleaseOf(string image)

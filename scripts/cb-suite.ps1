@@ -10,6 +10,13 @@
 
     Alle VMs heißen cbx-suite-*, das Profil cbx-suite. Schritt "cleanup" räumt beides weg.
 
+    Mit -Edge laufen stattdessen die Grenzfälle (VMs cbx-edge-*): Timeouts beim
+    Anlegen, Starten, Stoppen und Klonen, der Papierkorb, Namenskonflikte,
+    Aktionen auf laufenden/gestoppten VMs und ungültige Eingaben.
+
+.PARAMETER Edge
+    Grenzfälle statt des normalen Ablaufs.
+
 .PARAMETER Real
     Echtes Multipass statt Simulator. Legt echte VMs an (Minuten statt Sekunden).
 
@@ -31,8 +38,11 @@
     .\scripts\cb-suite.ps1 -From clone
 .EXAMPLE
     .\scripts\cb-suite.ps1 -Real -Only create,check
+.EXAMPLE
+    .\scripts\cb-suite.ps1 -Edge -Pause
 #>
 param(
+    [switch]$Edge,
     [switch]$Real,
     [switch]$Pause,
     [string]$From,
@@ -52,6 +62,10 @@ $slow = 'cbx-suite-langsam'
 $hostFile = Join-Path $env:TEMP 'cbx-suite-hin.txt'
 $backFile = Join-Path $env:TEMP 'cbx-suite-zurueck.txt'
 
+$edgeA = 'cbx-edge-a'
+$edgeB = 'cbx-edge-b'
+$edgeSlow = 'cbx-edge-langsam'
+
 # Echte VMs brauchen länger als die 10 s DefaultTimeout.
 $t = if ($Real) { @('-t', '180s') } else { @() }
 
@@ -67,9 +81,67 @@ function run {
     Write-Host "  exit $LASTEXITCODE" -ForegroundColor $color
 }
 
+$resetStep = @{ Text = 'Simulator-Zustand leeren (nur Simulation)'; Do = {
+    if (-not $Real) { Remove-Item (Join-Path $repo 'artifacts\multipass-sim') -Recurse -ErrorAction SilentlyContinue; 'Simulator-Zustand geleert.' } } }
+
+# Timeouts: der Simulator braucht für launch/start/stop/clone 4 s
+# (MultipassSimulationDelay) — ein -t von 1 s läuft also sicher hinein.
+# Ja = weiter warten (nächster Abschnitt), Nein = Timeout-Pfad des Befehls.
+$edgeSteps = [ordered]@{
+    'reset'          = $resetStep
+    'setup'          = @{ Text = 'Eine laufende VM als Ausgangspunkt'; Do = { run vm-create -n $edgeA } }
+    'timeout-create' = @{ Text = 'Anlegen läuft in den Timeout (-t 1s): Ja = weiter warten, Nein = Folgekommando (z. B. vm-list)'; Do = {
+        run vm-create -n $edgeSlow -t '1s'
+        run vm-list } }
+    'timeout-stop'   = @{ Text = 'Stoppen läuft in den Timeout: Nein = Abbruch (Exit 1), Multipass stoppt im Hintergrund weiter'; Do = {
+        run vm-stop -n $edgeA -t '1s'
+        run vm-list } }
+    'timeout-clone'  = @{ Text = 'Klonen läuft in den Timeout: Nein = Multipass klont im Hintergrund weiter'; Do = {
+        run vm-clone -s $edgeA -n $edgeB -t '1s'
+        run vm-list } }
+    'timeout-start'  = @{ Text = 'Starten läuft in den Timeout'; Do = {
+        run vm-start -n $edgeB -t '1s'
+        run vm-list } }
+    'trash'          = @{ Text = 'Papierkorb: löschen, dann starten/exec/nochmal löschen/neu anlegen'; Do = {
+        run vm-stop -n $edgeB @t
+        run vm-delete -n $edgeB
+        run vm-start -n $edgeB
+        run vm-exec -n $edgeB -c hostname
+        run vm-delete -n $edgeB
+        run vm-create -n $edgeB } }
+    'stopped'        = @{ Text = 'exec auf gestoppter VM (fragt: starten?)'; Do = { run vm-exec -n $edgeA -c hostname } }
+    'replace'        = @{ Text = 'Anlegen mit vorhandenem Namen (fragt: ersetzen?)'; Do = { run vm-create -n $edgeA } }
+    'conflicts'      = @{ Text = 'Klonen auf vorhandenen Namen (fragt: ersetzen?) und auf den eigenen Namen'; Do = {
+        run vm-stop -n $edgeA
+        run vm-clone -s $edgeA -n $edgeSlow
+        run vm-clone -s $edgeA -n $edgeA } }
+    'running'        = @{ Text = 'Klon/Snapshot/Restore einer laufenden VM (fragen: stoppen?)'; Do = {
+        run vm-start -n $edgeSlow
+        run vm-clone -s $edgeSlow
+        run vm-snapshot -n $edgeSlow
+        run vm-restore -n $edgeSlow -s gibtsnicht } }
+    'bad-input'      = @{ Text = 'Ungültige Eingaben: Name, vertipptes Profil, fehlende Datei, Zeitangabe, fehlende Quelle/Ziel'; Do = {
+        run vm-create -n 1-falsch
+        run vm-create -n cbx-edge-tippfehler -i dve
+        run vm-create -n cbx-edge-x -c nicht-da.yaml
+        run vm-list -t 5x
+        run vm-snapshot -n $edgeA -s 'mit leer'
+        run vm-put -n $edgeA -s nicht-da.txt
+        run vm-get -n $edgeA -r nicht-da.txt -d (Join-Path $env:TEMP 'cbx-edge-get.txt')
+        run vm-snapshots -n cbx-edge-gibtsnicht } }
+    'parser'         = @{ Text = 'Unbekanntes Verb und fehlende Pflichtoption'; Do = {
+        run vm-foo
+        run vm-start } }
+    'cleanup'        = @{ Text = 'Alle cbx-edge-VMs entfernen'; Do = {
+        foreach ($vm in @($edgeA, $edgeB, $edgeSlow)) {
+            run vm-stop -n $vm @t
+            run vm-delete -n $vm --purge @t
+        }
+        run vm-list } }
+}
+
 $steps = [ordered]@{
-    'reset'    = @{ Text = 'Simulator-Zustand leeren (nur Simulation)'; Do = {
-        if (-not $Real) { Remove-Item (Join-Path $repo 'artifacts\multipass-sim') -Recurse -ErrorAction SilentlyContinue; 'Simulator-Zustand geleert.' } } }
+    'reset'    = $resetStep
     'status'   = @{ Text = 'Multipass gefunden? Versionen'; Do = { run multipass-status } }
     'profile'  = @{ Text = 'Profil mit claude und dotnet anlegen'; Do = {
         run init-configure -n $profileName -c claude,dotnet -f
@@ -118,9 +190,10 @@ $steps = [ordered]@{
         run vm-list } }
 }
 
+if ($Edge) { $steps = $edgeSteps }
 $names = @($steps.Keys)
 if ($List) {
-    for ($i = 0; $i -lt $names.Count; $i++) { '{0,2}  {1,-9} {2}' -f ($i + 1), $names[$i], $steps[$names[$i]].Text }
+    for ($i = 0; $i -lt $names.Count; $i++) { '{0,2}  {1,-15} {2}' -f ($i + 1), $names[$i], $steps[$names[$i]].Text }
     return
 }
 
@@ -131,7 +204,8 @@ if ($From) {
 }
 
 $mode = if ($Real) { 'ECHTES Multipass' } else { 'Simulator (cb-sim)' }
-Write-Host "CoreBridge-Suite gegen $mode" -ForegroundColor Green
+$suite = if ($Edge) { 'Grenzfälle' } else { 'Ablauf' }
+Write-Host "CoreBridge-Suite ($suite) gegen $mode" -ForegroundColor Green
 for ($i = $start; $i -lt $names.Count; $i++) {
     $name = $names[$i]
     if ($Only -and $name -notin $Only) { continue }

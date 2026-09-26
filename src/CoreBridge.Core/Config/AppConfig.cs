@@ -39,7 +39,7 @@ public sealed record AppConfig
     public string? MultipassLogPath { get; init; }
 
     /// <summary>
-    /// Dauer, die <see cref="SimulatedMultipassCli"/> lang laufende Verben
+    /// Dauer, die der Multipass-Simulator (<c>CoreBridge.Simulation</c>, nur Debug/Tests) lang laufende Verben
     /// (launch, start, stop, restart, clone) vorgibt, z. B. <c>4s</c> oder <c>0ms</c>.
     /// Länger als ein Warteabschnitt (<see cref="DefaultTimeout"/> bzw.
     /// <see cref="DefaultTimeoutVmCreation"/>) löst die Rückfrage „weiter warten?“ aus.
