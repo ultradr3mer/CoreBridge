@@ -1,6 +1,7 @@
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using CoreBridge.Core.Common;
 using CoreBridge.Core.Vm;
 
 namespace CoreBridge.Core.Multipass;
@@ -12,6 +13,7 @@ namespace CoreBridge.Core.Multipass;
 /// </summary>
 public sealed record MultipassCallLogEntry(
     [property: JsonPropertyName("seq")] int Seq,
+    [property: JsonPropertyName("pid")] int Pid,
     [property: JsonPropertyName("verb")] string Verb,
     [property: JsonPropertyName("args")] string[] Args,
     [property: JsonPropertyName("mode")] string Mode,
@@ -20,6 +22,13 @@ public sealed record MultipassCallLogEntry(
     [property: JsonPropertyName("stdout")] string StdOut,
     [property: JsonPropertyName("stderr")] string StdErr,
     [property: JsonPropertyName("durationMs")] long DurationMs,
+    [property: JsonPropertyName("at")] DateTimeOffset At);
+
+/// <summary>Kopfzeile, die jeden Prozessstart im Log markiert.</summary>
+public sealed record MultipassCallLogSession(
+    [property: JsonPropertyName("kind")] string Kind,
+    [property: JsonPropertyName("pid")] int Pid,
+    [property: JsonPropertyName("cwd")] string Cwd,
     [property: JsonPropertyName("at")] DateTimeOffset At);
 
 /// <summary>
@@ -40,10 +49,15 @@ public sealed class MockMultipassCli : IMultipassCli
     /// <summary>Aktiviert den Mock, wenn auf <c>1</c>/<c>true</c>/<c>on</c> gesetzt.</summary>
     public const string EnableEnvironmentVariable = "CORE_BRIDGE_MULTIPASS_MOCK";
 
-    /// <summary>Ziel des JSON-Logs; Standard <c>multipass-mock.jsonl</c> neben der Store-Wurzel.</summary>
+    /// <summary>Ziel des JSON-Logs; Standard <c>&lt;StoreRoot&gt;/multipass-mock/calls.jsonl</c>.</summary>
     public const string LogPathEnvironmentVariable = "CORE_BRIDGE_MULTIPASS_MOCK_LOG";
 
-    public const string DefaultLogFileName = "multipass-mock.jsonl";
+    /// <summary>Unterverzeichnis des Stores, in dem Log und Zustand liegen.</summary>
+    public const string MockFolderName = "multipass-mock";
+
+    public const string LogFileName = "calls.jsonl";
+
+    public const string StateFileName = "state.json";
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -62,9 +76,19 @@ public sealed class MockMultipassCli : IMultipassCli
 
     public MockMultipassCli(string? logPath = null)
     {
-        this.LogPath = logPath;
-        this.StatePath = logPath is null ? null : logPath + ".state.json";
+        this.LogPath = logPath is null ? null : RepoPaths.Resolve(logPath);
+        this.StatePath = this.LogPath is null
+            ? null
+            : Path.Combine(
+                Path.GetDirectoryName(this.LogPath)!,
+                StateFileName);
+
         this.Load();
+        this.Append(new MultipassCallLogSession(
+            "session",
+            Environment.ProcessId,
+            Environment.CurrentDirectory,
+            DateTimeOffset.Now));
     }
 
     /// <summary>Wohin geschrieben wird; <c>null</c> = nur im Speicher.</summary>
@@ -95,17 +119,24 @@ public sealed class MockMultipassCli : IMultipassCli
         return normalized is "1" or "true" or "on" or "yes";
     }
 
-    /// <summary>Logpfad aus <see cref="LogPathEnvironmentVariable"/> oder neben der Store-Wurzel.</summary>
+    /// <summary>
+    /// Logpfad aus <see cref="LogPathEnvironmentVariable"/> oder als Default
+    /// <c>&lt;storeRoot&gt;/multipass-mock/calls.jsonl</c>.
+    /// </summary>
+    /// <remarks>
+    /// Der Default läuft über <see cref="RepoPaths.Resolve"/> und damit über
+    /// dieselbe Repo-Wurzel wie <c>InitStore</c>. Ein nacktes
+    /// <c>Path.Combine(storeRoot, …)</c> wäre relativ zum aktuellen
+    /// Arbeitsverzeichnis — Log und Zustand lägen dann je nach Aufruf an
+    /// verschiedenen Orten und die VM verschwände zwischen zwei <c>cb</c>-Aufrufen.
+    /// </remarks>
     public static string ResolveLogPath(string? storeRoot = null)
     {
         var configured = Environment.GetEnvironmentVariable(LogPathEnvironmentVariable);
-        if (!string.IsNullOrWhiteSpace(configured))
-        {
-            return configured.Trim();
-        }
-
-        var root = string.IsNullOrWhiteSpace(storeRoot) ? "." : storeRoot;
-        return Path.Combine(root, DefaultLogFileName);
+        return RepoPaths.Resolve(
+            string.IsNullOrWhiteSpace(configured)
+                ? Path.Combine(RepoPaths.Resolve(storeRoot), MockFolderName, LogFileName)
+                : configured);
     }
 
     public MultipassRunResult Run(IReadOnlyList<string> args, int timeoutMs = 30000, string? exePath = null)
@@ -151,6 +182,7 @@ public sealed class MockMultipassCli : IMultipassCli
 
         this.Record(new MultipassCallLogEntry(
             this.entries.Count + 1,
+            Environment.ProcessId,
             call.Length > 0 ? call[0] : string.Empty,
             call,
             mode,
@@ -169,31 +201,36 @@ public sealed class MockMultipassCli : IMultipassCli
         lock (this.gate)
         {
             this.entries.Add(entry);
-            if (this.LogPath is null)
+            this.Append(entry);
+        }
+    }
+
+    /// <summary>Hängt eine Zeile an; I/O-Fehler dürfen den Mock nie scheitern lassen.</summary>
+    private void Append(object line)
+    {
+        if (this.LogPath is null)
+        {
+            return;
+        }
+
+        try
+        {
+            var directory = Path.GetDirectoryName(this.LogPath);
+            if (!string.IsNullOrEmpty(directory))
             {
-                return;
+                Directory.CreateDirectory(directory);
             }
 
-            try
-            {
-                var directory = Path.GetDirectoryName(Path.GetFullPath(this.LogPath));
-                if (!string.IsNullOrEmpty(directory))
-                {
-                    Directory.CreateDirectory(directory);
-                }
-
-                File.AppendAllText(
-                    this.LogPath,
-                    JsonSerializer.Serialize(entry, JsonOptions) + Environment.NewLine,
-                    Encoding.UTF8);
-            }
-            catch (IOException)
-            {
-                // Logging darf den Mock nie zum Fehlschlag machen.
-            }
-            catch (UnauthorizedAccessException)
-            {
-            }
+            File.AppendAllText(
+                this.LogPath,
+                JsonSerializer.Serialize(line, JsonOptions) + Environment.NewLine,
+                Encoding.UTF8);
+        }
+        catch (IOException)
+        {
+        }
+        catch (UnauthorizedAccessException)
+        {
         }
     }
 

@@ -1,9 +1,11 @@
+using CoreBridge.Core.Common;
+
 namespace CoreBridge.Core.Inits;
 
 /// <summary>
 /// Wo die generierten cloud-init-Profile liegen. Standard:
-/// <Repo-Wurzel>/artifacts (Dev-Tool, keine App-Daten) — die Repo-Wurzel ist
-/// der Ordner, der CoreBridge.slnx enthält, von der DLL aus nach oben gesucht.
+/// <Repo-Wurzel>/artifacts (Dev-Tool, keine App-Daten). Die Auflösung macht
+/// <see cref="RepoPaths"/>, damit sie unabhängig vom Arbeitsverzeichnis stimmt.
 /// Über Images:StoreRoot (AppConfig) konfigurierbar.
 /// </summary>
 public static class InitStore
@@ -13,44 +15,10 @@ public static class InitStore
     /// <summary>Wurzel setzen ( einmalig beim Start aus der Config); null/leer = Default.</summary>
     public static void Initialize(string? storeRoot)
     {
-        _root = ResolveRoot(storeRoot);
+        _root = RepoPaths.Resolve(storeRoot);
     }
 
-    private static string Root
-    {
-        get
-        {
-            if (_root is null)
-            {
-                _root = ResolveRoot(null);
-            }
-
-            return _root;
-        }
-    }
-
-    private static string ResolveRoot(string? configured)
-    {
-        if (!string.IsNullOrWhiteSpace(configured))
-        {
-            var expanded = Environment.ExpandEnvironmentVariables(configured);
-            return Path.GetFullPath(Path.IsPathRooted(expanded) ? expanded : Path.Combine(RepoRoot(), expanded));
-        }
-
-        return Path.Combine(RepoRoot(), "artifacts");
-    }
-
-    private static string RepoRoot()
-    {
-        var directory = new DirectoryInfo(AppContext.BaseDirectory);
-        while (directory is not null
-               && !directory.EnumerateFiles("CoreBridge.slnx").Any())
-        {
-            directory = directory.Parent;
-        }
-
-        return directory?.FullName ?? AppContext.BaseDirectory;
-    }
+    private static string Root => _root ??= RepoPaths.Resolve(null);
 
     public static string ProfilesRoot => Path.Combine(Root, "profiles");
 
@@ -65,11 +33,5 @@ public static class InitStore
     /// Eingebettete Gast-Skripte und optionale Testressourcen werden dadurch
     /// unabhängig vom Arbeitsverzeichnis des aufrufenden Prozesses gefunden.
     /// </summary>
-    public static string ResolvePath(string path)
-    {
-        var expanded = Environment.ExpandEnvironmentVariables(path);
-        return Path.GetFullPath(Path.IsPathRooted(expanded)
-            ? expanded
-            : Path.Combine(RepoRoot(), expanded));
-    }
+    public static string ResolvePath(string path) => RepoPaths.Resolve(path);
 }

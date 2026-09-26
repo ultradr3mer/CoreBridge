@@ -1,4 +1,5 @@
 using System.Text.Json;
+using CoreBridge.Core.Common;
 using CoreBridge.Core.Multipass;
 
 namespace CoreBridge.Core.Tests;
@@ -13,7 +14,7 @@ public class MockMultipassCliTests
     public void ZyklusCreateListStopDeleteLaeuftUndWirdAlsJsonProtokolliert()
     {
         using var temp = new TempDirectory();
-        var log = Path.Combine(temp.Path, MockMultipassCli.DefaultLogFileName);
+        var log = Path.Combine(temp.Path, "mock", MockMultipassCli.LogFileName);
         var mock = new MockMultipassCli(log);
 
         Assert.Equal(0, mock.Run(new[] { "launch", "daily:26.10", "--name", "cbx-a" }).ExitCode);
@@ -28,23 +29,86 @@ public class MockMultipassCliTests
         Assert.Equal(0, mock.Run(new[] { "delete", "cbx-a", "--purge" }).ExitCode);
 
         // Jeder Aufruf landet als eine JSON-Zeile in der Logdatei
-        // (launch, list, stop, list, delete).
+        // (launch, list, stop, list, delete); die Kopfzeile des Prozesses
+        // kommt obendrauf, damit sich Prozessgrenzen im Log ablesen lassen.
         var lines = File.ReadAllLines(log);
-        Assert.Equal(5, lines.Length);
+        Assert.Equal(6, lines.Length);
         var options = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
-        var first = JsonSerializer.Deserialize<MultipassCallLogEntry>(lines[0], options)!;
+        var session = JsonSerializer.Deserialize<MultipassCallLogSession>(lines[0], options)!;
+        Assert.Equal("session", session.Kind);
+        Assert.Equal(Environment.ProcessId, session.Pid);
+        Assert.False(string.IsNullOrWhiteSpace(session.Cwd));
+
+        var first = JsonSerializer.Deserialize<MultipassCallLogEntry>(lines[1], options)!;
         Assert.Equal("launch", first.Verb);
         Assert.Equal(0, first.ExitCode);
+        Assert.Equal(Environment.ProcessId, first.Pid);
         Assert.Equal(new[] { "launch", "daily:26.10", "--name", "cbx-a" }, first.Args);
         Assert.Equal("Run", first.Mode);
         Assert.Equal(5, mock.Entries.Count);
+    }
+
+    /// <summary>
+    /// Der Regressionstest für den Bug, den eine eigene Pfadauflösung erzeugt
+    /// hat: <c>StoreRoot</c> ist im Development-Default relativ ("artifacts").
+    /// Das Mock-Log muss trotzdem genauso wie die Profile unter der Repo-Wurzel
+    /// landen — unabhängig vom Arbeitsverzeichnis und davon, ob der Wert
+    /// absolut oder relativ ist.
+    /// </summary>
+    [Fact]
+    public void DefaultLogpfadLiegtNebenDenProfilenUndNichtImArbeitsverzeichnis()
+    {
+        var previous = Environment.GetEnvironmentVariable(MockMultipassCli.LogPathEnvironmentVariable);
+        try
+        {
+            Environment.SetEnvironmentVariable(MockMultipassCli.LogPathEnvironmentVariable, null);
+
+            var withDefaultRoot = MockMultipassCli.ResolveLogPath();
+            var withRelativeRoot = MockMultipassCli.ResolveLogPath("artifacts");
+
+            Assert.Equal(withDefaultRoot, withRelativeRoot);
+            Assert.True(Path.IsPathRooted(withDefaultRoot));
+            Assert.Equal(
+                Path.Combine(RepoPaths.Root, "artifacts", "multipass-mock", "calls.jsonl"),
+                withDefaultRoot);
+
+            // Genau dort, wo auch die Profile liegen — nicht eine Ebene darüber
+            // und nicht relativ zum Aufrufer.
+            var profiles = Path.Combine(RepoPaths.Root, "artifacts", "profiles");
+            Assert.Equal(Path.GetDirectoryName(profiles)!, Path.GetDirectoryName(Path.GetDirectoryName(withDefaultRoot))!);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(MockMultipassCli.LogPathEnvironmentVariable, previous);
+        }
+    }
+
+    [Fact]
+    public void EnvVariableUeberschreibtDenDefaultPfad()
+    {
+        var previous = Environment.GetEnvironmentVariable(MockMultipassCli.LogPathEnvironmentVariable);
+        try
+        {
+            Environment.SetEnvironmentVariable(MockMultipassCli.LogPathEnvironmentVariable, "logs/selbst.jsonl");
+
+            var resolved = MockMultipassCli.ResolveLogPath("artifacts");
+
+            // Auch die Env-Variable wird aufgelöst, sonst wäre sie wieder relativ.
+            Assert.Equal(
+                Path.Combine(RepoPaths.Root, "logs", "selbst.jsonl"),
+                resolved);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(MockMultipassCli.LogPathEnvironmentVariable, previous);
+        }
     }
 
     [Fact]
     public void ZustandUeberlebtDenProzess()
     {
         using var temp = new TempDirectory();
-        var log = Path.Combine(temp.Path, MockMultipassCli.DefaultLogFileName);
+        var log = Path.Combine(temp.Path, "mock", MockMultipassCli.LogFileName);
 
         new MockMultipassCli(log).Run(new[] { "launch", "daily:26.10", "--name", "cbx-b" });
 
