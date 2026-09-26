@@ -23,17 +23,10 @@ public sealed class CliLifecycleFixture : IDisposable
 {
     private readonly TempDirectory store;
     private readonly AppConfig config;
-    private readonly string? mockSetting;
     private bool disposed;
 
     public CliLifecycleFixture()
     {
-        // Der Mock darf diesen Lauf nie übernehmen: ein CORE_BRIDGE_MULTIPASS_MOCK
-        // in der Shell des Entwicklers würde sonst echte VMs durch Attrappen
-        // ersetzen und der Test würde grün scheitern, ohne etwas zu prüfen.
-        mockSetting = Environment.GetEnvironmentVariable(MockMultipassCli.EnableEnvironmentVariable);
-        Environment.SetEnvironmentVariable(MockMultipassCli.EnableEnvironmentVariable, "0");
-
         store = new TempDirectory();
         config = new AppConfig
         {
@@ -42,6 +35,11 @@ public sealed class CliLifecycleFixture : IDisposable
             DefaultTimeoutVmCreation = "2400s",
             // Start/Stop/Exec/Transfer warten DefaultTimeout (Standard 10 s) — für echte VMs zu kurz.
             DefaultTimeout = "600s",
+            // Jeder echte Multipass-Aufruf wird protokolliert — außerhalb des
+            // Temp-Stores, damit die Aufzeichnung den Lauf überlebt und per
+            // ReplayMultipassCli wiedergegeben werden kann. Bootstrap bleibt
+            // Standard: hier läuft garantiert das echte Multipass.
+            MultipassLogPath = "artifacts/mp-log/cli-lifecycle",
             Images = new ImagesConfig
             {
                 StoreRoot = store.Path,
@@ -267,7 +265,6 @@ public sealed class CliLifecycleFixture : IDisposable
         }
         finally
         {
-            Environment.SetEnvironmentVariable(MockMultipassCli.EnableEnvironmentVariable, mockSetting);
             store.Dispose();
         }
     }

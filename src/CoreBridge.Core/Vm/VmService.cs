@@ -11,6 +11,9 @@ public sealed class VmService
         _cli = cli ?? new MultipassCli();
     }
 
+    /// <summary>Der Client, über den alle Verben laufen.</summary>
+    public IMultipassCli Cli => _cli;
+
     public IReadOnlyList<VmInfo> List(int timeoutMs = 60_000)
     {
         var result = _cli.Run(new[] { "list", "--format", "json" }, timeoutMs);

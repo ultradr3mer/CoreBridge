@@ -245,28 +245,9 @@ public static class Program
         CancellationToken cancellationToken)
     {
         InitStore.Initialize(config.Images.StoreRoot);
-        var context = new CommandContext(config, new VmService(CreateMultipassCli(config.MultipassLogPath)), factory, cancellationToken);
+        using var services = CoreBridgeContainer.Create(config);
+        var context = new CommandContext(config, new VmService(MultipassCliFactory.Create(services)), factory, cancellationToken);
         await Dispatch(context, options);
-    }
-
-    /// <summary>
-    /// Echter Multipass-Client — oder im Mock-Betrieb (<c>CORE_BRIDGE_MULTIPASS_MOCK=1</c>)
-    /// ein <see cref="MockMultipassCli"/>, der den VM-Zustand im Speicher hält und
-    /// jeden Aufruf als JSON Line protokolliert. So lässt sich die ganze Anwendung
-    /// ohne installiertes Multipass und ohne Wartezeiten durchspielen.
-    /// </summary>
-    private static IMultipassCli CreateMultipassCli(string? storeRoot)
-    {
-        if (!string.IsNullOrEmpty(storeRoot))
-        {
-            return new MultipassCli();
-        }
-
-        var mock = new MockMultipassCli(MockMultipassCli.ResolveLogPath(storeRoot));
-        Console.Error.WriteLine(
-            $"[MockMultipass] aktiv ({MockMultipassCli.EnableEnvironmentVariable}) — "
-            + $"kein echtes Multipass. JSON-Log: {mock.LogPath}");
-        return mock;
     }
 
     private static Task Dispatch(CommandContext context, IOptions options)
@@ -374,15 +355,13 @@ public static class Program
     {
         var events = context.Events;
 
-        // Im Mock-Betrieb gibt es weder Binary noch Daemon: einen erfundenen
+        // Bei der Wiedergabe gibt es weder Binary noch Daemon: einen erfundenen
         // Pfad melden, damit der Erfolgspfad (Parsing der Version) durchläuft.
-        var mocking = MockMultipassCli.IsEnabled();
+        var cli = context.Vms.Cli;
         var report = await Task.Run(
-            () => mocking
-                ? Doctor.Check(
-                    () => "mock://multipass",
-                    CreateMultipassCli(context.Config.Images.StoreRoot))
-                : Doctor.Check(),
+            () => cli is ReplayMultipassCli
+                ? Doctor.Check(() => "replay://multipass", cli)
+                : Doctor.Check(cli: cli),
             context.CancellationToken);
         if (!report.Found)
         {

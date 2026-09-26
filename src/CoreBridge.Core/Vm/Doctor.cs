@@ -25,7 +25,7 @@ public static class Doctor
     /// <param name="locate">Binary-Auflösung; <c>null</c> = Standard.</param>
     /// <param name="cli">
     /// Client für die Versionsabfrage. Standard ist <see cref="MultipassCli"/>;
-    /// im Mock-Betrieb wird hier ein <see cref="MockMultipassCli"/> übergeben.
+    /// die CLI übergibt den Client aus <see cref="MultipassCliFactory"/>.
     /// </param>
     public static DoctorReport Check(Func<string?>? locate = null, IMultipassCli? cli = null)
     {

@@ -27,15 +27,27 @@ public sealed record AppConfig
     public string DefaultTimeout { get; init; } = "10s";
 
     /// <summary>
-    /// Defining a path activates logging.,
+    /// Verzeichnis für das Multipass-Aufrufprotokoll (JSON Lines, eine Datei je
+    /// Prozess). Gesetzt = Protokoll an; leer = aus. Absolut oder relativ zur
+    /// Repo-Wurzel (<see cref="Common.RepoPaths.Resolve"/>).
     /// </summary>
-    public string MultipassLogPath { get; init; } = "mp-log/";
+    /// <remarks>
+    /// Ist <see cref="IMultipassCli"/> in <see cref="Bootstrap"/> auf
+    /// <see cref="ReplayMultipassCli"/> gemappt, ist dies die Quelle der
+    /// Wiedergabe und es wird nicht zusätzlich protokolliert.
+    /// </remarks>
+    public string? MultipassLogPath { get; init; }
 
     /// <summary>
-    /// Type Mappings, override for mocking.
+    /// Typ-Zuordnungen für den <see cref="Common.CoreBridgeContainer"/>:
+    /// voller Name der Schnittstelle → voller Name der Implementierung.
+    /// Zum Mocken z. B. <see cref="IMultipassCli"/> → <see cref="ReplayMultipassCli"/>.
     /// </summary>
-    public Dictionary<string,string> Bottstrap { get; init; } = new Dictionary<string,string> { { typeof(IMultipassCli).FullName, typeof(MultipassCli).FullName } };
- }
+    public Dictionary<string, string> Bootstrap { get; init; } = new()
+    {
+        [typeof(IMultipassCli).FullName!] = typeof(MultipassCli).FullName!
+    };
+}
 
 public sealed record ImagesConfig
 {

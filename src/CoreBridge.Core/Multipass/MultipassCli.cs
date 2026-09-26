@@ -13,6 +13,10 @@ public class MultipassCli : IMultipassCli
 {
     private readonly Func<string?> _locate;
 
+    /// <summary>
+    /// Standard-Auflösung des Binarys. Der Container wählt diesen Konstruktor,
+    /// weil <c>Func&lt;string?&gt;</c> nicht registriert ist.
+    /// </summary>
     public MultipassCli()
         : this(() => MultipassBinaryLocator.LocateOrNull())
     {

@@ -7,11 +7,11 @@ namespace CoreBridge.Core.Common;
 /// aufrufenden Prozesses stimmen.
 /// </summary>
 /// <remarks>
-/// Bewusst zentral: <see cref="Core.Inits.InitStore"/> und der Multipass-Mock
-/// brauchen dieselbe Auflösung. Zwei eigene Kopien führten dazu, dass Profile
-/// immer unter der Repo-Wurzel landeten, das Mock-Log aber relativ zum
-/// aktuellen Verzeichnis — und die VM dadurch zwischen zwei <c>cb</c>-Aufrufen
-/// verschwand.
+/// Bewusst zentral: <see cref="Core.Inits.InitStore"/> und das Multipass-Protokoll
+/// (<see cref="Config.AppConfig.MultipassLogPath"/>) brauchen dieselbe Auflösung.
+/// Zwei eigene Kopien führten dazu, dass Profile immer unter der Repo-Wurzel
+/// landeten, das Protokoll aber relativ zum aktuellen Verzeichnis — und die
+/// Wiedergabe es je nach Aufruf nicht fand.
 /// </remarks>
 public static class RepoPaths
 {
