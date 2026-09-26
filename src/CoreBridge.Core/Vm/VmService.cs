@@ -169,6 +169,32 @@ public sealed class VmService
         return Run(new[] { "restore", $"{name}.{snapshot}", "--destructive" }, timeoutMs, keepWaiting);
     }
 
+    /// <summary>Disk-Größe laut <c>multipass get local.&lt;vm&gt;.disk</c>, z. B. <c>5.0GiB</c>.</summary>
+    public string GetDisk(string name, int timeoutMs = 60_000)
+    {
+        var result = _cli.Run(new[] { "get", $"local.{name}.disk" }, timeoutMs);
+        if (result.ExitCode != 0)
+        {
+            var message = MultipassStdErr.Clean(result.StdErr);
+            throw new MultipassException(string.IsNullOrEmpty(message)
+                ? $"multipass get local.{name}.disk beendet mit Exit {result.ExitCode}."
+                : $"{message} (multipass Exit {result.ExitCode})");
+        }
+
+        return MultipassOutput.CleanLines(result.StdOut).FirstOrDefault()?.Trim() ?? string.Empty;
+    }
+
+    /// <summary>
+    /// <c>multipass set local.&lt;vm&gt;.disk=&lt;size&gt;</c> auf einer <em>gestoppten</em>
+    /// VM. Multipass vergrößert nur („Disk can only be expanded“); die Partition im
+    /// Gast wächst beim nächsten Boot per cloud-init <c>growpart</c> mit.
+    /// </summary>
+    /// <inheritdoc cref="Start"/>
+    public MultipassRunResult SetDisk(string name, string size, int timeoutMs = 180_000, Func<bool>? keepWaiting = null)
+    {
+        return Run(new[] { "set", $"local.{name}.disk={size}" }, timeoutMs, keepWaiting);
+    }
+
     /// <summary>Snapshots laut <c>multipass list --snapshots</c>, optional nur die einer VM.</summary>
     public IReadOnlyList<VmSnapshotInfo> ListSnapshots(string? name = null, int timeoutMs = 60_000)
     {

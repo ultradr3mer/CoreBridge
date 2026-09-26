@@ -6,20 +6,24 @@ function cb {
     # Programme als getrennte Argumente weiter (`-c claude dotnet`) — der Parser
     # verwirft den Rest dann stillschweigend. Listen daher wieder zusammenfügen.
     $cliArgs = @(foreach ($arg in $args) { if ($arg -is [array]) { $arg -join ',' } else { $arg } })
-    $cliProject = ".\src\CoreBridge.Cli\"
-    $tuiProject = ".\src\CoreBridge.Tui\"
+    # Checkout/Worktree, in dem man gerade steht: vom aktuellen Verzeichnis aufwärts
+    # bis zur CoreBridge.slnx (wie RepoPaths.Root) — so klappt cb auch aus Unterordnern.
+    $root = (Get-Location).ProviderPath
+    while ($root -and -not (Test-Path -LiteralPath (Join-Path $root 'CoreBridge.slnx'))) {
+        $root = Split-Path -Parent $root
+    }
+
+    if (-not $root) {
+        Write-Error "Kein CoreBridge-Checkout gefunden (keine CoreBridge.slnx in $((Get-Location).ProviderPath) oder darüber) — cb im Repo oder einem Worktree aufrufen."
+        return
+    }
 
     if ($args.Count -eq 0) {
         # Kein Argument angegeben -> TUI starten statt der reinen CLI-Hilfe.
-        if (Test-Path $tuiProject) {
-            dotnet run --project $tuiProject
-        }
-    }
-    elseif (Test-Path $cliProject) {
-        dotnet run --project $cliProject -- @cliArgs
+        dotnet run --project (Join-Path $root 'src\CoreBridge.Tui')
     }
     else {
-        core-bridge @cliArgs
+        dotnet run --project (Join-Path $root 'src\CoreBridge.Cli') -- @cliArgs
     }
 }
 

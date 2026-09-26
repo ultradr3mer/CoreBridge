@@ -36,6 +36,7 @@ public static class Program
         typeof(VmSnapshotsOptions),
         typeof(VmRestoreOptions),
         typeof(VmInstallOptions),
+        typeof(VmResizeOptions),
         typeof(InitConfigureOptions),
         typeof(InitListOptions),
         typeof(InitDeleteOptions)
@@ -282,6 +283,7 @@ public static class Program
             VmSnapshotsOptions o => RunVmSnapshots(context, o),
             VmRestoreOptions o => RunVmRestore(context, o),
             VmInstallOptions o => RunVmInstall(context, o),
+            VmResizeOptions o => RunVmResize(context, o),
             InitConfigureOptions o => RunInitConfigure(context, o),
             InitListOptions => RunInitList(context),
             InitDeleteOptions o => RunInitDelete(context, o),
@@ -1131,6 +1133,72 @@ public static class Program
     }
 
     /// <summary>
+    /// Vergrößert die Disk einer VM (<c>multipass set local.&lt;vm&gt;.disk</c>). Multipass
+    /// ändert nur gestoppte VMs und verkleinert nie — beides wird geprüft, bevor eine
+    /// laufende VM (nach Rückfrage) gestoppt wird; sie startet danach wieder, und der
+    /// Gast zieht seine Root-Partition beim Boot per cloud-init <c>growpart</c> nach.
+    /// </summary>
+    private static async Task RunVmResize(CommandContext context, VmResizeOptions options)
+    {
+        var events = context.Events;
+        var name = options.Name;
+        var size = options.Disk.Trim();
+        if (!MultipassSize.TryParse(size, out var requested))
+        {
+            throw new ProgramExecutionException(
+                1,
+                $"Invalid disk size `{size}` — use a number followed by K, M or G, e.g. 20G or 0.5G.");
+        }
+
+        var vm = await RequireVm(context, name);
+        if (vm.IsDeleted)
+        {
+            throw InTrash(name);
+        }
+
+        var current = await Task.Run(() => context.Vms.GetDisk(name, context.DefaultTimeoutMs), context.CancellationToken);
+        if (MultipassSize.TryParse(current, out var currentBytes))
+        {
+            if (requested < currentBytes)
+            {
+                throw new ProgramExecutionException(
+                    1,
+                    $"VM `{name}` has a {current} disk — Multipass can only grow it, not shrink it to {size}.");
+            }
+
+            if (requested == currentBytes)
+            {
+                await events.Emit(events.Std($"resize {name}: OK (disk is already {current}) — State: {vm.State}"));
+                return;
+            }
+        }
+
+        var wasRunning = !vm.IsStopped;
+        await EnsureStopped(context, vm, "the resize");
+
+        var label = $"resize {name} disk {current} -> {size}";
+        var result = await RunReported(
+            context,
+            label,
+            () => context.Vms.SetDisk(name, size, context.DefaultTimeoutMs, KeepWaiting(context, label)));
+        var resized = await Task.Run(() => context.Vms.GetDisk(name, context.DefaultTimeoutMs), context.CancellationToken);
+        await events.Emit(events.Std($"{label}: OK ({result.DurationMs / 1000.0:F1} s) — disk now {resized}"));
+
+        if (!wasRunning)
+        {
+            await events.Emit(events.Std($"VM `{name}` stays stopped — the guest grows its root partition to the new size on the next start (`cb vm-start -n {name}`)."));
+            return;
+        }
+
+        await RunVmStateCommand(
+            context,
+            name,
+            $"start {name}",
+            () => context.Vms.Start(name, context.DefaultTimeoutMs, KeepWaiting(context, $"start {name}")));
+        await events.Emit(events.Std($"cloud-init grows the root partition while booting — check with `cb vm-exec -n {name} -c \"df -h /\"`."));
+    }
+
+    /// <summary>
     /// Installiert Komponenten in eine vorhandene VM — dieselben Schritte wie
     /// cloud-init beim Anlegen (<see cref="InitInstall.Plan"/>). Der erste
     /// fehlgeschlagene Schritt beendet den Befehl; die VM läuft dann zur Diagnose
@@ -1151,7 +1219,8 @@ public static class Program
             RequireValidName(options.Snapshot);
         }
 
-        var steps = InitInstall.Plan(context.Config.Images, components);
+        var hostKey = HostSshKey.RequiredBy(context.Config.Images, components) ? await EnsureHostKey(context) : null;
+        var steps = InitInstall.Plan(context.Config.Images, components, hostKey);
         await EnsureRunning(context, name, ask: false);
 
         // apt und snap brauchen Minuten: gewartet wird in Abschnitten von
@@ -1321,6 +1390,22 @@ public static class Program
         }
     }
 
+    /// <summary>
+    /// Öffentlicher Host-Schlüssel für Komponenten mit <c>AuthorizeHostKey</c> (git);
+    /// beim ersten Mal wird das Paar erzeugt und das gemeldet.
+    /// </summary>
+    private static async Task<string> EnsureHostKey(CommandContext context)
+    {
+        var existed = File.Exists(HostSshKey.PublicKeyPath());
+        var path = await Task.Run(() => HostSshKey.EnsurePublicKeyPath(), context.CancellationToken);
+        if (!existed)
+        {
+            await context.Events.Emit(context.Events.Std($"Created the CoreBridge SSH key for the VMs: {path}"));
+        }
+
+        return path;
+    }
+
     private static async Task RunInitConfigure(CommandContext context, InitConfigureOptions options)
     {
         var events = context.Events;
@@ -1328,12 +1413,16 @@ public static class Program
         var components = options.Components.Split(',', StringSplitOptions.RemoveEmptyEntries);
         await events.Emit(events.Std($"Erzeuge Profil '{options.Name}' ({string.Join(", ", components)}) ..."));
         var inits = new InitService(config.Images);
+        var hostKey = HostSshKey.RequiredBy(config.Images, components)
+            ? HostSshKey.ReadPublicKey(await EnsureHostKey(context))
+            : null;
         var result = await Task.Run(
             () => inits.Configure(
                 options.Name,
                 components,
                 force: options.Force,
-                runtimeImage: options.RuntimeImage),
+                runtimeImage: options.RuntimeImage,
+                hostPublicKey: hostKey),
             context.CancellationToken);
 
         await events.Emit(events.Std($"Profil '{result.Name}' erzeugt."));

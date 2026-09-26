@@ -70,6 +70,17 @@ public sealed class SimulatedMultipassCli : IMultipassCli, IMultipassDouble
     /// </summary>
     private static readonly HashSet<string> ComponentsWithoutMarker = new(StringComparer.Ordinal) { "dotnet" };
 
+    /// <summary>
+    /// Komponenten, die nur eine Login-Shell findet: <c>install-dotnet.sh</c> verlinkt
+    /// dotnet nach <c>~/.local/bin</c>, das erst die <c>.profile</c> in den PATH holt.
+    /// <c>multipass exec … /bin/sh -c</c> ist keine Login-Shell → Exit 127
+    /// (verifiziert am 2026-09-26 mit ai-ubuntu-dotnet, Multipass 1.16.3).
+    /// </summary>
+    private static readonly HashSet<string> ComponentsOnlyInLoginShell = new(StringComparer.Ordinal) { "dotnet" };
+
+    /// <summary>Multipass-Standard ohne <c>launch --disk</c>.</summary>
+    private const string DefaultDisk = "5.0GiB";
+
     private readonly TimeSpan _delay;
 
     /// <summary>Einziger öffentlicher Konstruktor — den wählt der Container.</summary>
@@ -198,6 +209,8 @@ public sealed class SimulatedMultipassCli : IMultipassCli, IMultipassDouble
             "shell" or "sh" => Shell(state, args),
             "transfer" => Transfer(state, args),
             "info" => Info(state, args),
+            "get" => Get(state, args),
+            "set" => Set(state, args),
             _ => Fail($"multipass: unknown command '{args[0]}' (simulation).")
         };
     }
@@ -282,6 +295,7 @@ public sealed class SimulatedMultipassCli : IMultipassCli, IMultipassDouble
             State = "Running",
             Release = ReleaseOf(image),
             Ip = NextIp(state),
+            Disk = Value(args, "--disk", "-d") is { } disk && MultipassSize.TryParse(disk, out var bytes) ? FormatSize(bytes) : DefaultDisk,
             Components = components,
             Markers = components.Where(c => !ComponentsWithoutMarker.Contains(c)).ToList()
         });
@@ -427,6 +441,7 @@ public sealed class SimulatedMultipassCli : IMultipassCli, IMultipassDouble
             State = "Stopped",
             Release = vm.Release,
             Ip = NextIp(state),
+            Disk = vm.Disk,
             Components = [.. vm.Components],
             Markers = [.. vm.Markers],
             Files = new Dictionary<string, string>(vm.Files)
@@ -518,6 +533,69 @@ public sealed class SimulatedMultipassCli : IMultipassCli, IMultipassDouble
         return Ok(string.Empty);
     }
 
+    /// <summary>Nur <c>local.&lt;vm&gt;.disk</c>; Fehlertext wie Multipass 1.16.3.</summary>
+    private static MultipassRunResult Get(SimState state, IReadOnlyList<string> args)
+    {
+        var key = Regex.Match(args.ElementAtOrDefault(1) ?? string.Empty, @"^local\.(.+)\.disk$");
+        if (!key.Success)
+        {
+            return Fail($"get failed: unknown setting '{args.ElementAtOrDefault(1)}' (simulation).");
+        }
+
+        var vm = Find(state, key.Groups[1].Value);
+        return vm is null
+            ? Fail($"get failed: Cannot obtain instance settings; instance: {key.Groups[1].Value}; reason: No such instance")
+            : Ok(vm.Disk + "\n");
+    }
+
+    /// <summary>
+    /// <c>set local.&lt;vm&gt;.disk=&lt;size&gt;</c> mit den Ablehnungen von Multipass 1.16.3
+    /// (laufende VM, ungültige Größe, Verkleinern — Texte am 2026-09-26 aufgenommen).
+    /// </summary>
+    private static MultipassRunResult Set(SimState state, IReadOnlyList<string> args)
+    {
+        var setting = args.ElementAtOrDefault(1) ?? string.Empty;
+        var key = Regex.Match(setting, @"^local\.(.+)\.disk=(.*)$");
+        if (!key.Success)
+        {
+            return Fail($"set failed: unknown setting '{setting}' (simulation).");
+        }
+
+        var (name, size) = (key.Groups[1].Value, key.Groups[2].Value);
+        var vm = Find(state, name);
+        if (vm is null)
+        {
+            return Fail($"set failed: Cannot update instance settings; instance: {name}; reason: No such instance");
+        }
+
+        if (vm.State != "Stopped")
+        {
+            return Fail($"set failed: Cannot update instance settings; instance: {name}; reason: Instance must be stopped for modification");
+        }
+
+        if (!MultipassSize.TryParse(size, out var bytes))
+        {
+            return Fail($"set failed: Invalid setting '{setting}': {size} is not a valid memory size - need a non-negative integer (in base 10) or a decimal followed by K, M, or G (e.g. 1234B, 42MiB, 0.5G)");
+        }
+
+        if (MultipassSize.TryParse(vm.Disk, out var current) && bytes < current)
+        {
+            return Fail($"set failed: Invalid setting '{setting}': Disk can only be expanded");
+        }
+
+        vm.Disk = FormatSize(bytes);
+        return Ok(string.Empty);
+    }
+
+    /// <summary>Anzeige wie <c>multipass get</c> (<c>5.0GiB</c>); unter 1 GiB in MiB.</summary>
+    private static string FormatSize(long bytes)
+    {
+        const double GiB = 1024d * 1024 * 1024;
+        return bytes >= GiB
+            ? (bytes / GiB).ToString("F1", System.Globalization.CultureInfo.InvariantCulture) + "GiB"
+            : (bytes / (1024d * 1024)).ToString("F1", System.Globalization.CultureInfo.InvariantCulture) + "MiB";
+    }
+
     private static MultipassRunResult Exec(SimState state, IReadOnlyList<string> args)
     {
         var name = args.ElementAtOrDefault(1) ?? string.Empty;
@@ -591,7 +669,7 @@ public sealed class SimulatedMultipassCli : IMultipassCli, IMultipassDouble
     /// Beantwortet eine Shell-Zeile so, wie es ein provisionierter Gast täte;
     /// Segmente (<c>;</c>, <c>&amp;&amp;</c>) werden einzeln ausgewertet.
     /// </summary>
-    private static MultipassRunResult Respond(SimVm vm, string line)
+    private static MultipassRunResult Respond(SimVm vm, string line, bool loginShell = false)
     {
         var output = new StringBuilder();
         var exitCode = 0;
@@ -599,7 +677,7 @@ public sealed class SimulatedMultipassCli : IMultipassCli, IMultipassDouble
         {
             foreach (var segment in statement.Split("&&", StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
             {
-                var (code, text) = RespondOne(vm, segment);
+                var (code, text) = RespondOne(vm, segment, loginShell);
                 output.Append(text);
                 exitCode = code;
                 if (code != 0)
@@ -612,7 +690,7 @@ public sealed class SimulatedMultipassCli : IMultipassCli, IMultipassDouble
         return new MultipassRunResult(exitCode, output.ToString(), exitCode == 0 ? string.Empty : "simulated command failed\n", 0);
     }
 
-    private static (int ExitCode, string Output) RespondOne(SimVm vm, string command)
+    private static (int ExitCode, string Output) RespondOne(SimVm vm, string command, bool loginShell)
     {
         const int NotFound = 127;
 
@@ -624,7 +702,7 @@ public sealed class SimulatedMultipassCli : IMultipassCli, IMultipassDouble
         var login = Regex.Match(command, @"^(?:ba)?sh\s+-l?c\s+'(.*)'$");
         if (login.Success)
         {
-            var inner = Respond(vm, login.Groups[1].Value);
+            var inner = Respond(vm, login.Groups[1].Value, loginShell: true);
             return (inner.ExitCode, inner.StdOut);
         }
 
@@ -705,7 +783,13 @@ public sealed class SimulatedMultipassCli : IMultipassCli, IMultipassDouble
         if (probe.Success && versions.TryGetValue(probe.Groups[1].Value, out var reported))
         {
             var component = probe.Groups[1].Value.StartsWith("python", StringComparison.Ordinal) ? "python" : probe.Groups[1].Value;
-            return vm.Components.Contains(component)
+            // Ein Pfad zählt nur, wo das echte Skript hinlinkt (/snap/bin/dotnet gibt es nicht);
+            // ohne Pfad findet eine Nicht-Login-Shell manche Komponenten nicht.
+            var path = command.StartsWith("command -v", StringComparison.Ordinal) ? string.Empty : command.Split(' ')[0];
+            var reachable = path.Contains('/')
+                ? !path.StartsWith("/snap/bin/", StringComparison.Ordinal)
+                : loginShell || !ComponentsOnlyInLoginShell.Contains(component);
+            return vm.Components.Contains(component) && reachable
                 ? (0, command.StartsWith("command -v", StringComparison.Ordinal) ? $"/usr/local/bin/{probe.Groups[1].Value}\n" : reported + "\n")
                 : (NotFound, string.Empty);
         }
@@ -890,6 +974,9 @@ public sealed class SimulatedMultipassCli : IMultipassCli, IMultipassDouble
         public string Release { get; set; } = "Ubuntu 26.10";
 
         public string Ip { get; set; } = string.Empty;
+
+        /// <summary>Wie <c>multipass get local.&lt;vm&gt;.disk</c> es ausgibt.</summary>
+        public string Disk { get; set; } = DefaultDisk;
 
         public List<string> Components { get; set; } = [];
 

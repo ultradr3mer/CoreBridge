@@ -43,6 +43,26 @@ public class InitInstallTests
     }
 
     [Fact]
+    public void GitLegtDenHostSchluesselVorDemSkriptAb()
+    {
+        using var temp = new TempDirectory();
+        var key = Path.Combine(temp.Path, "id_ed25519.pub");
+        File.WriteAllText(key, "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAITestKeyOnly corebridge@test");
+
+        var steps = InitInstall.Plan(LoadShippedImagesConfig(), ["git"], key);
+        var titles = steps.Select(s => s.Title).ToList();
+
+        var upload = titles.IndexOf("Host-SSH-Schlüssel hochladen");
+        Assert.True(steps[upload].IsUpload);
+        Assert.Equal(key, steps[upload].ScriptSource);
+        Assert.Equal(
+            "sudo install -D -m 0644 -o root -g root /tmp/corebridge-host-key.pub /etc/corebridge/host_authorized_keys",
+            steps[upload + 1].Command);
+        Assert.True(upload < titles.IndexOf("git: Skript ausführen (als ubuntu)"));
+        Assert.Throws<MultipassException>(() => InitInstall.Plan(LoadShippedImagesConfig(), ["git"]));
+    }
+
+    [Fact]
     public void UnbekannteKomponenteNenntDieBekannten()
     {
         var exception = Assert.Throws<MultipassException>(() => InitInstall.Plan(LoadShippedImagesConfig(), ["pyton"]));

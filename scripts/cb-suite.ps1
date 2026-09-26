@@ -120,7 +120,7 @@ $edgeSteps = [ordered]@{
         run vm-clone -s $edgeSlow
         run vm-snapshot -n $edgeSlow
         run vm-restore -n $edgeSlow -s gibtsnicht } }
-    'bad-input'      = @{ Text = 'Ungültige Eingaben: Name, vertipptes Profil, fehlende Datei, Zeitangabe, fehlende Quelle/Ziel'; Do = {
+    'bad-input'      = @{ Text = 'Ungültige Eingaben: Name, vertipptes Profil, fehlende Datei, Zeitangabe, fehlende Quelle/Ziel, Disk-Größe (ungültig/verkleinern)'; Do = {
         run vm-create -n 1-falsch
         run vm-create -n cbx-edge-tippfehler -i dve
         run vm-create -n cbx-edge-x -c nicht-da.yaml
@@ -128,7 +128,9 @@ $edgeSteps = [ordered]@{
         run vm-snapshot -n $edgeA -s 'mit leer'
         run vm-put -n $edgeA -s nicht-da.txt
         run vm-get -n $edgeA -r nicht-da.txt -d (Join-Path $env:TEMP 'cbx-edge-get.txt')
-        run vm-snapshots -n cbx-edge-gibtsnicht } }
+        run vm-snapshots -n cbx-edge-gibtsnicht
+        run vm-resize -n $edgeA -d abc
+        run vm-resize -n $edgeA -d 1G } }
     'parser'         = @{ Text = 'Unbekanntes Verb und fehlende Pflichtoption'; Do = {
         run vm-foo
         run vm-start } }
@@ -166,6 +168,9 @@ $steps = [ordered]@{
     'use'      = @{ Text = 'Klon starten und benutzen'; Do = {
         run vm-start -n $clone @t
         run vm-exec -n $clone -c 'hostname; claude --version' @t } }
+    'resize'   = @{ Text = 'Disk des laufenden Klons zum Arbeiten vergrößern (fragt: stoppen?, startet danach wieder)'; Do = {
+        run vm-resize -n $clone -d 20G @t
+        run vm-exec -n $clone -c 'df -h /' @t } }
     'restore'  = @{ Text = 'Basis auf den Snapshot zurücksetzen (fragt nach Backup)'; Do = {
         run vm-restore -n $base -s frisch @t
         run vm-snapshots -n $base } }

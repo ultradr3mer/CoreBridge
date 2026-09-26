@@ -58,6 +58,29 @@ public class SimulatedMultipassCliTests
     }
 
     [Fact]
+    public void DiskWaechstNurGestopptUndNieZurueck()
+    {
+        using var temp = new TempDirectory();
+        var service = new VmService(Simulator(temp));
+        service.Create("sim-a", "daily:26.10");
+        service.Create("sim-b", "daily:26.10", disk: "10G");
+
+        Assert.Equal("5.0GiB", service.GetDisk("sim-a"));
+        Assert.Equal("10.0GiB", service.GetDisk("sim-b"));
+        Assert.Contains("Instance must be stopped for modification", service.SetDisk("sim-a", "20G").StdErr);
+
+        service.Stop("sim-a");
+        Assert.Contains("Disk can only be expanded", service.SetDisk("sim-a", "1G").StdErr);
+        Assert.Contains("abc is not a valid memory size", service.SetDisk("sim-a", "abc").StdErr);
+        Assert.Equal(0, service.SetDisk("sim-a", "20G").ExitCode);
+        Assert.Equal("20.0GiB", service.GetDisk("sim-a"));
+
+        service.Clone("sim-a", "sim-c");
+        Assert.Equal("20.0GiB", service.GetDisk("sim-c"));
+        Assert.Throws<MultipassException>(() => service.GetDisk("sim-nix"));
+    }
+
+    [Fact]
     public void UnbekanntesImageScheitertWieMultipass()
     {
         using var temp = new TempDirectory();

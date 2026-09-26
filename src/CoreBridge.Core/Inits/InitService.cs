@@ -38,7 +38,8 @@ public sealed class InitService
         string name,
         string[] components,
         bool force = false,
-        string? runtimeImage = null)
+        string? runtimeImage = null,
+        string? hostPublicKey = null)
     {
         if (string.IsNullOrWhiteSpace(name))
         {
@@ -76,7 +77,7 @@ public sealed class InitService
         if (InitCloudInit.NeedsCloudInit(_config, trimmed))
         {
             cloudInitPath = generatedCloudInitPath;
-            File.WriteAllText(cloudInitPath, InitCloudInit.Generate(name, _config, trimmed));
+            File.WriteAllText(cloudInitPath, InitCloudInit.Generate(name, _config, trimmed, hostPublicKey));
         }
         else if (File.Exists(generatedCloudInitPath))
         {

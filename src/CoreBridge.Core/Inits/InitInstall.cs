@@ -32,10 +32,20 @@ public static class InitInstall
 {
     public const string MarkerDirectory = "/var/lib/corebridge";
 
-    public static IReadOnlyList<InstallStep> Plan(ImagesConfig config, IEnumerable<string> components)
+    /// <param name="hostPublicKeyPath">
+    /// Öffentlicher Host-Schlüssel (<see cref="HostSshKey"/>); Pflicht, sobald eine
+    /// Komponente <see cref="ComponentConfig.AuthorizeHostKey"/> setzt. Er wird wie
+    /// bei cloud-init nach <see cref="HostSshKey.GuestKeyFile"/> gelegt, bevor die
+    /// Komponenten-Skripte laufen.
+    /// </param>
+    public static IReadOnlyList<InstallStep> Plan(ImagesConfig config, IEnumerable<string> components, string? hostPublicKeyPath = null)
     {
         var names = components.Select(c => c.Trim()).Where(c => c.Length > 0).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
         var resolved = InitComponents.Resolve(config, names);
+        if (resolved.Any(c => c.AuthorizeHostKey) && hostPublicKeyPath is null)
+        {
+            throw new MultipassException("Eine Komponente braucht den Host-SSH-Schlüssel, er wurde aber nicht übergeben.");
+        }
         var steps = new List<InstallStep>
         {
             // Beim ersten Start einer VM kann cloud-init noch apt sperren.
@@ -61,6 +71,15 @@ public static class InitInstall
             steps.Add(new(
                 $"Snap {component.Snap} installieren",
                 $"sudo snap wait system seed.loaded && sudo snap install {Quote(component.Snap!)}{(component.Classic ? " --classic" : string.Empty)}"));
+        }
+
+        if (resolved.Any(c => c.AuthorizeHostKey))
+        {
+            const string keyUpload = "/tmp/corebridge-host-key.pub";
+            steps.Add(new("Host-SSH-Schlüssel hochladen", null, hostPublicKeyPath, keyUpload));
+            steps.Add(new(
+                $"Host-SSH-Schlüssel nach {HostSshKey.GuestKeyFile} legen",
+                $"sudo install -D -m 0644 -o root -g root {Quote(keyUpload)} {Quote(HostSshKey.GuestKeyFile)}"));
         }
 
         for (var i = 0; i < names.Length; i++)

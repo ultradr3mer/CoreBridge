@@ -163,7 +163,24 @@ internal static class CloudInitYamlValidator
                 },
                 "write_files entry");
 
-            ValidateAbsoluteUnixPath(RequiredScalar(file, "path"), "write_files path");
+            var path = RequiredScalar(file, "path");
+            ValidateAbsoluteUnixPath(path, "write_files path");
+            if (path == HostSshKey.GuestKeyFile)
+            {
+                // Einzige Nicht-Skript-Datei: der öffentliche Host-Schlüssel für die git-Komponente.
+                var key = RequireScalar(RequiredNode(file, "content"), "content").Trim();
+                if (RequiredScalar(file, "permissions") != "0644"
+                    || RequiredScalar(file, "owner") != "root:root"
+                    || key.Length == 0
+                    || key.Any(char.IsControl))
+                {
+                    throw new MultipassException(
+                        $"{HostSshKey.GuestKeyFile} muss genau einen öffentlichen Schlüssel enthalten ('0644', 'root:root').");
+                }
+
+                continue;
+            }
+
             if (RequiredScalar(file, "permissions") != "0755")
             {
                 throw new MultipassException("Eingebettete Gast-Skripte müssen die Berechtigung '0755' besitzen.");

@@ -195,6 +195,16 @@ public sealed class VmRestoreOptions : MultipassOptions
     public string Snapshot { get; set; } = string.Empty;
 }
 
+[Verb("vm-resize", HelpText = "Vergrößert die Disk einer VM (multipass set local.<vm>.disk=<size>) — z. B. klein aufsetzen, zum Arbeiten wachsen lassen; eine laufende VM wird nach Rückfrage gestoppt und danach wieder gestartet.")]
+public sealed class VmResizeOptions : MultipassOptions
+{
+    [Option('n', "name", Required = true, HelpText = "Name der VM.")]
+    public string Name { get; set; } = string.Empty;
+
+    [Option('d', "disk", Required = true, HelpText = "Neue Disk-Größe, z. B. 20G (nur größer als die aktuelle; Multipass verkleinert nicht).")]
+    public string Disk { get; set; } = string.Empty;
+}
+
 [Verb("vm-install", HelpText = "Installiert Komponenten in eine vorhandene VM (dieselben Schritte wie cloud-init: Pakete, Snaps, Komponenten-Skript, Marker-Prüfung) und empfiehlt danach einen Snapshot.")]
 public sealed class VmInstallOptions : MultipassOptions
 {

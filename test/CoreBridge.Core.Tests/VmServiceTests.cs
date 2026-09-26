@@ -220,6 +220,35 @@ public class VmServiceTests
         Assert.Empty(new VmService(cli).ListSnapshots());
     }
 
+    [Fact]
+    public void DiskGroesseLesenUndSetzen()
+    {
+        var cli = new FakeMultipassCli(call => call[0] == "get"
+            ? new MultipassRunResult(0, "5.0GiB" + Environment.NewLine, string.Empty, 1)
+            : EmptyResult(call));
+        var service = new VmService(cli);
+
+        Assert.Equal("5.0GiB", service.GetDisk("cbx-test"));
+        service.SetDisk("cbx-test", "20G");
+
+        Assert.Equal(new[] { "get", "local.cbx-test.disk" }, cli.Calls[0]);
+        Assert.Equal(new[] { "set", "local.cbx-test.disk=20G" }, cli.Calls[1]);
+    }
+
+    [Fact]
+    public void GetDiskOhneVmWirftMitMultipassText()
+    {
+        var cli = new FakeMultipassCli(_ => new MultipassRunResult(
+            2,
+            string.Empty,
+            "get failed: Cannot obtain instance settings; instance: cbx-nix; reason: No such instance\n",
+            1));
+
+        var error = Assert.Throws<MultipassException>(() => new VmService(cli).GetDisk("cbx-nix"));
+
+        Assert.Contains("No such instance", error.Message);
+    }
+
     private static MultipassRunResult EmptyResult(string[] _) => new(0, string.Empty, string.Empty, 1);
 
     private sealed class FakeMultipassCli : MultipassCli
