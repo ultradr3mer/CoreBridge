@@ -654,6 +654,11 @@ public sealed class SimulatedMultipassCli : IMultipassCli, IMultipassDouble
                 : (NotFound, string.Empty);
         }
 
+        if (Regex.IsMatch(command, @"^ls(\s+-1)?\s+/var/lib/corebridge/?$"))
+        {
+            return (0, string.Concat(vm.Components.Order(StringComparer.Ordinal).Select(c => $"{c}.ready\n")));
+        }
+
         var marker = Regex.Match(command, @"/var/lib/corebridge/([A-Za-z0-9_-]+)\.ready");
         if (marker.Success)
         {

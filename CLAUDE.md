@@ -19,6 +19,7 @@ dotnet test test/CoreBridge.Cli.Tests                                # full VM l
 dotnet test --filter "Category!=Integration"                         # fast run: skips the Cli.Tests lifecycle
 dotnet run --project src/CoreBridge.Cli -- vm-list                   # run a CLI verb
 dotnet run --project src/CoreBridge.Tui                              # TUI app
+.\scripts\cb-suite.ps1 [-Pause] [-From clone] [-Only a,b] [-List]   # whole user flow step by step via cb-sim (simulator); -Real = real Multipass, VMs cbx-suite-*
 ```
 
 Building `CoreBridge.Cli` runs an MSBuild target that executes `scripts/install-cb.ps1`, which (idempotently, between `# >>> CoreBridge cb >>>` markers) installs the `cb` and `cb-sim` functions from `scripts/cb.ps1` into the user's PowerShell profiles. `cb` wraps `dotnet run --project .\src\CoreBridge.Cli` relative to the current directory (so it runs whichever checkout/worktree you stand in) and re-joins PowerShell arrays with commas (`-c claude,dotnet` would otherwise reach the parser as `-c claude dotnet` and silently drop `dotnet`). `cb-sim` is `cb` with `DOTNET_ENVIRONMENT=Simulation` for that one call (see Simulation below).

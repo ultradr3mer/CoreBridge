@@ -73,13 +73,16 @@ public class ChoiceEvent<T> : InteractionEvent<T> where T : struct, Enum
         var result = new StringBuilder();
         if (display)
         {
-            result.AppendLine(string.Join("; ", this.Options.Select(option => option.Display)));
+            result.Append(string.Join("; ", this.Options.Select(option => option.Display)));
         }
-
+        if (display && values)
+        {
+            result.Append(": ");
+        }
         if (values)
         {
             var patterns = string.Join("; ", this.Options.Select(option => option.GetPatterns(2, compact: true)));
-            result.AppendLine($"[{patterns}]");
+            result.Append($"[{patterns}]");
         }
 
         return result.ToString();
