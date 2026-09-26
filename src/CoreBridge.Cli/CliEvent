@@ -62,7 +62,7 @@ public class ErrEvent : CliEvent
     }
 }
 
-public abstract class InteractionEvent<T> : StdEvent, Task<T>
+public abstract class InteractionEvent<T> : StdEvent
 {
 
     public InteractionEvent(string message, string timeout)
@@ -73,9 +73,9 @@ public abstract class InteractionEvent<T> : StdEvent, Task<T>
 
     TaskCompletionSource<T> tcs;
 
-    public async Task<T> GetAwaiter()
+    public async Task<T> GetAwaitable()
     {
-        return tcs.Task;
+        return tcs.Task();
     }
 
     protected void SetResult(T value)
@@ -88,6 +88,21 @@ public abstract class InteractionEvent<T> : StdEvent, Task<T>
         this.tcs.SetCanceled();
     }
 }
+
+public class OptionDefWithValue<T> : OptionDef where T : Enum
+{
+    public OptionDefWithValue(OptionDef def, T value)
+        : this(def.display, def.patterns[0], value) { }
+
+    public OptionDefWithValue(string display, string pattern, T value)
+        : base(display, pattern)
+    {
+        this.Value = value;
+    }
+
+    public T Value { get; }
+}
+
 
 public class OptionDef : Attribute
 {
@@ -110,13 +125,13 @@ public class OptionDef : Attribute
         return FromAttribute(option).IsMatch(input);
     }
 
-    public static bool IsMatch<T>(string input, out OptionDef def) where T : Enum
+    public static bool HasMatch<T>(string input, out OptionDefWithValue<T> def) where T : Enum
     {
-        var opt = Enum.GetValues(typeof(T)).Cast<T>().ToArray();
+        var option = Enum.GetValues(typeof(T)).Cast<T>().ToArray();
         return FromAttribute(option).IsMatch(input);
     }
 
-    public static bool HasMatch<T>(string input, out OptionDef def, params T[] option) where T : Enum
+    public static bool HasMatch<T>(string input, out  OptionDefWithValue<T> def, params T[] option) where T : Enum
     {
         def = null;
         var m = (from o in option
@@ -134,9 +149,18 @@ public class OptionDef : Attribute
         return false;
     }
 
-    private static OptionDef FromAttribute<T>(T option) where T : Enum
+    private static OptionDefWithValue<T> FromAttribute<T>(T option) where T : Enum
     {
-        return (OptionDef)option.GetType().GetCustomAttributes(typeof(OptionDef), false).Single();
+        return (OptionDefWithValue<T>)option.GetType()
+                                        .GetCustomAttributes(typeof(OptionDef), false)
+                                        .Single()
+                                        .WithValue(option);
+    }
+
+    public OptionDefWithValue<T> WithValue(T option)
+    {
+        this.Value = option;
+        return this;
     }
 
     // private static OptionDef? GetAttributeOrNull<T>(T option) where T : Enum
@@ -176,14 +200,14 @@ public class ChoiceEvent<T> : InteractionEvent<T>
         this.Options = Enum.GetValues(typeof(T)).Cast<T>().ToList();
     }
 
-    TaskCompletionSource<T> tcs;
-
-    public async Task<T> GetAwaiter()
+    public bool IsChoice(string input)
     {
-        return tcs.Task;
+        bool hasMatch = OptionDef.HasMatch<T>(input, out var def);
+        this.SetResult(def.Value);
+        return hasMatch;
     }
 
-    public List<OptionDef> Options { get; }
+    public List<OptionDefWithValue<T>> Options { get; }
 
     public string PrintOptions()
     {
@@ -198,8 +222,6 @@ public class ChoiceEvent<T> : InteractionEvent<T>
         }
         return sb.ToString();
     }
-
-    protected T Result { set => this.tcs.SetResult(value); }
 }
 
 // public interface IUserInteractionCallback
