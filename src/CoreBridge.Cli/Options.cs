@@ -55,6 +55,9 @@ public sealed class VmCreateOptions : MultipassOptions
 
     [Option('d', "disk", HelpText = "Disk-Größe, z. B. 20G (multipass-Standard: 5G).")]
     public string? Disk { get; set; }
+
+    [Option("snapshot", HelpText = "Nach erfolgreicher Provisionierung (Profil/cloud-init) ohne Rückfrage stoppen und diesen Snapshot anlegen.")]
+    public string? Snapshot { get; set; }
 }
 
 [Verb("init-configure", HelpText = "Erzeugt ein cloud-init-Profil für den Gast (Pakete, Benutzer, Snaps, Komponenten-Skripte).")]
@@ -190,4 +193,17 @@ public sealed class VmRestoreOptions : MultipassOptions
 
     [Option('s', "snapshot", Required = true, HelpText = "Name des Snapshots (aus vm-snapshots).")]
     public string Snapshot { get; set; } = string.Empty;
+}
+
+[Verb("vm-install", HelpText = "Installiert Komponenten in eine vorhandene VM (dieselben Schritte wie cloud-init: Pakete, Snaps, Komponenten-Skript, Marker-Prüfung) und empfiehlt danach einen Snapshot.")]
+public sealed class VmInstallOptions : MultipassOptions
+{
+    [Option('n', "name", Required = true, HelpText = "Name der VM.")]
+    public string Name { get; set; } = string.Empty;
+
+    [Option('c', "components", Required = true, HelpText = "Komma-Liste der Komponenten (Config Images:Components, z. B. dotnet,python).")]
+    public string Components { get; set; } = string.Empty;
+
+    [Option("snapshot", HelpText = "Nach erfolgreicher Installation ohne Rückfrage stoppen und diesen Snapshot anlegen.")]
+    public string? Snapshot { get; set; }
 }

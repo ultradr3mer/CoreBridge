@@ -33,7 +33,10 @@ namespace CoreBridge.Simulation;
 /// Cloud-init wird nicht ausgeführt, sondern als erfolgreich angenommen: die
 /// Komponenten einer Launch-cloud-init (<c>corebridge-install-&lt;name&gt;</c>)
 /// gelten als installiert und beantworten ihre Sonden (<c>--version</c>,
-/// <c>/var/lib/corebridge/&lt;name&gt;.ready</c>). Klone und Snapshots tragen sie mit.
+/// <c>/var/lib/corebridge/&lt;name&gt;.ready</c>). Dasselbe gilt, wenn
+/// <c>vm-install</c> ein installiertes Komponenten-Skript per exec ausführt.
+/// Klone und Snapshots tragen beides mit. Wie in echt setzt
+/// <see cref="ComponentsWithoutMarker"/> (dotnet) keinen Marker.
 /// </para>
 /// </remarks>
 public sealed class SimulatedMultipassCli : IMultipassCli, IMultipassDouble
@@ -58,6 +61,14 @@ public sealed class SimulatedMultipassCli : IMultipassCli, IMultipassDouble
     };
 
     private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true };
+
+    /// <summary>
+    /// Komponenten, deren echtes Skript keinen <c>.ready</c>-Marker anlegt:
+    /// <c>scripts/components/install-dotnet.sh</c> hat kein <c>touch</c>. Bleibt
+    /// hier, bis das Skript repariert ist — sonst wäre der Simulator grün, wo
+    /// die echte VM rot ist.
+    /// </summary>
+    private static readonly HashSet<string> ComponentsWithoutMarker = new(StringComparer.Ordinal) { "dotnet" };
 
     private readonly TimeSpan _delay;
 
@@ -206,7 +217,9 @@ public sealed class SimulatedMultipassCli : IMultipassCli, IMultipassDouble
 
     private static MultipassRunResult List(SimState state)
     {
-        // Reihenfolge wie Multipass 1.16: aktive VMs alphabetisch, danach der Papierkorb.
+        // Multipass 1.16 hat keine feste Reihenfolge (meist aktive vor dem Papierkorb,
+        // aber nicht immer alphabetisch); der Simulator bleibt deterministisch:
+        // aktive VMs alphabetisch, danach der Papierkorb.
         var entries = state.Vms
             .OrderBy(vm => vm.State == "Deleted")
             .ThenBy(vm => vm.Name, StringComparer.Ordinal)
@@ -269,7 +282,8 @@ public sealed class SimulatedMultipassCli : IMultipassCli, IMultipassDouble
             State = "Running",
             Release = ReleaseOf(image),
             Ip = NextIp(state),
-            Components = components
+            Components = components,
+            Markers = components.Where(c => !ComponentsWithoutMarker.Contains(c)).ToList()
         });
         return Ok($"Launched: {name}\n");
     }
@@ -414,6 +428,7 @@ public sealed class SimulatedMultipassCli : IMultipassCli, IMultipassDouble
             Release = vm.Release,
             Ip = NextIp(state),
             Components = [.. vm.Components],
+            Markers = [.. vm.Markers],
             Files = new Dictionary<string, string>(vm.Files)
         });
         return Ok($"Cloned from {vm.Name} to {name}.\n");
@@ -450,6 +465,7 @@ public sealed class SimulatedMultipassCli : IMultipassCli, IMultipassDouble
             Parent = vm.CurrentSnapshot ?? string.Empty,
             Comment = Value(args, "--comment", "-c", "-m") ?? string.Empty,
             Components = [.. vm.Components],
+            Markers = [.. vm.Markers],
             Files = new Dictionary<string, string>(vm.Files)
         });
         vm.CurrentSnapshot = snapshot;
@@ -477,6 +493,7 @@ public sealed class SimulatedMultipassCli : IMultipassCli, IMultipassDouble
         }
 
         vm.Components = [.. saved.Components];
+        vm.Markers = [.. saved.Markers];
         vm.Files = new Dictionary<string, string>(saved.Files);
         vm.CurrentSnapshot = saved.Name;
         return Ok($"Snapshot restored: {vm.Name}.{saved.Name}\n");
@@ -598,6 +615,37 @@ public sealed class SimulatedMultipassCli : IMultipassCli, IMultipassDouble
     private static (int ExitCode, string Output) RespondOne(SimVm vm, string command)
     {
         const int NotFound = 127;
+
+        // `sudo` und vorangestellte Variablen (DEBIAN_FRONTEND=…) ändern an der Antwort nichts.
+        command = Regex.Replace(command, @"^(sudo\s+)?([A-Z_]+=\S+\s+)*", string.Empty);
+
+        // `bash -lc '…'` (Login-Shell): den inneren Befehl beantworten, statt ihn als
+        // unbekannt durchzuwinken — sonst wäre jede so verpackte Sonde grün.
+        var login = Regex.Match(command, @"^(?:ba)?sh\s+-l?c\s+'(.*)'$");
+        if (login.Success)
+        {
+            var inner = Respond(vm, login.Groups[1].Value);
+            return (inner.ExitCode, inner.StdOut);
+        }
+
+        // Ein installiertes Komponenten-Skript läuft durch (vm-install): Komponente
+        // gilt als installiert; den Marker setzt es nur, wenn das echte Skript das tut.
+        var install = Regex.Match(command, @"^'?/usr/local/sbin/corebridge-install-([A-Za-z0-9_-]+)'?(\s|$)");
+        if (install.Success)
+        {
+            var component = install.Groups[1].Value;
+            if (!vm.Components.Contains(component))
+            {
+                vm.Components.Add(component);
+            }
+
+            if (!ComponentsWithoutMarker.Contains(component) && !vm.Markers.Contains(component))
+            {
+                vm.Markers.Add(component);
+            }
+
+            return (0, $"[simulation] {component} installiert\n");
+        }
         if (command.StartsWith("echo ", StringComparison.Ordinal))
         {
             return (0, command[5..].Trim().Trim('"', '\'') + "\n");
@@ -652,7 +700,8 @@ public sealed class SimulatedMultipassCli : IMultipassCli, IMultipassDouble
             ["python3"] = "Python 3.14.0",
             ["cline"] = "3.4.0"
         };
-        var probe = Regex.Match(command, @"^(?:command -v\s+)?([A-Za-z0-9_.-]+)(?:\s+--version)?$");
+        // Auch mit Pfad (/snap/bin/dotnet, /usr/local/bin/python3.14): zählt der Programmname.
+        var probe = Regex.Match(command, @"^(?:command -v\s+)?(?:\S*/)?([A-Za-z0-9_.-]+)(?:\s+--version)?$");
         if (probe.Success && versions.TryGetValue(probe.Groups[1].Value, out var reported))
         {
             var component = probe.Groups[1].Value.StartsWith("python", StringComparison.Ordinal) ? "python" : probe.Groups[1].Value;
@@ -663,13 +712,13 @@ public sealed class SimulatedMultipassCli : IMultipassCli, IMultipassDouble
 
         if (Regex.IsMatch(command, @"^ls(\s+-1)?\s+/var/lib/corebridge/?$"))
         {
-            return (0, string.Concat(vm.Components.Order(StringComparer.Ordinal).Select(c => $"{c}.ready\n")));
+            return (0, string.Concat(vm.Markers.Order(StringComparer.Ordinal).Select(c => $"{c}.ready\n")));
         }
 
         var marker = Regex.Match(command, @"/var/lib/corebridge/([A-Za-z0-9_-]+)\.ready");
         if (marker.Success)
         {
-            return vm.Components.Contains(marker.Groups[1].Value) ? (0, string.Empty) : (1, string.Empty);
+            return vm.Markers.Contains(marker.Groups[1].Value) ? (0, string.Empty) : (1, string.Empty);
         }
 
         var cat = Regex.Match(command, @"^cat\s+(\S+)$");
@@ -844,6 +893,9 @@ public sealed class SimulatedMultipassCli : IMultipassCli, IMultipassDouble
 
         public List<string> Components { get; set; } = [];
 
+        /// <summary>Komponenten, deren <c>/var/lib/corebridge/&lt;name&gt;.ready</c> existiert.</summary>
+        public List<string> Markers { get; set; } = [];
+
         /// <summary>Per <c>transfer</c> in die VM kopierte Dateien (Pfad → Inhalt).</summary>
         public Dictionary<string, string> Files { get; set; } = new(StringComparer.Ordinal);
 
@@ -865,6 +917,8 @@ public sealed class SimulatedMultipassCli : IMultipassCli, IMultipassDouble
         public string Comment { get; set; } = string.Empty;
 
         public List<string> Components { get; set; } = [];
+
+        public List<string> Markers { get; set; } = [];
 
         public Dictionary<string, string> Files { get; set; } = new(StringComparer.Ordinal);
     }

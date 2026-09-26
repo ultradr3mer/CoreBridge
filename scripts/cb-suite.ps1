@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     Spielt den typischen CoreBridge-Ablauf Schritt für Schritt durch —
     standardmäßig gegen den Multipass-Simulator (cb-sim), mit -Real gegen echtes Multipass.

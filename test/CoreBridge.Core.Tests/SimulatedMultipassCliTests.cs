@@ -244,9 +244,14 @@ public class SimulatedMultipassCliTests
         Assert.True(compared > 20);
     }
 
+    /// <summary>
+    /// Nach Namen sortiert: Multipass 1.16 listet in keiner festen Reihenfolge
+    /// (einmal <c>ai-ubuntu, ai-ubuntu-python, ai-ubuntu-dotnet</c>), verglichen
+    /// wird also nur, welche VMs in welchem Zustand da sind.
+    /// </summary>
     private static IEnumerable<(string Name, string? State)> Vms(string json)
     {
-        return MultipassVmList.Parse(json).Select(vm => (vm.Name, vm.State));
+        return MultipassVmList.Parse(json).Select(vm => (vm.Name, vm.State)).OrderBy(vm => vm.Name, StringComparer.Ordinal);
     }
 
     private static IEnumerable<string> Results(string stdOut)

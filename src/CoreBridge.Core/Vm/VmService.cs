@@ -201,9 +201,13 @@ public sealed class VmService
             : _cli.RunWithExtensions(args, TimeSpan.FromMilliseconds(timeoutMs), keepWaiting);
     }
 
-    public MultipassRunResult Exec(string name, string command, int timeoutMs = 600_000)
+    /// <param name="keepWaiting">
+    /// Optional: nach je <paramref name="timeoutMs"/> gefragt, ob weiter gewartet wird —
+    /// für lange Installationen (apt, snap); ohne Angabe ein festes Limit.
+    /// </param>
+    public MultipassRunResult Exec(string name, string command, int timeoutMs = 600_000, Func<bool>? keepWaiting = null)
     {
-        return _cli.Run(new[] { "exec", name, "--", "/bin/sh", "-c", command }, timeoutMs);
+        return Run(new[] { "exec", name, "--", "/bin/sh", "-c", command }, timeoutMs, keepWaiting);
     }
 
     public MultipassRunResult Put(string localPath, string name, string? remotePath = null, int timeoutMs = 600_000)
