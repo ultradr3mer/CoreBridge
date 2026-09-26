@@ -2,24 +2,24 @@ using CoreBridge.Core.Config;
 using CoreBridge.Core.Multipass;
 using CoreBridge.Core.Vm;
 
-namespace CoreBridge.Core.Images;
+namespace CoreBridge.Core.Inits;
 
 /// <summary>
-/// Aufgelöstes Launch-Profil für einen von <c>image-configure</c> erzeugten Namen.
+/// Aufgelöstes Launch-Profil für einen von <c>init-configure</c> erzeugten Namen.
 /// </summary>
-public sealed record ImageProfile(
+public sealed record InitProfile(
     string Name,
     string RuntimeImage,
     string? CloudInitPath);
 
 /// <summary>
-/// Trennt normale Multipass-Katalognamen von CoreBridge-Image-Profilen.
-/// Ein Profil wird nur dann aufgelöst, wenn im ImageStore tatsächlich eine
-/// Konfigurationsdatei für diesen Namen existiert.
+/// Trennt normale Multipass-Katalognamen von CoreBridge-Profilen.
+/// Ein Profil wird nur dann aufgelöst, wenn im <see cref="InitStore"/> tatsächlich
+/// eine Konfigurationsdatei für diesen Namen existiert.
 /// </summary>
-public static class ImageProfileResolver
+public static class InitProfileResolver
 {
-    public static ImageProfile? Resolve(
+    public static InitProfile? Resolve(
         ImagesConfig config,
         string requestedImage,
         string? explicitCloudInit = null)
@@ -29,30 +29,28 @@ public static class ImageProfileResolver
             return null;
         }
 
-        var configPath = ImageStore.ConfigFile(requestedImage);
+        var configPath = InitStore.ConfigFile(requestedImage);
         if (!File.Exists(configPath))
         {
             return null;
         }
 
-        ImageProfileConfig profileConfig;
+        InitProfileConfig profileConfig;
         try
         {
-            profileConfig = ImageProfileConfig.FromJson(File.ReadAllText(configPath));
+            profileConfig = InitProfileConfig.FromJson(File.ReadAllText(configPath));
         }
         catch (Exception exception) when (exception is IOException or System.Text.Json.JsonException or InvalidDataException)
         {
             throw new MultipassException(
-                $"Image-Profil '{requestedImage}' ist unlesbar: {configPath}", exception);
+                $"Profil '{requestedImage}' ist unlesbar: {configPath}", exception);
         }
 
-        if (profileConfig.SchemaVersion < 3
-            || string.IsNullOrWhiteSpace(profileConfig.ModelId)
-            || string.IsNullOrWhiteSpace(profileConfig.ModelSha256))
+        if (profileConfig.SchemaVersion < 4)
         {
             throw new MultipassException(
-                $"Image-Profil '{requestedImage}' stammt vor dem Classic-Profil-Schema. " +
-                "Bitte image-delete und image-configure erneut ausführen.");
+                $"Profil '{requestedImage}' stammt vor der Umstellung auf reine cloud-init-Profile. " +
+                "Bitte init-delete und init-configure erneut ausführen.");
         }
 
         var runtimeImage = string.IsNullOrWhiteSpace(profileConfig.RuntimeImage)
@@ -61,12 +59,12 @@ public static class ImageProfileResolver
         if (string.IsNullOrWhiteSpace(runtimeImage))
         {
             throw new MultipassException(
-                $"Image-Profil '{requestedImage}' enthält kein gültiges Runtime-Image.");
+                $"Profil '{requestedImage}' enthält kein gültiges Runtime-Image.");
         }
 
         var cloudInitPath = ResolveCloudInit(requestedImage, profileConfig, configPath, explicitCloudInit);
 
-        return new ImageProfile(
+        return new InitProfile(
             requestedImage,
             runtimeImage,
             cloudInitPath);
@@ -74,7 +72,7 @@ public static class ImageProfileResolver
 
     private static string? ResolveCloudInit(
         string name,
-        ImageProfileConfig profileConfig,
+        InitProfileConfig profileConfig,
         string configPath,
         string? explicitCloudInit)
     {
@@ -94,7 +92,7 @@ public static class ImageProfileResolver
         {
             // Ältere Profile speicherten den Dateinamen nicht. Der Pfad ist
             // deterministisch, daher funktioniert die Migration ohne Metadaten.
-            candidate = ImageStore.CloudInitFile(name);
+            candidate = InitStore.CloudInitFile(name);
             if (!File.Exists(candidate))
             {
                 return null;
@@ -104,8 +102,8 @@ public static class ImageProfileResolver
         if (!File.Exists(candidate))
         {
             throw new MultipassException(
-                $"Cloud-init für Image-Profil '{name}' fehlt: {candidate}. " +
-                "image-configure erneut ausführen.");
+                $"Cloud-init für Profil '{name}' fehlt: {candidate}. " +
+                "init-configure erneut ausführen.");
         }
 
         return Path.GetFullPath(candidate);

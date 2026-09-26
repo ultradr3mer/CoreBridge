@@ -3,7 +3,7 @@ using System.Text;
 using System.Text.RegularExpressions;
 using CoreBridge.Cli;
 using CoreBridge.Core.Config;
-using CoreBridge.Core.Images;
+using CoreBridge.Core.Inits;
 
 namespace CoreBridge.Cli.Tests;
 
@@ -68,9 +68,9 @@ public sealed class CliLifecycleFixture : IDisposable
 
     public string VmName { get; }
 
-    internal string ModelPath => Path.Combine(store.Path, "models", ImageName, ImageName + ".model");
+    internal string ProfileConfigPath => Path.Combine(store.Path, "profiles", ImageName, ImageName + ".profile.json");
 
-    internal string ProfileConfigPath => Path.Combine(store.Path, "models", ImageName, ImageName + ".profile.json");
+    internal string CloudInitPath => Path.Combine(store.Path, "profiles", ImageName, "cloud-init.yaml");
 
     internal string SshPrivateKeyPath => Path.Combine(store.Path, "ssh", "id_rsa");
 
@@ -229,10 +229,10 @@ public sealed class CliLifecycleFixture : IDisposable
             await RunCheckedAsync(new VmDeleteOptions { Name = VmName, Purge = true }, log);
         }
 
-        var modelDirectory = Path.Combine(store.Path, "models", ImageName);
-        if (Directory.Exists(modelDirectory))
+        var profileDirectory = Path.Combine(store.Path, "profiles", ImageName);
+        if (Directory.Exists(profileDirectory))
         {
-            await RunCheckedAsync(new ImageDeleteOptions { Name = ImageName }, log);
+            await RunCheckedAsync(new InitDeleteOptions { Name = ImageName }, log);
         }
     }
 

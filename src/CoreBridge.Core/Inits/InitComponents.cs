@@ -2,13 +2,13 @@ using CoreBridge.Core.Config;
 using CoreBridge.Core.Multipass;
 using CoreBridge.Core.Vm;
 
-namespace CoreBridge.Core.Images;
+namespace CoreBridge.Core.Inits;
 
 /// <summary>
 /// Löst Komponentennamen gegen die Konfiguration auf. Was eine Komponente ist,
 /// steht in appsettings.json, nicht im Code.
 /// </summary>
-public static class ImageComponents
+public static class InitComponents
 {
     public static string[] ResolveSnaps(ImagesConfig config, IEnumerable<string> components)
     {

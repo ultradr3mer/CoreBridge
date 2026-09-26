@@ -28,17 +28,9 @@ public sealed record AppConfig
 public sealed record ImagesConfig
 {
     /// <summary>
-    /// Kanonisches Modell für neu konfigurierte Classic-Ubuntu-Images.
-    /// 26.10 ist aktuell der Edge-Stand; der Runtime-Image-Katalog muss dazu
-    /// passend konfiguriert werden (<see cref="DefaultRuntimeImage"/>).
-    /// </summary>
-    public string DefaultModelUrl { get; init; } =
-        "https://raw.githubusercontent.com/canonical/models/main/ubuntu-classic-2610-amd64-dangerous.model";
-
-    /// <summary>
-    /// Multipass-Katalogname, der für VMs aus einem konfigurierten Image-Profil
-    /// verwendet wird. Der Classic-26.10-Stand ist im T02-Katalog als
-    /// <c>daily:26.10</c> verfügbar.
+    /// Multipass-Katalogname, der beim Starten einer VM zugrunde liegt.
+    /// Der Classic-26.10-Stand ist im T02-Katalog als <c>daily:26.10</c>
+    /// verfügbar. Ein Profil (<c>init-configure</c>) überschreibt diesen Wert.
     /// </summary>
     public string DefaultRuntimeImage { get; init; } = "daily:26.10";
 

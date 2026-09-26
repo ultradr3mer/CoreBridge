@@ -1,6 +1,6 @@
 using System.Text.Json;
 using CoreBridge.Core.Config;
-using CoreBridge.Core.Images;
+using CoreBridge.Core.Inits;
 
 namespace CoreBridge.Core.Tests;
 
@@ -17,7 +17,7 @@ public class ComponentScriptTests
     {
         var config = LoadShippedImagesConfig();
 
-        var yaml = ImageCloudInit.Generate("agent", config, [component]);
+        var yaml = InitCloudInit.Generate("agent", config, [component]);
 
         Assert.Contains($"path: '{installPath}'", yaml);
         Assert.Contains(scriptMarker, yaml);
@@ -30,7 +30,7 @@ public class ComponentScriptTests
     {
         var config = LoadShippedImagesConfig();
 
-        var yaml = ImageCloudInit.Generate("all", config, config.Components.Keys);
+        var yaml = InitCloudInit.Generate("all", config, config.Components.Keys);
 
         foreach (var component in config.Components.Values.Where(c => c.InstallPath is not null))
         {
@@ -40,7 +40,7 @@ public class ComponentScriptTests
 
     private static ImagesConfig LoadShippedImagesConfig()
     {
-        var path = ImageStore.ResolvePath("src/CoreBridge.Cli/appsettings.json");
+        var path = InitStore.ResolvePath("src/CoreBridge.Cli/appsettings.json");
         using var document = JsonDocument.Parse(File.ReadAllText(path));
         var images = document.RootElement.GetProperty("Images").Deserialize<ImagesConfig>(
             new JsonSerializerOptions { PropertyNameCaseInsensitive = true })!;

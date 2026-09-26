@@ -4,25 +4,25 @@ using CoreBridge.Core.Config;
 using CoreBridge.Core.Multipass;
 using CoreBridge.Core.Vm;
 
-namespace CoreBridge.Core.Images;
+namespace CoreBridge.Core.Inits;
 
 /// <summary>
 /// Erzeugt ausschließlich die cloud-init-YAML für die Gast-Provisionierung.
 /// Das Rendern lädt keine Images, installiert keine Pakete und führt keine
 /// Komponenten auf dem Host aus.
 /// </summary>
-public static class ImageCloudInit
+public static class InitCloudInit
 {
     private static readonly Regex SafeUserName = new("^[a-z_][a-z0-9_-]*$", RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
     public static bool NeedsCloudInit(ImagesConfig config, IEnumerable<string> components)
     {
-        return ImageComponents.Resolve(config, components).Any(component => component.NeedsCloudInit);
+        return InitComponents.Resolve(config, components).Any(component => component.NeedsCloudInit);
     }
 
     public static string Generate(string name, ImagesConfig config, IEnumerable<string> components)
     {
-        var selected = ImageComponents.Resolve(config, components);
+        var selected = InitComponents.Resolve(config, components);
         var packages = selected
             .SelectMany(component => component.Packages)
             .Where(package => !string.IsNullOrWhiteSpace(package))
@@ -40,7 +40,7 @@ public static class ImageCloudInit
 
         var yaml = new StringBuilder();
         yaml.AppendLine("#cloud-config");
-        yaml.AppendLine($"# Generiert von `cb image-configure --name {SafeComment(name)}`.");
+        yaml.AppendLine($"# Generiert von `cb init-configure --name {SafeComment(name)}`.");
         yaml.AppendLine("# Gast-Provisionierung; Komponenten-Skripte werden als Dateien eingebettet.");
 
         yaml.AppendLine($"package_update: {packageUpdate.ToString().ToLowerInvariant()}");
@@ -139,7 +139,7 @@ public static class ImageCloudInit
             ValidateInstallPath(installPath, scriptPath);
             ValidateScriptPath(scriptPath);
 
-            var sourcePath = ImageStore.ResolvePath(scriptPath);
+            var sourcePath = InitStore.ResolvePath(scriptPath);
             if (!File.Exists(sourcePath))
             {
                 throw new MultipassException($"Cloud-init-Skript fehlt: {sourcePath}");

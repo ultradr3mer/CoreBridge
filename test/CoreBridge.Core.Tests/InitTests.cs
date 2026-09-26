@@ -1,13 +1,13 @@
 using System.Net;
 using CoreBridge.Core.Config;
-using CoreBridge.Core.Images;
+using CoreBridge.Core.Inits;
 using CoreBridge.Core.Multipass;
 using CoreBridge.Core.Vm;
 using YamlDotNet.RepresentationModel;
 
 namespace CoreBridge.Core.Tests;
 
-public class ImageCloudInitTests
+public class InitCloudInitTests
 {
     [Fact]
     public void NeedsCloudInit_TrueSobaldGastProvisionierungVorhanden()
@@ -21,10 +21,10 @@ public class ImageCloudInitTests
             }),
             ("opencode", new ComponentConfig { Snap = "opencode" }));
 
-        Assert.True(ImageCloudInit.NeedsCloudInit(config, ["claude"]));
-        Assert.True(ImageCloudInit.NeedsCloudInit(config, ["opencode"]));
-        Assert.True(ImageCloudInit.NeedsCloudInit(config, ["claude", "opencode"]));
-        Assert.False(ImageCloudInit.NeedsCloudInit(config, []));
+        Assert.True(InitCloudInit.NeedsCloudInit(config, ["claude"]));
+        Assert.True(InitCloudInit.NeedsCloudInit(config, ["opencode"]));
+        Assert.True(InitCloudInit.NeedsCloudInit(config, ["claude", "opencode"]));
+        Assert.False(InitCloudInit.NeedsCloudInit(config, []));
     }
 
     [Fact]
@@ -48,7 +48,7 @@ public class ImageCloudInitTests
                 ]
             }));
 
-        var yaml = ImageCloudInit.Generate("agent", config, ["claude"]);
+        var yaml = InitCloudInit.Generate("agent", config, ["claude"]);
         var root = ParseRoot(yaml);
 
         Assert.Equal("true", Scalar(Required(root, "package_update")));
@@ -83,7 +83,7 @@ public class ImageCloudInitTests
             ("opencode", new ComponentConfig { Snap = "opencode", Classic = true }),
             ("python", new ComponentConfig { Snap = "python3-alt", Classic = true }));
 
-        var yaml = ImageCloudInit.Generate("agent", config, ["opencode", "python"]);
+        var yaml = InitCloudInit.Generate("agent", config, ["opencode", "python"]);
         var root = ParseRoot(yaml);
         var commands = Sequence(Required(Mapping(Required(root, "snap")), "commands"));
 
@@ -114,7 +114,7 @@ public class ImageCloudInitTests
             ("one", new ComponentConfig { Users = [user] }),
             ("two", new ComponentConfig { Users = [user with { Groups = ["users"] }] }));
 
-        var yaml = ImageCloudInit.Generate("agent", config, ["one", "two"]);
+        var yaml = InitCloudInit.Generate("agent", config, ["one", "two"]);
         var users = Sequence(Required(ParseRoot(yaml), "users"));
 
         Assert.Single(users);
@@ -136,7 +136,7 @@ public class ImageCloudInitTests
             }));
 
         var exception = Assert.Throws<MultipassException>(
-            () => ImageCloudInit.Generate("agent", config, ["one", "two"]));
+            () => InitCloudInit.Generate("agent", config, ["one", "two"]));
 
         Assert.Contains("unterschiedlich", exception.Message);
     }
@@ -148,7 +148,7 @@ public class ImageCloudInitTests
             ("broken", new ComponentConfig { Script = "scripts/components/install-claude.sh" }));
 
         var exception = Assert.Throws<MultipassException>(
-            () => ImageCloudInit.Generate("agent", config, ["broken"]));
+            () => InitCloudInit.Generate("agent", config, ["broken"]));
 
         Assert.Contains("InstallPath", exception.Message);
     }
@@ -170,7 +170,7 @@ public class ImageCloudInitTests
                 InstallUser = "ubuntu"
             }));
 
-        var yaml = ImageCloudInit.Generate("agent", config, ["zeta", "alpha"]);
+        var yaml = InitCloudInit.Generate("agent", config, ["zeta", "alpha"]);
         var root = ParseRoot(yaml);
         var files = Sequence(Required(root, "write_files"));
         var commands = Sequence(Required(root, "runcmd"));
@@ -196,7 +196,7 @@ public class ImageCloudInitTests
             }));
 
         var exception = Assert.Throws<MultipassException>(
-            () => ImageCloudInit.Generate("agent", config, ["broken"]));
+            () => InitCloudInit.Generate("agent", config, ["broken"]));
 
         Assert.Contains("normalisierter absoluter Unix-Pfad", exception.Message);
     }
@@ -212,7 +212,7 @@ public class ImageCloudInitTests
             }));
 
         var exception = Assert.Throws<MultipassException>(
-            () => ImageCloudInit.Generate("agent", config, ["broken"]));
+            () => InitCloudInit.Generate("agent", config, ["broken"]));
 
         Assert.Contains("normalisierter relativer oder absoluter Pfad", exception.Message);
     }
@@ -230,7 +230,7 @@ public class ImageCloudInitTests
                 InstallPath = "/usr/local/sbin/corebridge-install-absolute"
             }));
 
-        var yaml = ImageCloudInit.Generate("agent", config, ["absolute"]);
+        var yaml = InitCloudInit.Generate("agent", config, ["absolute"]);
 
         Assert.Contains("/usr/local/sbin/corebridge-install-absolute", yaml);
     }
@@ -286,7 +286,7 @@ public class ImageCloudInitTests
     }
 }
 
-public class ImageComponentsTests
+public class InitComponentsTests
 {
     [Fact]
     public void ResolveSnaps_MapptNurKomponentenMitStoreSnap()
@@ -296,7 +296,7 @@ public class ImageComponentsTests
             ("dotnet", new ComponentConfig { Snap = "dotnet-sdk-100" }),
             ("python", new ComponentConfig { Snap = "python3-alt" }));
 
-        var snaps = ImageComponents.ResolveSnaps(config, ["claude", "dotnet", "python"]);
+        var snaps = InitComponents.ResolveSnaps(config, ["claude", "dotnet", "python"]);
 
         Assert.Equal(["dotnet-sdk-100", "python3-alt"], snaps);
     }
@@ -308,7 +308,7 @@ public class ImageComponentsTests
             ("claude", new ComponentConfig()),
             ("dotnet", new ComponentConfig { Snap = "dotnet-sdk-100" }));
 
-        var snaps = ImageComponents.ResolveSnaps(config, [" Claude ", "DOTNET"]);
+        var snaps = InitComponents.ResolveSnaps(config, [" Claude ", "DOTNET"]);
 
         Assert.Equal(["dotnet-sdk-100"], snaps);
     }
@@ -319,7 +319,7 @@ public class ImageComponentsTests
         var config = Config(("claude", new ComponentConfig()));
 
         Assert.Throws<MultipassException>(
-            () => ImageComponents.ResolveSnaps(config, ["rust"]));
+            () => InitComponents.ResolveSnaps(config, ["rust"]));
     }
 
     private static ImagesConfig Config(params (string Name, ComponentConfig Component)[] components)
@@ -335,41 +335,22 @@ public class ImageComponentsTests
 }
 
 /// <summary>
-/// ImageStore ist statisch — alle Tests, die Initialize aufrufen, müssen serialisiert
+/// InitStore ist statisch — alle Tests, die Initialize aufrufen, müssen serialisiert
 /// laufen (xUnit-Collection), sonst verbiegen parallel laufende Klassen den Root.
 /// </summary>
-[Collection("ImageStore")]
-public class ImageServiceConfigureGuardTests
+[Collection("InitStore")]
+public class InitServiceConfigureGuardTests
 {
-    private sealed class StubHttpHandler : HttpMessageHandler
-    {
-        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
-        {
-            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
-            {
-                Content = new StringContent(
-                    "type: model\n" +
-                    "model: ubuntu-classic-2610-amd64-dangerous\n" +
-                    "base: core24\n" +
-                    "classic: true\n" +
-                    "distribution: ubuntu\n" +
-                    "grade: dangerous\n")
-            });
-        }
-    }
-
     [Fact]
-    public void Configure_NeuesImage_SchreibtModellConfigCloudInit()
+    public void Configure_NeuesProfil_SchreibtConfigUndCloudInit()
     {
         using var store = new TempDirectory();
-        ImageStore.Initialize(store);
+        InitStore.Initialize(store);
         var config = Config();
 
-        var result = new ImageService(config, http: new HttpClient(new StubHttpHandler()))
-            .Configure("agent", ["claude", "dotnet"]);
+        var result = new InitService(config).Configure("agent", ["claude", "dotnet"]);
 
         Assert.Equal("agent", result.Name);
-        Assert.True(File.Exists(result.ModelPath));
         Assert.True(File.Exists(result.ConfigPath));
         Assert.NotNull(result.CloudInitPath);
         Assert.True(File.Exists(result.CloudInitPath));
@@ -379,33 +360,60 @@ public class ImageServiceConfigureGuardTests
     }
 
     [Fact]
-    public void Configure_BestehendesImage_OhneForceWirftMultipassException()
+    public void Configure_LaedtKeinModellUndLegtKeineModelldateiAn()
     {
         using var store = new TempDirectory();
-        ImageStore.Initialize(store);
-        var config = Config();
-        var dir = ImageStore.ModelDir("agent");
-        Directory.CreateDirectory(dir);
-        File.WriteAllText(ImageStore.ConfigFile("agent"), "x");
+        InitStore.Initialize(store);
 
-        var exception = Assert.Throws<MultipassException>(
-            () => new ImageService(config).Configure("agent", ["claude"]));
+        new InitService(Config()).Configure("agent", ["claude"]);
 
-        Assert.Contains("image-delete", exception.Message);
+        // Das Profil besteht ausschließlich aus Profilkonfiguration + cloud-init;
+        // ein Image wird weder heruntergeladen noch verwaltet.
+        var files = Directory.GetFiles(InitStore.ProfileDir("agent")).Select(Path.GetFileName).ToArray();
+        Assert.Equal(["agent.profile.json", "cloud-init.yaml"], files.Order(StringComparer.Ordinal));
+        Assert.Equal(
+            """
+            {
+              "Name": "agent",
+              "Components": [
+                "claude"
+              ],
+              "Snaps": [],
+              "RuntimeImage": "daily:26.10",
+              "CloudInitFile": "cloud-init.yaml",
+              "SchemaVersion": 4
+            }
+            """.ReplaceLineEndings(),
+            File.ReadAllText(InitStore.ConfigFile("agent")));
     }
 
     [Fact]
-    public void Configure_BestehendesImage_MitForceLaeuftWeiter()
+    public void Configure_BestehendesProfil_OhneForceWirftMultipassException()
     {
         using var store = new TempDirectory();
-        ImageStore.Initialize(store);
+        InitStore.Initialize(store);
         var config = Config();
-        var dir = ImageStore.ModelDir("agent");
+        var dir = InitStore.ProfileDir("agent");
         Directory.CreateDirectory(dir);
-        File.WriteAllText(ImageStore.ConfigFile("agent"), "x");
+        File.WriteAllText(InitStore.ConfigFile("agent"), "x");
 
-        var result = new ImageService(config, http: new HttpClient(new StubHttpHandler()))
-            .Configure("agent", ["claude"], force: true);
+        var exception = Assert.Throws<MultipassException>(
+            () => new InitService(config).Configure("agent", ["claude"]));
+
+        Assert.Contains("init-delete", exception.Message);
+    }
+
+    [Fact]
+    public void Configure_BestehendesProfil_MitForceLaeuftWeiter()
+    {
+        using var store = new TempDirectory();
+        InitStore.Initialize(store);
+        var config = Config();
+        var dir = InitStore.ProfileDir("agent");
+        Directory.CreateDirectory(dir);
+        File.WriteAllText(InitStore.ConfigFile("agent"), "x");
+
+        var result = new InitService(config).Configure("agent", ["claude"], force: true);
 
         Assert.True(File.Exists(result.ConfigPath));
         Assert.NotNull(result.CloudInitPath);
@@ -435,20 +443,19 @@ public class ImageServiceConfigureGuardTests
     }
 }
 
-[Collection("ImageStore")]
-public class ImageServiceListDeleteTests
+[Collection("InitStore")]
+public class InitServiceListDeleteTests
 {
     private static void SeedStore(TempDirectory store, string name, string[] components, string[] snaps)
     {
-        ImageStore.Initialize(store);
-        var dir = ImageStore.ModelDir(name);
+        InitStore.Initialize(store);
+        var dir = InitStore.ProfileDir(name);
         Directory.CreateDirectory(dir);
-        var profileConfig = new ImageProfileConfig(
+        var profileConfig = new InitProfileConfig(
             name,
-            "https://example.invalid/ubuntu-classic-2610-amd64-dangerous.model",
             components,
             snaps);
-        File.WriteAllText(ImageStore.ConfigFile(name), profileConfig.ToJson());
+        File.WriteAllText(InitStore.ConfigFile(name), profileConfig.ToJson());
     }
 
     [Fact]
@@ -458,7 +465,7 @@ public class ImageServiceListDeleteTests
         SeedStore(store, "alpha", ["claude"], []);
         SeedStore(store, "beta", ["dotnet"], ["dotnet-sdk-100"]);
 
-        var entries = new ImageService(new ImagesConfig()).List();
+        var entries = new InitService(new ImagesConfig()).List();
 
         Assert.Equal(2, entries.Count);
         Assert.Equal("alpha", entries[0].Name);
@@ -469,12 +476,12 @@ public class ImageServiceListDeleteTests
     }
 
     [Fact]
-    public void List_OhneModelsRoot_LiefertLeereListe()
+    public void List_OhneProfilesRoot_LiefertLeereListe()
     {
         using var store = new TempDirectory();
-        ImageStore.Initialize(store);
+        InitStore.Initialize(store);
 
-        Assert.Empty(new ImageService(new ImagesConfig()).List());
+        Assert.Empty(new InitService(new ImagesConfig()).List());
     }
 
     [Fact]
@@ -483,47 +490,41 @@ public class ImageServiceListDeleteTests
         using var store = new TempDirectory();
         SeedStore(store, "agent", ["claude"], []);
 
-        var result = new ImageService(new ImagesConfig()).Delete("agent");
+        var result = new InitService(new ImagesConfig()).Delete("agent");
 
-        Assert.Equal(ImageStore.ModelDir("agent"), result.ModelDir);
-        Assert.False(Directory.Exists(result.ModelDir));
+        Assert.Equal(InitStore.ProfileDir("agent"), result.ProfileDir);
+        Assert.False(Directory.Exists(result.ProfileDir));
     }
 
     [Fact]
     public void Delete_UnbekannterName_WirftMultipassException()
     {
         using var store = new TempDirectory();
-        ImageStore.Initialize(store);
+        InitStore.Initialize(store);
 
-        Assert.Throws<MultipassException>(() => new ImageService(new ImagesConfig()).Delete("gibtsnicht"));
+        Assert.Throws<MultipassException>(() => new InitService(new ImagesConfig()).Delete("gibtsnicht"));
     }
 }
 
-public class ImageProfileConfigTests
+public class InitProfileConfigTests
 {
     [Fact]
     public void Json_RoundtripErhaeltAlleFelder()
     {
-        var config = new ImageProfileConfig(
+        var config = new InitProfileConfig(
             "agent",
-            "https://example.invalid/ubuntu-classic-2610-amd64-dangerous.model",
             ["claude", "dotnet"],
             ["dotnet-sdk-100"],
             RuntimeImage: "daily:26.10",
-            CloudInitFile: "cloud-init.yaml",
-            ModelId: "ubuntu-classic-2610-amd64-dangerous",
-            ModelSha256: "abc123");
+            CloudInitFile: "cloud-init.yaml");
 
-        var roundtrip = ImageProfileConfig.FromJson(config.ToJson());
+        var roundtrip = InitProfileConfig.FromJson(config.ToJson());
 
         Assert.Equal(config.Name, roundtrip.Name);
-        Assert.Equal(config.BaseModelUrl, roundtrip.BaseModelUrl);
         Assert.Equal(config.Components, roundtrip.Components);
         Assert.Equal(config.Snaps, roundtrip.Snaps);
         Assert.Equal(config.RuntimeImage, roundtrip.RuntimeImage);
         Assert.Equal(config.CloudInitFile, roundtrip.CloudInitFile);
-        Assert.Equal(config.ModelId, roundtrip.ModelId);
-        Assert.Equal(config.ModelSha256, roundtrip.ModelSha256);
-        Assert.Equal(3, roundtrip.SchemaVersion);
+        Assert.Equal(4, roundtrip.SchemaVersion);
     }
 }

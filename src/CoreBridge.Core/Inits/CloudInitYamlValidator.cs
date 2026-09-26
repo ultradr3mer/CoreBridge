@@ -4,10 +4,10 @@ using YamlDotNet.RepresentationModel;
 using CoreBridge.Core.Multipass;
 using CoreBridge.Core.Vm;
 
-namespace CoreBridge.Core.Images;
+namespace CoreBridge.Core.Inits;
 
 /// <summary>
-/// Parses and validates the cloud-init subset emitted by <see cref="ImageCloudInit"/>.
+/// Parses and validates the cloud-init subset emitted by <see cref="InitCloudInit"/>.
 /// This is intentionally stricter than a generic YAML parse: malformed generated
 /// component provisioning must fail before a profile is persisted or launched.
 /// </summary>

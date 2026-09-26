@@ -5,7 +5,7 @@ using Xunit.Abstractions;
 namespace CoreBridge.Cli.Tests;
 
 /// <summary>
-/// Kompletter VM-Zyklus: Status → Image → Create → List → Start → Exec →
+/// Kompletter VM-Zyklus: Status → Profil → Create → List → Start → Exec →
 /// Connect (SSH) → Stop → Delete, strikt in dieser Reihenfolge
 /// (<see cref="LifecycleTestCaseOrderer"/>). Jede Stufe setzt den Zustand der
 /// vorherigen voraus und stellt ihn nicht selbst her — schlägt eine Stufe fehl,
@@ -38,9 +38,9 @@ public sealed class CliLifecycleTests
     }
 
     [Fact]
-    public async Task Stage01_ImageConfigure()
+    public async Task Stage01_InitConfigure()
     {
-        var result = await fixture.RunAsync(new ImageConfigureOptions
+        var result = await fixture.RunAsync(new InitConfigureOptions
         {
             Name = fixture.ImageName,
             Components = "claude,dotnet",
@@ -49,8 +49,8 @@ public sealed class CliLifecycleTests
         }, output.WriteLine);
 
         CliLifecycleFixture.AssertSucceeded(result);
-        Assert.True(File.Exists(fixture.ModelPath), $"Modellprofil fehlt: {fixture.ModelPath}");
         Assert.True(File.Exists(fixture.ProfileConfigPath), $"Profilkonfiguration fehlt: {fixture.ProfileConfigPath}");
+        Assert.True(File.Exists(fixture.CloudInitPath), $"cloud-init fehlt: {fixture.CloudInitPath}");
     }
 
     [Fact]

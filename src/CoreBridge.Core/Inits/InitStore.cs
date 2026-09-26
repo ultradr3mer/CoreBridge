@@ -1,12 +1,12 @@
-namespace CoreBridge.Core.Images;
+namespace CoreBridge.Core.Inits;
 
 /// <summary>
-/// Wo Modell-, Profil- und cloud-init-Dateien liegen. Standard:
+/// Wo die generierten cloud-init-Profile liegen. Standard:
 /// <Repo-Wurzel>/artifacts (Dev-Tool, keine App-Daten) — die Repo-Wurzel ist
 /// der Ordner, der CoreBridge.slnx enthält, von der DLL aus nach oben gesucht.
 /// Über Images:StoreRoot (AppConfig) konfigurierbar.
 /// </summary>
-public static class ImageStore
+public static class InitStore
 {
     private static string? _root;
 
@@ -52,15 +52,13 @@ public static class ImageStore
         return directory?.FullName ?? AppContext.BaseDirectory;
     }
 
-    public static string ModelsRoot => Path.Combine(Root, "models");
+    public static string ProfilesRoot => Path.Combine(Root, "profiles");
 
-    public static string ModelDir(string name) => Path.Combine(ModelsRoot, name);
+    public static string ProfileDir(string name) => Path.Combine(ProfilesRoot, name);
 
-    public static string ModelFile(string name) => Path.Combine(ModelDir(name), $"{name}.model");
+    public static string ConfigFile(string name) => Path.Combine(ProfileDir(name), $"{name}.profile.json");
 
-    public static string ConfigFile(string name) => Path.Combine(ModelDir(name), $"{name}.profile.json");
-
-    public static string CloudInitFile(string name) => Path.Combine(ModelDir(name), "cloud-init.yaml");
+    public static string CloudInitFile(string name) => Path.Combine(ProfileDir(name), "cloud-init.yaml");
 
     /// <summary>
     /// Löst einen konfigurierten relativen oder absoluten Pfad auf. Relative

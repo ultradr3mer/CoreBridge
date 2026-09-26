@@ -4,7 +4,7 @@ using System.Threading.Channels;
 using CommandLine;
 using CoreBridge.Core.Common;
 using CoreBridge.Core.Config;
-using CoreBridge.Core.Images;
+using CoreBridge.Core.Inits;
 using CoreBridge.Core.Multipass;
 using CoreBridge.Core.Vm;
 using Microsoft.Extensions.Configuration;
@@ -31,9 +31,9 @@ public static class Program
         typeof(VmConnectOptions),
         typeof(VmPutOptions),
         typeof(VmGetOptions),
-        typeof(ImageConfigureOptions),
-        typeof(ImageListOptions),
-        typeof(ImageDeleteOptions)
+        typeof(InitConfigureOptions),
+        typeof(InitListOptions),
+        typeof(InitDeleteOptions)
     ];
 
     /// <summary>
@@ -244,7 +244,7 @@ public static class Program
         EventFactory factory,
         CancellationToken cancellationToken)
     {
-        ImageStore.Initialize(config.Images.StoreRoot);
+        InitStore.Initialize(config.Images.StoreRoot);
         var context = new CommandContext(config, new VmService(), factory, cancellationToken);
         await Dispatch(context, options);
     }
@@ -264,9 +264,9 @@ public static class Program
             VmConnectOptions o => RunVmConnect(context, o),
             VmPutOptions o => RunVmPut(context, o),
             VmGetOptions o => RunVmGet(context, o),
-            ImageConfigureOptions o => RunImageConfigure(context, o),
-            ImageListOptions => RunImageList(context),
-            ImageDeleteOptions o => RunImageDelete(context, o),
+            InitConfigureOptions o => RunInitConfigure(context, o),
+            InitListOptions => RunInitList(context),
+            InitDeleteOptions o => RunInitDelete(context, o),
             _ => throw new MultipassException($"Unbekannter CLI-Options-Typ: {options.GetType().Name}")
         };
     }
@@ -500,7 +500,7 @@ public static class Program
         var requestedImage = string.IsNullOrWhiteSpace(options.Image)
             ? config.Images.DefaultRuntimeImage
             : options.Image.Trim();
-        var profile = ImageProfileResolver.Resolve(config.Images, requestedImage, options.CloudInit);
+        var profile = InitProfileResolver.Resolve(config.Images, requestedImage, options.CloudInit);
         var launchImage = profile?.RuntimeImage ?? requestedImage;
         var cloudInit = options.CloudInit ?? profile?.CloudInitPath;
         if (!VmNamePattern.IsMatch(options.Name))
@@ -573,7 +573,7 @@ public static class Program
 
         if (profile is not null)
         {
-            await events.Emit(events.Std($"Image-Profil: {profile.Name} (Runtime: {profile.RuntimeImage})"));
+            await events.Emit(events.Std($"Profil: {profile.Name} (Runtime: {profile.RuntimeImage})"));
             await events.Emit(events.Std("Gast-Provisionierung: cloud-init"));
         }
 
@@ -895,25 +895,22 @@ public static class Program
         }
     }
 
-    private static async Task RunImageConfigure(CommandContext context, ImageConfigureOptions options)
+    private static async Task RunInitConfigure(CommandContext context, InitConfigureOptions options)
     {
         var events = context.Events;
         var config = context.Config;
         var components = options.Components.Split(',', StringSplitOptions.RemoveEmptyEntries);
-        await events.Emit(events.Std($"Konfiguriere Image '{options.Name}' ({string.Join(", ", components)}) ..."));
-        using var http = new HttpClient { Timeout = config.DefaultTimeout.ReadTime() };
-        var images = new ImageService(config.Images, http);
+        await events.Emit(events.Std($"Erzeuge Profil '{options.Name}' ({string.Join(", ", components)}) ..."));
+        var inits = new InitService(config.Images);
         var result = await Task.Run(
-            () => images.Configure(
+            () => inits.Configure(
                 options.Name,
                 components,
-                options.ModelUrl,
                 force: options.Force,
                 runtimeImage: options.RuntimeImage),
             context.CancellationToken);
 
-        await events.Emit(events.Std($"Image '{result.Name}' konfiguriert."));
-        await events.Emit(events.Std($"  Modell:       {result.ModelPath} (Canonical dangerous, unverändert signiert)"));
+        await events.Emit(events.Std($"Profil '{result.Name}' erzeugt."));
         await events.Emit(events.Std($"  Config:       {result.ConfigPath}"));
         await events.Emit(events.Std($"  Runtime-Image: {result.RuntimeImage}"));
         await events.Emit(events.Std($"  Snaps:        {(result.Snaps.Length == 0 ? "keine" : string.Join(", ", result.Snaps))}"));
@@ -924,13 +921,13 @@ public static class Program
         await events.Emit(events.Std($"VM starten: cb vm-create --name <vm> --image {result.Name}"));
     }
 
-    private static async Task RunImageList(CommandContext context)
+    private static async Task RunInitList(CommandContext context)
     {
         var events = context.Events;
-        var entries = await Task.Run(() => new ImageService(context.Config.Images).List(), context.CancellationToken);
+        var entries = await Task.Run(() => new InitService(context.Config.Images).List(), context.CancellationToken);
         if (entries.Count == 0)
         {
-            await events.Emit(events.Std("Keine konfigurierten Classic-Profile."));
+            await events.Emit(events.Std("Keine konfigurierten Profile."));
             return;
         }
 
@@ -941,11 +938,11 @@ public static class Program
         }
     }
 
-    private static async Task RunImageDelete(CommandContext context, ImageDeleteOptions options)
+    private static async Task RunInitDelete(CommandContext context, InitDeleteOptions options)
     {
         var result = await Task.Run(
-            () => new ImageService(context.Config.Images).Delete(options.Name),
+            () => new InitService(context.Config.Images).Delete(options.Name),
             context.CancellationToken);
-        await context.Events.Emit(context.Events.Std($"Konfiguration gelöscht: {result.ModelDir}"));
+        await context.Events.Emit(context.Events.Std($"Konfiguration gelöscht: {result.ProfileDir}"));
     }
 }

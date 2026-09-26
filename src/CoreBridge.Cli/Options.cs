@@ -47,44 +47,41 @@ public sealed class VmCreateOptions : MultipassOptions
     [Option('n', "name", Required = true, HelpText = "Name der neuen VM.")]
     public string Name { get; set; } = string.Empty;
 
-    [Option('i', "image", HelpText = "Katalog-Image, URL/Pfad oder Name eines per image-configure konfigurierten Profils. Ohne Angabe: Images:DefaultRuntimeImage.")]
+    [Option('i', "image", HelpText = "Katalog-Image (z. B. daily:26.10), URL/Pfad oder Name eines per init-configure erzeugten Profils. Ohne Angabe: Images:DefaultRuntimeImage.")]
     public string? Image { get; set; }
 
-    [Option('c', "cloud-init", HelpText = "Pfad zu einer cloud-init-YAML (z. B. aus image-configure).")]
+    [Option('c', "cloud-init", HelpText = "Pfad zu einer cloud-init-YAML; überschreibt die cloud-init eines Profils (z. B. aus init-configure).")]
     public string? CloudInit { get; set; }
 
     [Option('d', "disk", HelpText = "Disk-Größe, z. B. 20G (multipass-Standard: 5G).")]
     public string? Disk { get; set; }
 }
 
-[Verb("image-configure", HelpText = "Erzeugt ein Classic-Profil mit Basis-Modell (Canonical dangerous, signiert) und cloud-init für den Gast.")]
-public sealed class ImageConfigureOptions : MultipassOptions
+[Verb("init-configure", HelpText = "Erzeugt ein cloud-init-Profil für den Gast (Pakete, Benutzer, Snaps, Komponenten-Skripte).")]
+public sealed class InitConfigureOptions : MultipassOptions
 {
-    [Option('n', "name", Required = true, HelpText = "Name des Images (Namespace für Modell/Config/cloud-init/Ausgabe-.img).")]
+    [Option('n', "name", Required = true, HelpText = "Name des Profils (Namespace für Profilkonfiguration und cloud-init).")]
     public string Name { get; set; } = string.Empty;
 
     [Option('c', "components", Default = "claude,dotnet", HelpText = "Komma-Liste der Komponenten (verfügbar laut Config Images:Components, z. B. claude,dotnet,opencode,python,cline).")]
     public string Components { get; set; } = "claude,dotnet";
 
-    [Option("model-url", HelpText = "URL des Basis-Modells (Standard: Config Images:DefaultModelUrl).")]
-    public string? ModelUrl { get; set; }
-
-    [Option("runtime-image", HelpText = "Runtime-Image für das erzeugte Profil (Standard: Config Images:DefaultRuntimeImage).")]
+    [Option("runtime-image", HelpText = "Multipass-Katalogname, den vm-create für dieses Profil startet (Standard: Config Images:DefaultRuntimeImage).")]
     public string? RuntimeImage { get; set; }
 
-    [Option('f', "force", HelpText = "Existierende Konfiguration überschreiben (sonst Fehler, wenn das Image schon konfiguriert ist).")]
+    [Option('f', "force", HelpText = "Existierende Konfiguration überschreiben (sonst Fehler, wenn das Profil schon existiert).")]
     public bool Force { get; set; }
 }
 
-[Verb("image-list", HelpText = "Listet konfigurierte Classic-Profile (Komponenten und Snaps).")]
-public sealed class ImageListOptions : IOptions
+[Verb("init-list", HelpText = "Listet konfigurierte cloud-init-Profile (Komponenten und Snaps).")]
+public sealed class InitListOptions : IOptions
 {
 }
 
-[Verb("image-delete", HelpText = "Löscht ein Classic-Profil (Modell, Profilkonfiguration und cloud-init).")]
-public sealed class ImageDeleteOptions : IOptions
+[Verb("init-delete", HelpText = "Löscht ein cloud-init-Profil (Profilkonfiguration und cloud-init).")]
+public sealed class InitDeleteOptions : IOptions
 {
-    [Option('n', "name", Required = true, HelpText = "Name des Images (aus image-list).")]
+    [Option('n', "name", Required = true, HelpText = "Name des Profils (aus init-list).")]
     public string Name { get; set; } = string.Empty;
 }
 
