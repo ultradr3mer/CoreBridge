@@ -4,7 +4,7 @@ using Terminal.Gui.Views;
 
 namespace CoreBridge.Tui;
 
-public partial class MainWindow : Runnable
+public class MainWindow : Runnable
 {
     private readonly Splitter splitter;
 
@@ -14,11 +14,22 @@ public partial class MainWindow : Runnable
         {
             Orientation = Orientation.Vertical,
             FixedPane = SplitterPane.First,
-            FixedSize = Dim.Percent(30),
+            FixedSize = Dim.Percent(50),
             CanCollapseFirst = true,
             CanCollapseSecond = true
         };
 
-        this.Add(this.splitter);
+               var splitter2 = new Splitter
+        {
+            Orientation = Orientation.Horizontal,
+            FixedPane = SplitterPane.First,
+            FixedSize = Dim.Percent(50),
+            CanCollapseFirst = true,
+            CanCollapseSecond = true,
+        };
+
+        splitter2.First.Add(splitter);
+
+        this.Add(splitter2);
     }
 }

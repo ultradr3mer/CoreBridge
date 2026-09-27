@@ -5,9 +5,6 @@
 
 using CoreBridge.Tui;
 using Terminal.Gui.App;
-using Terminal.Gui.Configuration;
-
-ConfigurationManager.Enable (ConfigLocations.All);
 
 Application
     .Create ()
