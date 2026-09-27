@@ -199,7 +199,10 @@ public class Splitter : View
         CollapsedChanged?.Invoke(this, EventArgs.Empty);
     }
 
-    /// <summary>Klappt die eingeklappte Hälfte wieder auf, mit ihrer letzten Größe.</summary>
+    /// <summary>
+    /// Klappt die eingeklappte Hälfte wieder auf: mit <paramref name="dim"/> als neuer Größe
+    /// der festen Hälfte (z. B. passend zum Inhalt), sonst mit ihrer letzten Größe.
+    /// </summary>
     public void Expand(Dim? dim = null)
     {
         if (collapsed is null)
@@ -208,7 +211,8 @@ public class Splitter : View
         }
 
         collapsed = null;
-        lastSeenSize = dim ?? restoreSize;
+        restoreSize = dim ?? restoreSize;
+        lastSeenSize = restoreSize;
         ApplyLayout();
         CollapsedChanged?.Invoke(this, EventArgs.Empty);
     }
