@@ -1249,8 +1249,10 @@ public static class Program
         }
 
         await RunVmStep(context, name, $"workspace {SandboxRepo.WorkDir(repo)}", SandboxRepo.WorkspaceCommand(name, repo));
+        var work = SandboxRepo.WorkDir(repo);
+        await events.Emit(events.Std($"main of `{repo}` is in `{name}`: {work}."));
         await events.Emit(events.Std(
-            $"main of `{repo}` is in `{name}` — Claude works in {SandboxRepo.WorkDir(repo)} and pushes claude/<id>; bring it back with `cb repo-receive -n {name}`."));
+            $"Work there on a branch claude/<id> and push it to origin; bring it back with `cb repo-receive -n {name} -i <id>` (from a checkout with main checked out)."));
     }
 
     /// <summary>Bundle auf dem Host packen, per transfer in die VM legen und dort ins Bare-Repo einlesen; temporäre Dateien werden auf beiden Seiten entfernt.</summary>

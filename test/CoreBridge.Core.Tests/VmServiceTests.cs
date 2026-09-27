@@ -118,6 +118,26 @@ public class VmServiceTests
     }
 
     [Fact]
+    public void ConsoleNimmtDasArbeitsverzeichnisMit()
+    {
+        var cli = new FakeMultipassCli(args => new MultipassRunResult(
+            0,
+            args[^1].Contains("pwd -P", StringComparison.Ordinal) ? "/tmp\n\n__corebridge_cwd__=/tmp\n" : "\n__corebridge_cwd__=/tmp\n",
+            string.Empty,
+            1));
+        using var session = new VmService(cli).OpenConsole("cbx-test");
+
+        session.SendLine("cd /tmp");
+        var output = session.SendCommand("pwd -P", "/tmp", TimeSpan.FromSeconds(1));
+
+        Assert.Equal(new[] { "exec", "cbx-test", "--", "/bin/sh", "-c" }, cli.Calls[0][..5]);
+        Assert.StartsWith("cd /tmp\n", cli.Calls[0][5]);
+        Assert.StartsWith("cd /tmp || exit 1\npwd -P\n", cli.Calls[1][5]);
+        Assert.Equal("/tmp", session.WorkingDirectory);
+        Assert.DoesNotContain("__corebridge_cwd__", output);
+    }
+
+    [Fact]
     public void PutTransferiertMitDefaultZielpfad()
     {
         var cli = new FakeMultipassCli(EmptyResult);

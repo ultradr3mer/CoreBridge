@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Text;
+using CoreBridge.Core.Common;
 using CoreBridge.Core.Multipass;
 
 namespace CoreBridge.Core.Vm;
@@ -218,22 +219,30 @@ public sealed class VmConsoleSession : VmSession
 /// VM-Session über den exec-Kanal: jeder Befehl ist ein eigenes
 /// `multipass exec <vm> -- /bin/sh -c "<cmd>"` (der unter Windows verlässliche
 /// Weg). Ausgaben aller Befehle sammeln sich in einem gemeinsamen Verlauf —
-/// damit sind Inhalte und Befehle testbar. Kein gemeinsamer Shell-Status
-/// (cwd/Umgebungsvariablen) zwischen Befehlen.
+/// damit sind Inhalte und Befehle testbar. Das Arbeitsverzeichnis wandert mit
+/// (ein <c>cd</c> gilt für die folgenden Befehle); Umgebungsvariablen und
+/// Shell-Variablen dagegen nicht.
 /// </summary>
 public sealed class VmExecSession : VmSession
 {
-  private readonly MultipassCli _cli;
+  /// <summary>Zeile, mit der jeder Befehl sein Arbeitsverzeichnis meldet; wird aus der Ausgabe entfernt.</summary>
+  private const string CwdMarker = "__corebridge_cwd__=";
+
+  private readonly IMultipassCli _cli;
   private readonly string _vmName;
   private readonly int _timeoutMs;
+  private string? _cwd;
 
-  public VmExecSession(string vmName, Action<string>? log = null, int timeoutMs = 600_000, MultipassCli? cli = null)
+  public VmExecSession(string vmName, Action<string>? log = null, int timeoutMs = 600_000, IMultipassCli? cli = null)
       : base(log)
   {
     _vmName = vmName;
     _cli = cli ?? new MultipassCli();
     _timeoutMs = timeoutMs;
   }
+
+  /// <summary>Arbeitsverzeichnis nach dem letzten Befehl (<c>null</c>: noch keiner gelaufen, also das Home).</summary>
+  public string? WorkingDirectory => _cwd;
 
   public override void Send(string input)
   {
@@ -245,10 +254,12 @@ public sealed class VmExecSession : VmSession
     }
 
     var result = _cli.Run(
-        new[] { "exec", _vmName, "--", "/bin/sh", "-c", command },
+        new[] { "exec", _vmName, "--", "/bin/sh", "-c", Wrap(command, _cwd) },
         _timeoutMs);
 
-    AppendOutput(result.StdOut);
+    var (stdOut, cwd) = SplitCwd(result.StdOut);
+    _cwd = cwd ?? _cwd;
+    AppendOutput(stdOut);
     if (!string.IsNullOrWhiteSpace(result.StdErr))
     {
       AppendOutput(result.StdErr);
@@ -262,4 +273,28 @@ public sealed class VmExecSession : VmSession
   protected override bool HasExited => false; // Session endet nie von selbst.
 
   protected override int ExitCode => -1;
+
+  /// <summary>
+  /// Befehl im gemerkten Verzeichnis ausführen und danach dessen Verzeichnis melden;
+  /// der Exit-Code des Befehls bleibt erhalten. Ein <c>exit</c> im Befehl überspringt
+  /// die Meldung — dann bleibt das bisherige Verzeichnis.
+  /// </summary>
+  private static string Wrap(string command, string? cwd)
+  {
+    var cd = cwd is null ? string.Empty : $"cd {Shell.Quote(cwd)} || exit 1\n";
+    return $"{cd}{command}\n__rc=$?\nprintf '\\n{CwdMarker}%s\\n' \"$(pwd)\"\nexit $__rc";
+  }
+
+  /// <summary>Trennt die Verzeichnis-Meldung (letzte Zeile) von der eigentlichen Ausgabe.</summary>
+  private static (string Output, string? Cwd) SplitCwd(string stdOut)
+  {
+    var index = stdOut.LastIndexOf("\n" + CwdMarker, StringComparison.Ordinal);
+    if (index < 0)
+    {
+      return (stdOut, null);
+    }
+
+    var cwd = stdOut[(index + 1 + CwdMarker.Length)..].TrimEnd('\r', '\n');
+    return (stdOut[..index], cwd.Length > 0 ? cwd : null);
+  }
 }

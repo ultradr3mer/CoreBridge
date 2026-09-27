@@ -1,5 +1,3 @@
-using System.Security.Cryptography;
-using System.Text;
 using System.Text.RegularExpressions;
 using CoreBridge.Cli;
 using CoreBridge.Core.Config;
@@ -15,9 +13,9 @@ internal sealed record CliRunResult(int ExitCode, IReadOnlyList<string> Lines, s
 /// Gemeinsame Namen, Config und Temp-Store der Lifecycle-Stufen; den
 /// Fortschrittszustand (Image, VM) hinterlässt jeweils die vorherige Stufe.
 /// CLI-Kommandos laufen ausschließlich über den öffentlichen
-/// <see cref="Program.Run"/>-Dispatcher (kein CLI-Kindprozess). Nur die
-/// interaktiven Verbindungen (vm-connect, SSH) gehen direkt über die
-/// Session-Typen aus CoreBridge.Core, weil `multipass shell` ein TTY braucht.
+/// <see cref="Program.Run"/>-Dispatcher (kein CLI-Kindprozess). Nur vm-connect
+/// geht direkt über <see cref="Core.Vm.VmService.OpenConsole"/>, weil
+/// `multipass shell` ein TTY braucht.
 /// </summary>
 public sealed class CliLifecycleFixture : IDisposable
 {
@@ -77,48 +75,6 @@ public sealed class CliLifecycleFixture : IDisposable
     internal string ProfileConfigPath => Path.Combine(store.Path, "profiles", ImageName, ImageName + ".profile.json");
 
     internal string CloudInitPath => Path.Combine(store.Path, "profiles", ImageName, "cloud-init.yaml");
-
-    internal string SshPrivateKeyPath => Path.Combine(store.Path, "ssh", "id_rsa");
-
-    /// <summary>
-    /// Erzeugt einmalig ein RSA-Schlüsselpaar im Temp-Store (ohne ssh-keygen):
-    /// Private Key als PKCS#1-PEM für SSH.NET, Public Key im OpenSSH-Format für
-    /// ~/.ssh/authorized_keys der VM.
-    /// </summary>
-    internal string EnsureSshKey()
-    {
-        var publicKeyPath = SshPrivateKeyPath + ".pub";
-        if (File.Exists(publicKeyPath))
-        {
-            return File.ReadAllText(publicKeyPath);
-        }
-
-        Directory.CreateDirectory(Path.GetDirectoryName(SshPrivateKeyPath)!);
-        using var rsa = RSA.Create(3072);
-        File.WriteAllText(SshPrivateKeyPath, rsa.ExportRSAPrivateKeyPem());
-
-        var parameters = rsa.ExportParameters(includePrivateParameters: false);
-        using var blob = new MemoryStream();
-        WriteSshString(blob, Encoding.ASCII.GetBytes("ssh-rsa"));
-        WriteSshString(blob, ToMpint(parameters.Exponent!));
-        WriteSshString(blob, ToMpint(parameters.Modulus!));
-        var publicKey = $"ssh-rsa {Convert.ToBase64String(blob.ToArray())} cbx-cli-lifecycle";
-        File.WriteAllText(publicKeyPath, publicKey);
-        return publicKey;
-    }
-
-    private static byte[] ToMpint(byte[] unsignedBigEndian)
-    {
-        return (unsignedBigEndian[0] & 0x80) != 0 ? [0, .. unsignedBigEndian] : unsignedBigEndian;
-    }
-
-    private static void WriteSshString(Stream stream, byte[] data)
-    {
-        Span<byte> length = stackalloc byte[4];
-        System.Buffers.Binary.BinaryPrimitives.WriteInt32BigEndian(length, data.Length);
-        stream.Write(length);
-        stream.Write(data);
-    }
 
     /// <summary>
     /// Konsumiert den Ausgabestrom vollständig, schreibt jede Meldung sofort ins

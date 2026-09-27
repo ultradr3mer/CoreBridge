@@ -253,25 +253,15 @@ public sealed class VmService
     }
 
     /// <summary>
-    /// Testbare Konsolen-Session auf der VM: Befehle senden, Ausgaben sammeln
-    /// und prüfen. Läuft über den exec-Kanal (pro Befehl ein exec) — gepipetes
-    /// stdin forwardet der Multipass-Windows-Client nicht, `multipass shell`
-    /// ist ohne TTY unbrauchbar. Optionaler log-Callback (z. B.
-    /// ITestOutputHelper.WriteLine im Test) schreibt die Ausgabe live mit.
+    /// vm-connect in programmierbarer Form: Befehle senden, Ausgaben sammeln
+    /// und prüfen. Läuft über den exec-Kanal (pro Befehl ein exec, das
+    /// Arbeitsverzeichnis wandert mit) — gepipetes stdin forwardet der
+    /// Multipass-Windows-Client nicht, `multipass shell` ist ohne TTY
+    /// unbrauchbar. Optionaler log-Callback (z. B. ITestOutputHelper.WriteLine
+    /// im Test) schreibt die Ausgabe live mit.
     /// </summary>
-    public VmExecSession OpenConsole(string name, Action<string>? log = null)
+    public VmExecSession OpenConsole(string name, Action<string>? log = null, int timeoutMs = 600_000)
     {
-        return new VmExecSession(name, log);
-    }
-
-    /// <summary>
-    /// Echte interaktive Shell über natives SSH (SSH.NET, PTY): gemeinsamer
-    /// Shell-Status, Prompt-Ausgabe, vm-connect in testbarer Form. Benötigt
-    /// SSH-Key auf der VM (authorized_keys, siehe CliLifecycleTests) — Verbindungsaufbau
-    /// nur Host→VM.
-    /// </summary>
-    public VmSshSession OpenSshSession(string name, Action<string>? log = null, string? privateKeyPath = null)
-    {
-        return VmSshSession.Open(name, log, privateKeyPath);
+        return new VmExecSession(name, log, timeoutMs, _cli);
     }
 }

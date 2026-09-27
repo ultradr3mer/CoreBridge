@@ -6,7 +6,7 @@ namespace CoreBridge.Cli.Tests;
 
 /// <summary>
 /// Kompletter VM-Zyklus: Status → Profil → Create → List → Start → Exec →
-/// Connect (SSH) → Stop → Delete, strikt in dieser Reihenfolge
+/// Connect → Stop → Delete, strikt in dieser Reihenfolge
 /// (<see cref="LifecycleTestCaseOrderer"/>). Jede Stufe setzt den Zustand der
 /// vorherigen voraus und stellt ihn nicht selbst her — schlägt eine Stufe fehl,
 /// schlagen die folgenden ebenfalls fehl. Nur die ganze Klasse ausführen.
@@ -159,25 +159,14 @@ public sealed class CliLifecycleTests
     [Fact]
     public async Task Stage06_VmConnect()
     {
-        var publicKey = fixture.EnsureSshKey().Trim();
-        var install = await fixture.RunAsync(new VmExecOptions
-        {
-            Name = fixture.VmName,
-            Command = "mkdir -p ~/.ssh && chmod 700 ~/.ssh"
-                + $" && (grep -qxF '{publicKey}' ~/.ssh/authorized_keys 2>/dev/null"
-                + $" || echo '{publicKey}' >> ~/.ssh/authorized_keys)"
-                + " && chmod 600 ~/.ssh/authorized_keys"
-        }, output.WriteLine);
-        CliLifecycleFixture.AssertSucceeded(install);
+        using var session = new VmService().OpenConsole(fixture.VmName, output.WriteLine, (int)SessionTimeout.TotalMilliseconds);
 
-        using var session = await OpenSshSessionAsync();
-
-        // Gemeinsamer Shell-Status: cd wirkt auf den folgenden Befehl.
+        // Das Arbeitsverzeichnis wandert mit: cd wirkt auf den folgenden Befehl.
         session.SendLine("cd /tmp");
         session.SendCommand("echo cwd=$(pwd)", "cwd=/tmp", SessionTimeout);
         session.SendCommand("echo cbx-connect-$((20+22))", "cbx-connect-42", SessionTimeout);
         session.SendCommand("echo user=$(id -un)", "user=ubuntu", SessionTimeout);
-        session.Exit();
+        Assert.Equal("/tmp", session.WorkingDirectory);
     }
 
     [Fact]
@@ -196,22 +185,5 @@ public sealed class CliLifecycleTests
             output.WriteLine);
 
         CliLifecycleFixture.AssertCompleted(delete, $"delete {fixture.VmName} --purge", "nicht vorhanden");
-    }
-
-    private async Task<VmSshSession> OpenSshSessionAsync()
-    {
-        // sshd kommt nach dem Boot evtl. erst verzögert hoch.
-        for (var attempt = 1; ; attempt++)
-        {
-            try
-            {
-                return new VmService().OpenSshSession(fixture.VmName, output.WriteLine, fixture.SshPrivateKeyPath);
-            }
-            catch (MultipassException exception) when (attempt < 6)
-            {
-                output.WriteLine($"SSH-Versuch {attempt} fehlgeschlagen: {exception.Message}");
-                await Task.Delay(TimeSpan.FromSeconds(5));
-            }
-        }
     }
 }
