@@ -13,8 +13,10 @@ public partial class MainWindow : Runnable
         this.splitter = new Splitter
         {
             Orientation = Orientation.Vertical,
-            FixedPane = SplitterPane.Second,
-            FixedSize = Dim.Percent(30)
+            FixedPane = SplitterPane.First,
+            FixedSize = Dim.Percent(30),
+            CanCollapseFirst = true,
+            CanCollapseSecond = true
         };
 
         this.Add(this.splitter);
