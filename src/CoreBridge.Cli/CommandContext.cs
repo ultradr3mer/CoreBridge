@@ -1,5 +1,6 @@
 using CoreBridge.Core.Common;
 using CoreBridge.Core.Config;
+using CoreBridge.Core.Git;
 using CoreBridge.Core.Vm;
 
 namespace CoreBridge.Cli;
@@ -16,11 +17,13 @@ namespace CoreBridge.Cli;
 /// weiter; beantwortet werden sie über <c>Ask</c>/<c>AskAsync</c>.
 /// </param>
 /// <param name="CancellationToken">Abbruch per Strg+C.</param>
+/// <param name="Git">git auf dem Host (repo-send/-receive).</param>
 public sealed record CommandContext(
     AppConfig Config,
     VmService Vms,
     EventFactory Events,
-    CancellationToken CancellationToken)
+    CancellationToken CancellationToken,
+    GitCli Git)
 {
     /// <summary><c>DefaultTimeout</c> (ggf. per <c>--timeout</c> ersetzt) in Millisekunden.</summary>
     public int DefaultTimeoutMs => (int)Config.DefaultTimeout.ReadTime().TotalMilliseconds;

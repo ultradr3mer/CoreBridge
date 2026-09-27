@@ -110,21 +110,13 @@ public sealed record ComponentConfig
     /// <summary>Benutzer, als der das Skript installiert bzw. seine Postconditions ausführt.</summary>
     public string InstallUser { get; init; } = "ubuntu";
 
-    /// <summary>
-    /// Legt den öffentlichen CoreBridge-Host-Schlüssel (<see cref="Inits.HostSshKey"/>) im
-    /// Gast unter <see cref="Inits.HostSshKey.GuestKeyFile"/> ab — per cloud-init oder
-    /// <c>vm-install</c>; das Komponenten-Skript trägt ihn in <c>authorized_keys</c> ein.
-    /// </summary>
-    public bool AuthorizeHostKey { get; init; }
-
     public bool NeedsCloudInit =>
         !string.IsNullOrWhiteSpace(Snap) ||
         !string.IsNullOrWhiteSpace(Script) ||
         Packages.Length > 0 ||
         PackageUpdate ||
         PackageUpgrade ||
-        Users.Length > 0 ||
-        AuthorizeHostKey;
+        Users.Length > 0;
 }
 
 /// <summary>Ein Benutzer-Datensatz für die globale cloud-init-Sektion <c>users</c>.</summary>

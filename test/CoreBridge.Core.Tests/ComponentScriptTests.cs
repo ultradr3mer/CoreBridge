@@ -10,17 +10,15 @@ namespace CoreBridge.Core.Tests;
 /// </summary>
 public class ComponentScriptTests
 {
-    private const string HostKey = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAITestKeyOnly corebridge@test";
-
     [Theory]
     [InlineData("python", "/usr/local/sbin/corebridge-install-python", "python3.14")]
     [InlineData("cline", "/usr/local/sbin/corebridge-install-cline", "npm install -g --allow-scripts=cline,protobufjs cline")]
-    [InlineData("git", "/usr/local/sbin/corebridge-install-git", "authorized_keys")]
+    [InlineData("git", "/usr/local/sbin/corebridge-install-git", "git --version")]
     public void KomponenteBettetSkriptEinUndRuftEsAuf(string component, string installPath, string scriptMarker)
     {
         var config = LoadShippedImagesConfig();
 
-        var yaml = InitCloudInit.Generate("agent", config, [component], HostKey);
+        var yaml = InitCloudInit.Generate("agent", config, [component]);
 
         Assert.Contains($"path: '{installPath}'", yaml);
         Assert.Contains(scriptMarker, yaml);
@@ -33,7 +31,7 @@ public class ComponentScriptTests
     {
         var config = LoadShippedImagesConfig();
 
-        var yaml = InitCloudInit.Generate("all", config, config.Components.Keys, HostKey);
+        var yaml = InitCloudInit.Generate("all", config, config.Components.Keys);
 
         foreach (var component in config.Components.Values.Where(c => c.InstallPath is not null))
         {
@@ -42,23 +40,13 @@ public class ComponentScriptTests
     }
 
     [Fact]
-    public void GitLegtDenHostSchluesselVorDemSkriptAb()
+    public void GitInstalliertNurGit()
     {
-        var yaml = InitCloudInit.Generate("agent", LoadShippedImagesConfig(), ["git"], HostKey);
+        var yaml = InitCloudInit.Generate("agent", LoadShippedImagesConfig(), ["git"]);
 
-        Assert.Contains("path: '/etc/corebridge/host_authorized_keys'", yaml);
-        Assert.Contains("      " + HostKey, yaml);
-        Assert.Contains("- 'openssh-server'", yaml);
-        Assert.True(
-            yaml.IndexOf("host_authorized_keys'", StringComparison.Ordinal)
-                < yaml.IndexOf("path: '/usr/local/sbin/corebridge-install-git'", StringComparison.Ordinal));
-    }
-
-    [Fact]
-    public void GitOhneHostSchluesselScheitert()
-    {
-        Assert.Throws<CoreBridge.Core.Multipass.MultipassException>(
-            () => InitCloudInit.Generate("agent", LoadShippedImagesConfig(), ["git"]));
+        Assert.Contains("- 'git'", yaml);
+        Assert.DoesNotContain("openssh-server", yaml);
+        Assert.DoesNotContain("authorized_keys", yaml);
     }
 
     private static ImagesConfig LoadShippedImagesConfig()

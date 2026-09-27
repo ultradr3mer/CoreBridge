@@ -20,19 +20,9 @@ public static class InitCloudInit
         return InitComponents.Resolve(config, components).Any(component => component.NeedsCloudInit);
     }
 
-    /// <param name="hostPublicKey">
-    /// Öffentlicher Host-Schlüssel (<see cref="HostSshKey"/>); Pflicht, sobald eine
-    /// Komponente <see cref="ComponentConfig.AuthorizeHostKey"/> setzt.
-    /// </param>
-    public static string Generate(string name, ImagesConfig config, IEnumerable<string> components, string? hostPublicKey = null)
+    public static string Generate(string name, ImagesConfig config, IEnumerable<string> components)
     {
         var selected = InitComponents.Resolve(config, components);
-        if (selected.Any(component => component.AuthorizeHostKey) && string.IsNullOrWhiteSpace(hostPublicKey))
-        {
-            throw new MultipassException("Eine Komponente braucht den Host-SSH-Schlüssel, er wurde aber nicht übergeben.");
-        }
-
-        var hostKey = selected.Any(component => component.AuthorizeHostKey) ? hostPublicKey!.Trim() : null;
         var packages = selected
             .SelectMany(component => component.Packages)
             .Where(package => !string.IsNullOrWhiteSpace(package))
@@ -67,7 +57,7 @@ public static class InitCloudInit
 
         AppendUsers(yaml, users);
         AppendSnaps(yaml, selected);
-        AppendScripts(yaml, scripts, hostKey);
+        AppendScripts(yaml, scripts);
         AppendRunCommands(yaml, scripts);
 
         var rendered = yaml.ToString();
@@ -133,29 +123,15 @@ public static class InitCloudInit
         }
     }
 
-    private static void AppendScripts(StringBuilder yaml, IReadOnlyCollection<ComponentConfig> scripts, string? hostKey)
+    private static void AppendScripts(StringBuilder yaml, IReadOnlyCollection<ComponentConfig> scripts)
     {
-        if (scripts.Count == 0 && hostKey is null)
+        if (scripts.Count == 0)
         {
             return;
         }
 
         yaml.AppendLine();
         yaml.AppendLine("write_files:");
-        if (hostKey is not null)
-        {
-            if (hostKey.Any(char.IsControl))
-            {
-                throw new MultipassException("Der Host-SSH-Schlüssel muss eine einzelne Zeile sein.");
-            }
-
-            yaml.AppendLine($"  - path: {YamlQuote(HostSshKey.GuestKeyFile)}");
-            yaml.AppendLine("    permissions: '0644'");
-            yaml.AppendLine("    owner: 'root:root'");
-            yaml.AppendLine("    content: |");
-            yaml.AppendLine($"      {hostKey}");
-        }
-
         foreach (var component in scripts)
         {
             var scriptPath = component.Script!;

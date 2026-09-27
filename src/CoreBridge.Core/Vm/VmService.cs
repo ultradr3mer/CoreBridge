@@ -267,8 +267,8 @@ public sealed class VmService
     /// <summary>
     /// Echte interaktive Shell über natives SSH (SSH.NET, PTY): gemeinsamer
     /// Shell-Status, Prompt-Ausgabe, vm-connect in testbarer Form. Benötigt
-    /// SSH-Key auf der VM (cloud-init ssh_authorized_keys) — Verbindungsaufbau
-    /// nur Host→VM (Plan §6).
+    /// SSH-Key auf der VM (authorized_keys, siehe CliLifecycleTests) — Verbindungsaufbau
+    /// nur Host→VM.
     /// </summary>
     public VmSshSession OpenSshSession(string name, Action<string>? log = null, string? privateKeyPath = null)
     {

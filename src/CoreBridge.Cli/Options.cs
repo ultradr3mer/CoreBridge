@@ -217,3 +217,32 @@ public sealed class VmInstallOptions : MultipassOptions
     [Option("snapshot", HelpText = "Nach erfolgreicher Installation ohne Rückfrage stoppen und diesen Snapshot anlegen.")]
     public string? Snapshot { get; set; }
 }
+
+[Verb("repo-send", HelpText = "Schickt main eines Host-Repositorys in eine VM: Bare-Repo ~/repos/<repo>.git, main samt Historie als git bundle per transfer (danach nur Neues, nur Vorspulen), Arbeitskopie ~/work/<repo>. Wiederholbar; braucht die Komponente git (cb vm-install -n <vm> -c git).")]
+public sealed class RepoSendOptions : MultipassOptions
+{
+    [Option('n', "name", Required = true, HelpText = "Name der VM.")]
+    public string Name { get; set; } = string.Empty;
+
+    [Option('r', "repo", HelpText = "Pfad im Host-Repository (Standard: aktuelles Verzeichnis).")]
+    public string? Repo { get; set; }
+}
+
+[Verb("repo-receive", HelpText = "Holt claude/<id> der VM als git bundle und spult main darauf vor (merge --ff-only) — nur nach Rückfrage oder mit --yes; hat main eigene Commits, bleibt alles unverändert. Ohne --id: listet die claude/*-Branches der VM.")]
+public sealed class RepoReceiveOptions : MultipassOptions
+{
+    [Option('n', "name", Required = true, HelpText = "Name der VM.")]
+    public string Name { get; set; } = string.Empty;
+
+    [Option('i', "id", HelpText = "Task-Id; geholt wird claude/<id>. Ohne Angabe: vorhandene Ids auflisten.")]
+    public string? Id { get; set; }
+
+    [Option('r', "repo", HelpText = "Pfad im Host-Repository (Standard: aktuelles Verzeichnis).")]
+    public string? Repo { get; set; }
+
+    [Option("diff", HelpText = "Vor der Rückfrage den vollständigen Diff zeigen (sonst nur die Statistik).")]
+    public bool Diff { get; set; }
+
+    [Option('y', "yes", HelpText = "Ohne Rückfrage vorspulen (ausdrückliche Zustimmung).")]
+    public bool Yes { get; set; }
+}

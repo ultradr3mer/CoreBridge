@@ -8,12 +8,17 @@ namespace CoreBridge.Core.Vm;
 /// VM-Session über natives SSH (SSH.NET): echte interaktive Shell mit PTY —
 /// im Gegensatz zu <see cref="VmExecSession"/> mit gemeinsamem Shell-Status
 /// (cwd, Umgebungsvariablen) und Prompt-Ausgabe. Verbindungsaufbau nur vom
-/// Host zur VM (Plan §6: die VM baut nie selbst eine Verbindung auf).
+/// Host zur VM.
 ///
 /// Voraussetzung: SSH-Key auf der VM (cloud-init ssh_authorized_keys, siehe
 /// EXPERIMENT_LOG T06) + Private Key auf dem Host. IP kommt aus
 /// `multipass list` (erste IPv4).
 /// </summary>
+// TODO: Prüfen, ob VmSshSession (und damit SSH.NET) wegfallen kann. Einziger Nutzer ist
+// der Connect-Schritt in CliLifecycleTests (über VmService.OpenSshSession, eigener
+// Test-Schlüssel); seit repo-send/-receive ohne SSH auskommen, braucht die CLI kein SSH
+// mehr. Wahrscheinlich einfacher: vm-connect programmierbar machen (Befehle senden,
+// Ausgabe lesen) und den Test darauf umstellen.
 public sealed class VmSshSession : VmSession
 {
   private readonly SshClient _client;
