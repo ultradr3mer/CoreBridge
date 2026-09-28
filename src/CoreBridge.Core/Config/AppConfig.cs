@@ -110,6 +110,7 @@ public sealed record ComponentConfig
     /// <summary>Benutzer, als der das Skript installiert bzw. seine Postconditions ausführt.</summary>
     public string InstallUser { get; init; } = "ubuntu";
 
+    [System.Text.Json.Serialization.JsonIgnore]
     public bool NeedsCloudInit =>
         !string.IsNullOrWhiteSpace(Snap) ||
         !string.IsNullOrWhiteSpace(Script) ||

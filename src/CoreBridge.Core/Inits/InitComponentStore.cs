@@ -1,0 +1,390 @@
+using System.Globalization;
+using System.Text.Json;
+using System.Text.Json.Nodes;
+using System.Text.Json.Serialization;
+using System.Text.RegularExpressions;
+using CoreBridge.Core.Config;
+using CoreBridge.Core.Multipass;
+using YamlDotNet.Core;
+using YamlDotNet.RepresentationModel;
+
+namespace CoreBridge.Core.Inits;
+
+/// <summary>Eingabeformat einer Komponenten-Definition für <c>component-add</c>.</summary>
+public enum ComponentFormat
+{
+    Json,
+    Yaml
+}
+
+/// <summary>Herkunft einer Komponente: mitgeliefert (appsettings) oder vom Benutzer angelegt.</summary>
+public enum ComponentSource
+{
+    BuiltIn,
+    User
+}
+
+public sealed record ComponentListEntry(string Name, ComponentSource Source, ComponentConfig Component);
+
+/// <summary>
+/// Benutzereigene Komponenten in <see cref="InitStore.UserSettingsFile"/>
+/// (<c>&lt;StoreRoot&gt;/appsettings.user.json</c>, Form
+/// <c>{ "Images": { "Components": { … } } }</c>). Die mitgelieferten Komponenten
+/// aus appsettings.json bleiben unangetastet: hinzufügen und entfernen wirkt nur
+/// auf die Benutzerdatei, damit ein Update der Installation nichts überschreibt.
+/// </summary>
+public static class InitComponentStore
+{
+    private static readonly Regex NamePattern = new(
+        "^[a-z](?:[a-z0-9-]*[a-z0-9])?$",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+
+    private static readonly JsonSerializerOptions ReadOptions = new()
+    {
+        PropertyNameCaseInsensitive = true,
+        UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow,
+        ReadCommentHandling = JsonCommentHandling.Skip,
+        AllowTrailingCommas = true
+    };
+
+    private static readonly JsonSerializerOptions WriteOptions = new()
+    {
+        WriteIndented = true,
+        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
+    };
+
+    /// <summary>
+    /// Ergänzt <paramref name="config"/> um die Komponenten der Benutzerdatei.
+    /// Nur <c>Images:Components</c> wird gelesen — die Datei kann weder StoreRoot
+    /// noch andere Einstellungen ändern. Ein Name, den auch appsettings
+    /// definiert, ist ein Fehler statt eines stillen Zusammenführens.
+    /// </summary>
+    public static AppConfig Merge(AppConfig config, string userFile)
+    {
+        var user = ReadUser(userFile);
+        if (user.Count == 0)
+        {
+            return config;
+        }
+
+        var merged = new Dictionary<string, ComponentConfig>(config.Images.Components, StringComparer.OrdinalIgnoreCase);
+        foreach (var (name, component) in user)
+        {
+            if (!merged.TryAdd(name, component))
+            {
+                throw new MultipassException(
+                    $"Komponente '{name}' ist mitgeliefert und steht zusätzlich in {userFile} — mitgelieferte Komponenten lassen sich nicht überschreiben; Eintrag dort entfernen oder umbenennen.");
+            }
+        }
+
+        return config with { Images = config.Images with { Components = merged } };
+    }
+
+    /// <summary>Komponenten der Benutzerdatei; fehlt die Datei, ist die Liste leer.</summary>
+    public static IReadOnlyDictionary<string, ComponentConfig> ReadUser(string userFile)
+    {
+        var components = new Dictionary<string, ComponentConfig>(StringComparer.OrdinalIgnoreCase);
+        if (!File.Exists(userFile))
+        {
+            return components;
+        }
+
+        var node = ReadRoot(userFile)["Images"]?["Components"];
+        if (node is null)
+        {
+            return components;
+        }
+
+        if (node is not JsonObject entries)
+        {
+            throw new MultipassException($"{userFile}: Images:Components muss ein Objekt sein.");
+        }
+
+        foreach (var (name, value) in entries)
+        {
+            components[name] = Deserialize(value?.ToJsonString() ?? "null", $"{userFile} (Komponente '{name}')");
+        }
+
+        return components;
+    }
+
+    /// <summary>Alle wirksamen Komponenten mit Herkunft, alphabetisch.</summary>
+    /// <param name="images">Die bereits per <see cref="Merge"/> ergänzte Konfiguration.</param>
+    public static IReadOnlyList<ComponentListEntry> List(ImagesConfig images, string userFile)
+    {
+        var user = ReadUser(userFile);
+        return images.Components
+            .OrderBy(entry => entry.Key, StringComparer.OrdinalIgnoreCase)
+            .Select(entry => new ComponentListEntry(
+                entry.Key,
+                user.ContainsKey(entry.Key) ? ComponentSource.User : ComponentSource.BuiltIn,
+                entry.Value))
+            .ToArray();
+    }
+
+    /// <summary>
+    /// Liest eine Definition aus einer Datei oder, wenn <paramref name="value"/>
+    /// keine existierende Datei ist, direkt aus dem Wert.
+    /// </summary>
+    public static ComponentConfig ParseArgument(string value, ComponentFormat format)
+    {
+        if (File.Exists(value))
+        {
+            return Parse(File.ReadAllText(value), format, value);
+        }
+
+        var trimmed = value.Trim();
+        if (trimmed.EndsWith(".json", StringComparison.OrdinalIgnoreCase)
+            || trimmed.EndsWith(".yaml", StringComparison.OrdinalIgnoreCase)
+            || trimmed.EndsWith(".yml", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new MultipassException($"Datei nicht gefunden: {Path.GetFullPath(trimmed)}");
+        }
+
+        return Parse(value, format, format == ComponentFormat.Json ? "--json" : "--yaml");
+    }
+
+    /// <summary>
+    /// Parst eine einzelne <see cref="ComponentConfig"/>. Schlüssel wie in
+    /// appsettings.json (Groß-/Kleinschreibung egal); unbekannte Schlüssel sind
+    /// ein Fehler, damit Tippfehler nicht still verschwinden.
+    /// </summary>
+    public static ComponentConfig Parse(string text, ComponentFormat format, string source = "Eingabe")
+    {
+        var json = format == ComponentFormat.Json ? text : YamlToJson(text, source);
+        return Deserialize(json, source);
+    }
+
+    /// <summary>
+    /// Prüft Name und Definition und schreibt sie in die Benutzerdatei. Ein
+    /// relativer <see cref="ComponentConfig.Script"/> wird gegen das aktuelle
+    /// Arbeitsverzeichnis aufgelöst und absolut gespeichert.
+    /// </summary>
+    /// <returns>Die gespeicherte (normalisierte) Definition.</returns>
+    public static ComponentConfig Add(ImagesConfig images, string userFile, string name, ComponentConfig component, bool replace)
+    {
+        RequireValidName(name);
+        var user = ReadUser(userFile);
+        var exists = user.ContainsKey(name);
+        if (!exists && images.Components.ContainsKey(name))
+        {
+            throw new MultipassException(
+                $"Komponente '{name}' ist mitgeliefert (appsettings.json) und lässt sich nicht ändern — anderen Namen wählen.");
+        }
+
+        if (exists && !replace)
+        {
+            throw new MultipassException($"Komponente '{name}' existiert bereits ({userFile}) — --force zum Ersetzen.");
+        }
+
+        var normalized = Normalize(component);
+        Validate(name, normalized);
+
+        var root = File.Exists(userFile) ? ReadRoot(userFile) : new JsonObject();
+        var entries = Section(root, userFile);
+        var key = entries.Select(entry => entry.Key).FirstOrDefault(k => string.Equals(k, name, StringComparison.OrdinalIgnoreCase));
+        if (key is not null)
+        {
+            entries.Remove(key);
+        }
+
+        entries[name] = JsonSerializer.SerializeToNode(normalized, WriteOptions);
+        Write(userFile, root);
+        return normalized;
+    }
+
+    /// <summary>Entfernt eine Benutzerkomponente; mitgelieferte sind nicht entfernbar.</summary>
+    public static void Remove(ImagesConfig images, string userFile, string name)
+    {
+        var user = ReadUser(userFile);
+        if (!user.ContainsKey(name))
+        {
+            throw new MultipassException(images.Components.ContainsKey(name)
+                ? $"Komponente '{name}' ist mitgeliefert (appsettings.json) und lässt sich nicht entfernen."
+                : $"Unbekannte Komponente '{name}'. Übersicht: `cb component-list`.");
+        }
+
+        var root = ReadRoot(userFile);
+        var entries = Section(root, userFile);
+        var key = entries.Select(entry => entry.Key).First(k => string.Equals(k, name, StringComparison.OrdinalIgnoreCase));
+        entries.Remove(key);
+        Write(userFile, root);
+    }
+
+    /// <summary>Eine Definition als eingerücktes JSON, wie sie in der Benutzerdatei steht.</summary>
+    public static string ToJson(ComponentConfig component) => JsonSerializer.Serialize(component, WriteOptions);
+
+    private static void RequireValidName(string name)
+    {
+        if (!NamePattern.IsMatch(name))
+        {
+            throw new MultipassException(
+                $"Ungültiger Komponentenname '{name}' — Kleinbuchstaben, Ziffern und Bindestriche, beginnend mit einem Buchstaben (z. B. my-tool).");
+        }
+    }
+
+    private static ComponentConfig Normalize(ComponentConfig component)
+    {
+        if (string.IsNullOrWhiteSpace(component.Script))
+        {
+            return component with { Script = null };
+        }
+
+        var expanded = Environment.ExpandEnvironmentVariables(component.Script.Trim());
+        var absolute = Path.GetFullPath(expanded);
+        if (!File.Exists(absolute))
+        {
+            throw new MultipassException($"Script nicht gefunden: {absolute}");
+        }
+
+        return component with { Script = absolute };
+    }
+
+    /// <summary>
+    /// Probe-Rendern nur dieser Komponente: so greifen dieselben Prüfungen wie
+    /// bei <c>init-configure</c> (InstallPath, InstallUser, Pakete, YAML).
+    /// </summary>
+    private static void Validate(string name, ComponentConfig component)
+    {
+        if (!component.NeedsCloudInit)
+        {
+            throw new MultipassException(
+                $"Komponente '{name}' ist leer — mindestens Snap, Script, Packages oder Users angeben.");
+        }
+
+        if (!string.IsNullOrWhiteSpace(component.Script) && string.IsNullOrWhiteSpace(component.InstallPath))
+        {
+            throw new MultipassException(
+                $"Komponente '{name}': Script braucht einen InstallPath (absoluter Unix-Pfad im Gast, z. B. /usr/local/sbin/corebridge-install-{name}).");
+        }
+
+        var probe = new ImagesConfig
+        {
+            Components = new Dictionary<string, ComponentConfig>(StringComparer.OrdinalIgnoreCase) { [name] = component }
+        };
+        CloudInitYamlValidator.Validate(InitCloudInit.Generate(name, probe, [name]));
+    }
+
+    private static ComponentConfig Deserialize(string json, string source)
+    {
+        try
+        {
+            return JsonSerializer.Deserialize<ComponentConfig>(json, ReadOptions)
+                ?? throw new MultipassException($"{source}: leere Komponenten-Definition.");
+        }
+        catch (JsonException exception)
+        {
+            throw new MultipassException($"{source}: ungültige Komponenten-Definition — {exception.Message}", exception);
+        }
+    }
+
+    private static JsonObject ReadRoot(string userFile)
+    {
+        try
+        {
+            return JsonNode.Parse(
+                    File.ReadAllText(userFile),
+                    documentOptions: new JsonDocumentOptions { CommentHandling = JsonCommentHandling.Skip, AllowTrailingCommas = true })
+                as JsonObject
+                ?? throw new MultipassException($"{userFile}: erwartet ein JSON-Objekt.");
+        }
+        catch (JsonException exception)
+        {
+            throw new MultipassException($"{userFile}: kein gültiges JSON — {exception.Message}", exception);
+        }
+    }
+
+    /// <summary>Liefert <c>Images:Components</c> und legt fehlende Ebenen an.</summary>
+    private static JsonObject Section(JsonObject root, string userFile)
+    {
+        if (root["Images"] is not JsonObject images)
+        {
+            if (root["Images"] is not null)
+            {
+                throw new MultipassException($"{userFile}: Images muss ein Objekt sein.");
+            }
+
+            images = new JsonObject();
+            root["Images"] = images;
+        }
+
+        if (images["Components"] is not JsonObject components)
+        {
+            if (images["Components"] is not null)
+            {
+                throw new MultipassException($"{userFile}: Images:Components muss ein Objekt sein.");
+            }
+
+            components = new JsonObject();
+            images["Components"] = components;
+        }
+
+        return components;
+    }
+
+    private static void Write(string userFile, JsonObject root)
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(userFile))!);
+        var temp = userFile + ".tmp";
+        File.WriteAllText(temp, root.ToJsonString(WriteOptions) + Environment.NewLine);
+        File.Move(temp, userFile, overwrite: true);
+    }
+
+    /// <summary>
+    /// YAML → JSON über das Repräsentationsmodell. Ungequotete Skalare werden wie
+    /// in YAML 1.2 typisiert (true/false, Zahlen, null); gequotete bleiben Text.
+    /// </summary>
+    private static string YamlToJson(string text, string source)
+    {
+        var stream = new YamlStream();
+        try
+        {
+            stream.Load(new StringReader(text));
+        }
+        catch (YamlException exception)
+        {
+            throw new MultipassException($"{source}: kein gültiges YAML — {exception.Message}", exception);
+        }
+
+        if (stream.Documents.Count != 1)
+        {
+            throw new MultipassException($"{source}: erwartet genau ein YAML-Dokument.");
+        }
+
+        return ToNode(stream.Documents[0].RootNode)?.ToJsonString() ?? "null";
+    }
+
+    private static JsonNode? ToNode(YamlNode node)
+    {
+        switch (node)
+        {
+            case YamlMappingNode mapping:
+                var obj = new JsonObject();
+                foreach (var (key, child) in mapping.Children)
+                {
+                    obj[((YamlScalarNode)key).Value ?? string.Empty] = ToNode(child);
+                }
+
+                return obj;
+            case YamlSequenceNode sequence:
+                return new JsonArray(sequence.Children.Select(ToNode).ToArray());
+            case YamlScalarNode scalar:
+                var value = scalar.Value ?? string.Empty;
+                if (scalar.Style is not ScalarStyle.Plain)
+                {
+                    return JsonValue.Create(value);
+                }
+
+                return value switch
+                {
+                    "" or "~" or "null" or "Null" or "NULL" => null,
+                    "true" or "True" or "TRUE" => JsonValue.Create(true),
+                    "false" or "False" or "FALSE" => JsonValue.Create(false),
+                    _ when long.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var number) => JsonValue.Create(number),
+                    _ => JsonValue.Create(value)
+                };
+            default:
+                throw new MultipassException($"Nicht unterstützter YAML-Knoten: {node.NodeType}");
+        }
+    }
+}

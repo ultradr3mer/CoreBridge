@@ -29,6 +29,13 @@ public static class InitStore
     public static string CloudInitFile(string name) => Path.Combine(ProfileDir(name), "cloud-init.yaml");
 
     /// <summary>
+    /// Benutzereigene Einstellungen (<c>component-add</c>/<c>component-remove</c>).
+    /// Liegt im Store statt neben der Installation, damit ein Update sie nicht
+    /// überschreibt; in Development also unter <c>&lt;Repo&gt;/artifacts</c>, nie im Projekt.
+    /// </summary>
+    public static string UserSettingsFile => Path.Combine(Root, "appsettings.user.json");
+
+    /// <summary>
     /// Löst einen konfigurierten relativen oder absoluten Pfad auf. Relative
     /// Eingebettete Gast-Skripte und optionale Testressourcen werden dadurch
     /// unabhängig vom Arbeitsverzeichnis des aufrufenden Prozesses gefunden.

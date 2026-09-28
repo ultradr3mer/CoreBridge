@@ -27,6 +27,8 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\CoreBridge.Core\CoreBridge.Core.csproj" />
     <ProjectReference Include="..\CoreBridge.Simulation\CoreBridge.Simulation.csproj" />
+    <!-- Nur fürs Erzeugen von Test-Signaturen; das Produkt signiert nicht. -->
+    <ProjectReference Include="..\..\tools\CoreBridge.Signer\CoreBridge.Signer.csproj" />
   </ItemGroup>
 
 </Project>

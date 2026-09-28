@@ -66,7 +66,7 @@ public sealed class InitConfigureOptions : MultipassOptions
     [Option('n', "name", Required = true, HelpText = "Name des Profils (Namespace für Profilkonfiguration und cloud-init).")]
     public string Name { get; set; } = string.Empty;
 
-    [Option('c', "components", Default = "claude,dotnet", HelpText = "Komma-Liste der Komponenten (verfügbar laut Config Images:Components, z. B. claude,dotnet,opencode,python,cline).")]
+    [Option('c', "components", Default = "claude,dotnet", HelpText = "Komma-Liste der Komponenten (Übersicht: component-list, z. B. claude,dotnet,opencode,python,cline).")]
     public string Components { get; set; } = "claude,dotnet";
 
     [Option("runtime-image", HelpText = "Multipass-Katalogname, den vm-create für dieses Profil startet (Standard: Config Images:DefaultRuntimeImage).")]
@@ -85,6 +85,43 @@ public sealed class InitListOptions : IOptions
 public sealed class InitDeleteOptions : IOptions
 {
     [Option('n', "name", Required = true, HelpText = "Name des Profils (aus init-list).")]
+    public string Name { get; set; } = string.Empty;
+}
+
+[Verb("component-list", HelpText = "Listet die Komponenten (mitgeliefert und benutzereigen); mit -n die vollständige Definition als JSON.")]
+public sealed class ComponentListOptions : IOptions
+{
+    [Option('n', "name", HelpText = "Nur diese Komponente als JSON ausgeben (Vorlage für component-add).")]
+    public string? Name { get; set; }
+}
+
+[Verb("component-add", HelpText = "Legt eine benutzereigene Komponente an (<StoreRoot>/appsettings.user.json); mitgelieferte sind nicht änderbar.")]
+public sealed class ComponentAddOptions : IOptions
+{
+    [Option('n', "name", Required = true, HelpText = "Name der Komponente (Kleinbuchstaben, Ziffern, Bindestriche).")]
+    public string Name { get; set; } = string.Empty;
+
+    [Option("json", SetName = "json", HelpText = "Definition als JSON — Dateipfad oder direkt der Text, Schlüssel wie in appsettings.json (Snap, Classic, Script, InstallPath, Packages, …).")]
+    public string? Json { get; set; }
+
+    [Option("yaml", SetName = "yaml", HelpText = "Definition als YAML — Dateipfad oder direkt der Text, Schlüssel wie bei --json.")]
+    public string? Yaml { get; set; }
+
+    [Option('f', "force", HelpText = "Existierende Benutzerkomponente ohne Rückfrage ersetzen.")]
+    public bool Force { get; set; }
+}
+
+[Verb("settings-verify", HelpText = "Prüft die OpenPGP-Signaturen (<datei>.asc) der mitgelieferten appsettings bzw. der angegebenen Dateien gegen den eingebetteten CoreBridge-Schlüssel; startet auch, wenn die Config ungültig signiert ist.")]
+public sealed class SettingsVerifyOptions : IOptions
+{
+    [Option('f', "file", Separator = ',', HelpText = "Stattdessen diese Dateien prüfen (kommagetrennt); erwartet je <datei>.asc daneben.")]
+    public IEnumerable<string> Files { get; set; } = [];
+}
+
+[Verb("component-remove",HelpText = "Entfernt eine benutzereigene Komponente; mitgelieferte sind nicht entfernbar.")]
+public sealed class ComponentRemoveOptions : IOptions
+{
+    [Option('n', "name", Required = true, HelpText = "Name der Komponente (aus component-list).")]
     public string Name { get; set; } = string.Empty;
 }
 
@@ -211,7 +248,7 @@ public sealed class VmInstallOptions : MultipassOptions
     [Option('n', "name", Required = true, HelpText = "Name der VM.")]
     public string Name { get; set; } = string.Empty;
 
-    [Option('c', "components", Required = true, HelpText = "Komma-Liste der Komponenten (Config Images:Components, z. B. dotnet,python).")]
+    [Option('c', "components", Required = true, HelpText = "Komma-Liste der Komponenten (Übersicht: component-list, z. B. dotnet,python).")]
     public string Components { get; set; } = string.Empty;
 
     [Option("snapshot", HelpText = "Nach erfolgreicher Installation ohne Rückfrage stoppen und diesen Snapshot anlegen.")]
