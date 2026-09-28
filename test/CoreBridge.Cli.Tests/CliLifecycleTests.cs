@@ -5,8 +5,8 @@ using Xunit.Abstractions;
 namespace CoreBridge.Cli.Tests;
 
 /// <summary>
-/// Kompletter VM-Zyklus: Status → Image → Create → List → Start → Exec →
-/// Connect (SSH) → Stop → Delete, strikt in dieser Reihenfolge
+/// Kompletter VM-Zyklus: Status → Profil → Create → List → Start → Exec →
+/// Connect → Stop → Delete, strikt in dieser Reihenfolge
 /// (<see cref="LifecycleTestCaseOrderer"/>). Jede Stufe setzt den Zustand der
 /// vorherigen voraus und stellt ihn nicht selbst her — schlägt eine Stufe fehl,
 /// schlagen die folgenden ebenfalls fehl. Nur die ganze Klasse ausführen.
@@ -38,9 +38,9 @@ public sealed class CliLifecycleTests
     }
 
     [Fact]
-    public async Task Stage01_ImageConfigure()
+    public async Task Stage01_InitConfigure()
     {
-        var result = await fixture.RunAsync(new ImageConfigureOptions
+        var result = await fixture.RunAsync(new InitConfigureOptions
         {
             Name = fixture.ImageName,
             Components = "claude,dotnet",
@@ -49,8 +49,8 @@ public sealed class CliLifecycleTests
         }, output.WriteLine);
 
         CliLifecycleFixture.AssertSucceeded(result);
-        Assert.True(File.Exists(fixture.ModelPath), $"Modellprofil fehlt: {fixture.ModelPath}");
         Assert.True(File.Exists(fixture.ProfileConfigPath), $"Profilkonfiguration fehlt: {fixture.ProfileConfigPath}");
+        Assert.True(File.Exists(fixture.CloudInitPath), $"cloud-init fehlt: {fixture.CloudInitPath}");
     }
 
     [Fact]
@@ -101,48 +101,72 @@ public sealed class CliLifecycleTests
         }, output.WriteLine);
         CliLifecycleFixture.AssertSucceeded(release);
 
-        // Claude wird per cloud-init nachinstalliert und kann kurz nach dem Boot noch fehlen.
-        for (var attempt = 1; attempt <= 6; attempt++)
+        await AssertProvisionedAsync();
+    }
+
+    /// <summary>
+    /// Prüft, dass die per cloud-init bestellten Komponenten im Gast wirklich
+    /// laufen — nicht nur, dass die VM startet. Beides wird mehrmals versucht,
+    /// weil die Paket-/Snap-Installation nach dem Boot noch läuft.
+    /// </summary>
+    [Fact]
+    public async Task Stage05b_ProvisionierungIstVollstaendig()
+    {
+        await AssertProvisionedAsync();
+    }
+
+    private static readonly (string Component, string Probe)[] ProvisioningProbes =
+    [
+        ("claude", "command -v claude >/dev/null && claude --version"),
+        ("dotnet", "command -v dotnet >/dev/null && dotnet --version"),
+        ("claude-marker", "test -f /var/lib/corebridge/claude.ready"),
+        ("dotnet-marker", "test -f /var/lib/corebridge/dotnet.ready")
+    ];
+
+    private async Task AssertProvisionedAsync()
+    {
+        var missing = ProvisioningProbes.Select(p => p.Component).ToList();
+        var seen = new Dictionary<string, string>(StringComparer.Ordinal);
+
+        for (var attempt = 1; attempt <= 12 && missing.Count > 0; attempt++)
         {
-            var claude = await fixture.RunAsync(new VmExecOptions
+            foreach (var (component, probe) in ProvisioningProbes.Where(p => missing.Contains(p.Component)).ToArray())
             {
-                Name = fixture.VmName,
-                Command = "command -v claude >/dev/null && claude --version"
-            }, output.WriteLine);
-            if (claude.ExitCode == 0)
-            {
-                return;
+                var probe1 = await fixture.RunAsync(
+                    new VmExecOptions { Name = fixture.VmName, Command = probe },
+                    output.WriteLine);
+                if (probe1.ExitCode == 0)
+                {
+                    missing.Remove(component);
+                    seen[component] = string.Join(" | ", probe1.Lines);
+                    output.WriteLine($"Provisionierung {component}: OK ({seen[component]})");
+                }
             }
 
-            output.WriteLine($"Claude probe {attempt} fehlgeschlagen (Exit {claude.ExitCode}).");
-            await Task.Delay(TimeSpan.FromSeconds(10));
+            if (missing.Count > 0)
+            {
+                output.WriteLine($"Provisionierung Versuch {attempt}: fehlt noch {string.Join(", ", missing)}.");
+                await Task.Delay(TimeSpan.FromSeconds(15));
+            }
         }
 
-        Assert.Fail("Claude wurde nach der Cloud-init-Provisionierung nicht verfügbar.");
+        Assert.True(
+            missing.Count == 0,
+            "Nach 12 Versuchen fehlen weiterhin: " + string.Join(", ", missing)
+            + ". Vorhanden: " + string.Join("; ", seen.Select(e => $"{e.Key}={e.Value}")));
     }
 
     [Fact]
     public async Task Stage06_VmConnect()
     {
-        var publicKey = fixture.EnsureSshKey().Trim();
-        var install = await fixture.RunAsync(new VmExecOptions
-        {
-            Name = fixture.VmName,
-            Command = "mkdir -p ~/.ssh && chmod 700 ~/.ssh"
-                + $" && (grep -qxF '{publicKey}' ~/.ssh/authorized_keys 2>/dev/null"
-                + $" || echo '{publicKey}' >> ~/.ssh/authorized_keys)"
-                + " && chmod 600 ~/.ssh/authorized_keys"
-        }, output.WriteLine);
-        CliLifecycleFixture.AssertSucceeded(install);
+        using var session = new VmService().OpenConsole(fixture.VmName, output.WriteLine, (int)SessionTimeout.TotalMilliseconds);
 
-        using var session = await OpenSshSessionAsync();
-
-        // Gemeinsamer Shell-Status: cd wirkt auf den folgenden Befehl.
+        // Das Arbeitsverzeichnis wandert mit: cd wirkt auf den folgenden Befehl.
         session.SendLine("cd /tmp");
         session.SendCommand("echo cwd=$(pwd)", "cwd=/tmp", SessionTimeout);
         session.SendCommand("echo cbx-connect-$((20+22))", "cbx-connect-42", SessionTimeout);
         session.SendCommand("echo user=$(id -un)", "user=ubuntu", SessionTimeout);
-        session.Exit();
+        Assert.Equal("/tmp", session.WorkingDirectory);
     }
 
     [Fact]
@@ -161,22 +185,5 @@ public sealed class CliLifecycleTests
             output.WriteLine);
 
         CliLifecycleFixture.AssertCompleted(delete, $"delete {fixture.VmName} --purge", "nicht vorhanden");
-    }
-
-    private async Task<VmSshSession> OpenSshSessionAsync()
-    {
-        // sshd kommt nach dem Boot evtl. erst verzögert hoch.
-        for (var attempt = 1; ; attempt++)
-        {
-            try
-            {
-                return new VmService().OpenSshSession(fixture.VmName, output.WriteLine, fixture.SshPrivateKeyPath);
-            }
-            catch (MultipassException exception) when (attempt < 6)
-            {
-                output.WriteLine($"SSH-Versuch {attempt} fehlgeschlagen: {exception.Message}");
-                await Task.Delay(TimeSpan.FromSeconds(5));
-            }
-        }
     }
 }

@@ -118,6 +118,26 @@ public class VmServiceTests
     }
 
     [Fact]
+    public void ConsoleNimmtDasArbeitsverzeichnisMit()
+    {
+        var cli = new FakeMultipassCli(args => new MultipassRunResult(
+            0,
+            args[^1].Contains("pwd -P", StringComparison.Ordinal) ? "/tmp\n\n__corebridge_cwd__=/tmp\n" : "\n__corebridge_cwd__=/tmp\n",
+            string.Empty,
+            1));
+        using var session = new VmService(cli).OpenConsole("cbx-test");
+
+        session.SendLine("cd /tmp");
+        var output = session.SendCommand("pwd -P", "/tmp", TimeSpan.FromSeconds(1));
+
+        Assert.Equal(new[] { "exec", "cbx-test", "--", "/bin/sh", "-c" }, cli.Calls[0][..5]);
+        Assert.StartsWith("cd /tmp\n", cli.Calls[0][5]);
+        Assert.StartsWith("cd /tmp || exit 1\npwd -P\n", cli.Calls[1][5]);
+        Assert.Equal("/tmp", session.WorkingDirectory);
+        Assert.DoesNotContain("__corebridge_cwd__", output);
+    }
+
+    [Fact]
     public void PutTransferiertMitDefaultZielpfad()
     {
         var cli = new FakeMultipassCli(EmptyResult);
@@ -148,6 +168,105 @@ public class VmServiceTests
         service.Get("cbx-test", "/home/ubuntu/x.img", @"C:\images\x.img");
 
         Assert.Equal(new[] { "transfer", "cbx-test:/home/ubuntu/x.img", @"C:\images\x.img" }, cli.Calls[0]);
+    }
+
+    [Fact]
+    public void CloneSnapshotRestoreBauenDieMultipassArgumenteAuf()
+    {
+        var cli = new FakeMultipassCli(EmptyResult);
+        var service = new VmService(cli);
+
+        service.Clone("cbx-basis");
+        service.Clone("cbx-basis", "cbx-klon");
+        service.Snapshot("cbx-basis");
+        service.Snapshot("cbx-basis", "base", "erster stand");
+        service.Restore("cbx-basis", "base");
+
+        Assert.Equal(new[] { "clone", "cbx-basis" }, cli.Calls[0]);
+        Assert.Equal(new[] { "clone", "cbx-basis", "--name", "cbx-klon" }, cli.Calls[1]);
+        Assert.Equal(new[] { "snapshot", "cbx-basis" }, cli.Calls[2]);
+        Assert.Equal(new[] { "snapshot", "cbx-basis", "--name", "base", "--comment", "erster stand" }, cli.Calls[3]);
+        // Immer --destructive: sonst fragt Multipass interaktiv und der Aufruf hinge.
+        Assert.Equal(new[] { "restore", "cbx-basis.base", "--destructive" }, cli.Calls[4]);
+    }
+
+    /// <summary>Echte Ausgabe von Multipass 1.16.3 (<c>list --snapshots --format json</c>).</summary>
+    [Fact]
+    public void ListSnapshotsParstUndFiltertNachVm()
+    {
+        const string json = """
+            {
+                "errors": [
+                ],
+                "info": {
+                    "cbx-snap-probe": {
+                        "base": {
+                            "comment": "erster stand",
+                            "parent": ""
+                        },
+                        "snapshot2": {
+                            "comment": "",
+                            "parent": "base"
+                        }
+                    },
+                    "cbx-andere": {
+                        "s1": { "comment": "", "parent": "" }
+                    }
+                }
+            }
+            """;
+        var cli = new FakeMultipassCli(_ => new MultipassRunResult(0, json, string.Empty, 1));
+        var service = new VmService(cli);
+
+        var all = service.ListSnapshots();
+        var probe = service.ListSnapshots("CBX-SNAP-PROBE");
+
+        Assert.Equal(new[] { "list", "--snapshots", "--format", "json" }, cli.Calls[0]);
+        Assert.Equal(3, all.Count);
+        Assert.Equal(
+            new[]
+            {
+                new VmSnapshotInfo("cbx-snap-probe", "base", null, "erster stand"),
+                new VmSnapshotInfo("cbx-snap-probe", "snapshot2", "base", null)
+            },
+            probe);
+    }
+
+    [Fact]
+    public void ListSnapshotsOhneSnapshotsIstLeer()
+    {
+        var cli = new FakeMultipassCli(_ => new MultipassRunResult(0, """{ "errors": [], "info": {} }""", string.Empty, 1));
+
+        Assert.Empty(new VmService(cli).ListSnapshots());
+    }
+
+    [Fact]
+    public void DiskGroesseLesenUndSetzen()
+    {
+        var cli = new FakeMultipassCli(call => call[0] == "get"
+            ? new MultipassRunResult(0, "5.0GiB" + Environment.NewLine, string.Empty, 1)
+            : EmptyResult(call));
+        var service = new VmService(cli);
+
+        Assert.Equal("5.0GiB", service.GetDisk("cbx-test"));
+        service.SetDisk("cbx-test", "20G");
+
+        Assert.Equal(new[] { "get", "local.cbx-test.disk" }, cli.Calls[0]);
+        Assert.Equal(new[] { "set", "local.cbx-test.disk=20G" }, cli.Calls[1]);
+    }
+
+    [Fact]
+    public void GetDiskOhneVmWirftMitMultipassText()
+    {
+        var cli = new FakeMultipassCli(_ => new MultipassRunResult(
+            2,
+            string.Empty,
+            "get failed: Cannot obtain instance settings; instance: cbx-nix; reason: No such instance\n",
+            1));
+
+        var error = Assert.Throws<MultipassException>(() => new VmService(cli).GetDisk("cbx-nix"));
+
+        Assert.Contains("No such instance", error.Message);
     }
 
     private static MultipassRunResult EmptyResult(string[] _) => new(0, string.Empty, string.Empty, 1);

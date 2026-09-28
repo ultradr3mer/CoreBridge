@@ -2,10 +2,21 @@ using System.Diagnostics;
 
 namespace CoreBridge.Core.Multipass;
 
-public class MultipassCli
+public interface IMultipassCli
+{
+    int Attach(IReadOnlyList<string> args, string? exePath = null);
+    MultipassRunResult Run(IReadOnlyList<string> args, int timeoutMs = 30000, string? exePath = null);
+    MultipassRunResult RunWithExtensions(IReadOnlyList<string> args, TimeSpan slice, Func<bool> keepWaiting, string? exePath = null);
+}
+
+public class MultipassCli : IMultipassCli
 {
     private readonly Func<string?> _locate;
 
+    /// <summary>
+    /// Standard-Auflösung des Binarys. Der Container wählt diesen Konstruktor,
+    /// weil <c>Func&lt;string?&gt;</c> nicht registriert ist.
+    /// </summary>
     public MultipassCli()
         : this(() => MultipassBinaryLocator.LocateOrNull())
     {

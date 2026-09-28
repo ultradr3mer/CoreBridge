@@ -1,9 +1,8 @@
-using System.Security.Cryptography;
-using System.Text;
 using System.Text.RegularExpressions;
 using CoreBridge.Cli;
 using CoreBridge.Core.Config;
-using CoreBridge.Core.Images;
+using CoreBridge.Core.Inits;
+using CoreBridge.Core.Multipass;
 
 namespace CoreBridge.Cli.Tests;
 
@@ -14,9 +13,9 @@ internal sealed record CliRunResult(int ExitCode, IReadOnlyList<string> Lines, s
 /// Gemeinsame Namen, Config und Temp-Store der Lifecycle-Stufen; den
 /// Fortschrittszustand (Image, VM) hinterlässt jeweils die vorherige Stufe.
 /// CLI-Kommandos laufen ausschließlich über den öffentlichen
-/// <see cref="Program.Run"/>-Dispatcher (kein CLI-Kindprozess). Nur die
-/// interaktiven Verbindungen (vm-connect, SSH) gehen direkt über die
-/// Session-Typen aus CoreBridge.Core, weil `multipass shell` ein TTY braucht.
+/// <see cref="Program.Run"/>-Dispatcher (kein CLI-Kindprozess). Nur vm-connect
+/// geht direkt über <see cref="Core.Vm.VmService.OpenConsole"/>, weil
+/// `multipass shell` ein TTY braucht.
 /// </summary>
 public sealed class CliLifecycleFixture : IDisposable
 {
@@ -34,6 +33,11 @@ public sealed class CliLifecycleFixture : IDisposable
             DefaultTimeoutVmCreation = "2400s",
             // Start/Stop/Exec/Transfer warten DefaultTimeout (Standard 10 s) — für echte VMs zu kurz.
             DefaultTimeout = "600s",
+            // Jeder echte Multipass-Aufruf wird protokolliert — außerhalb des
+            // Temp-Stores, damit die Aufzeichnung den Lauf überlebt und per
+            // ReplayMultipassCli wiedergegeben werden kann. Bootstrap bleibt
+            // Standard: hier läuft garantiert das echte Multipass.
+            MultipassLogPath = "artifacts/mp-log/cli-lifecycle",
             Images = new ImagesConfig
             {
                 StoreRoot = store.Path,
@@ -68,51 +72,9 @@ public sealed class CliLifecycleFixture : IDisposable
 
     public string VmName { get; }
 
-    internal string ModelPath => Path.Combine(store.Path, "models", ImageName, ImageName + ".model");
+    internal string ProfileConfigPath => Path.Combine(store.Path, "profiles", ImageName, ImageName + ".profile.json");
 
-    internal string ProfileConfigPath => Path.Combine(store.Path, "models", ImageName, ImageName + ".profile.json");
-
-    internal string SshPrivateKeyPath => Path.Combine(store.Path, "ssh", "id_rsa");
-
-    /// <summary>
-    /// Erzeugt einmalig ein RSA-Schlüsselpaar im Temp-Store (ohne ssh-keygen):
-    /// Private Key als PKCS#1-PEM für SSH.NET, Public Key im OpenSSH-Format für
-    /// ~/.ssh/authorized_keys der VM.
-    /// </summary>
-    internal string EnsureSshKey()
-    {
-        var publicKeyPath = SshPrivateKeyPath + ".pub";
-        if (File.Exists(publicKeyPath))
-        {
-            return File.ReadAllText(publicKeyPath);
-        }
-
-        Directory.CreateDirectory(Path.GetDirectoryName(SshPrivateKeyPath)!);
-        using var rsa = RSA.Create(3072);
-        File.WriteAllText(SshPrivateKeyPath, rsa.ExportRSAPrivateKeyPem());
-
-        var parameters = rsa.ExportParameters(includePrivateParameters: false);
-        using var blob = new MemoryStream();
-        WriteSshString(blob, Encoding.ASCII.GetBytes("ssh-rsa"));
-        WriteSshString(blob, ToMpint(parameters.Exponent!));
-        WriteSshString(blob, ToMpint(parameters.Modulus!));
-        var publicKey = $"ssh-rsa {Convert.ToBase64String(blob.ToArray())} cbx-cli-lifecycle";
-        File.WriteAllText(publicKeyPath, publicKey);
-        return publicKey;
-    }
-
-    private static byte[] ToMpint(byte[] unsignedBigEndian)
-    {
-        return (unsignedBigEndian[0] & 0x80) != 0 ? [0, .. unsignedBigEndian] : unsignedBigEndian;
-    }
-
-    private static void WriteSshString(Stream stream, byte[] data)
-    {
-        Span<byte> length = stackalloc byte[4];
-        System.Buffers.Binary.BinaryPrimitives.WriteInt32BigEndian(length, data.Length);
-        stream.Write(length);
-        stream.Write(data);
-    }
+    internal string CloudInitPath => Path.Combine(store.Path, "profiles", ImageName, "cloud-init.yaml");
 
     /// <summary>
     /// Konsumiert den Ausgabestrom vollständig, schreibt jede Meldung sofort ins
@@ -125,18 +87,36 @@ public sealed class CliLifecycleFixture : IDisposable
         var lines = new List<string>();
         try
         {
-            // Rückfragen (VM starten/stoppen/löschen, weiter warten) werden im
-            // automatisierten Lauf bejaht und protokolliert.
-            bool Confirm(string question)
+            // Der Test ist der Konsument des Ereignisstroms — dieselbe Rolle wie
+            // die ConsoleAdapter in der echten CLI: Ausgabe sammeln und
+            // Rückfragen beantworten.
+            await foreach (var cliEvent in Program.Run(config, options))
             {
-                log($"{question} [y/n] y (Test)");
-                return true;
-            }
-
-            await foreach (var line in Program.Run(config, options, confirm: Confirm))
-            {
-                log(line);
-                lines.Add(line);
+                switch (cliEvent)
+                {
+                    // Reihenfolge zählt: InteractionEvent erbt von StdEvent.
+                    case ChoiceEvent<YesNoOptions> yesNo:
+                        log($"{yesNo.Printable} [y/n] y (Test)");
+                        yesNo.SetResult(YesNoOptions.Yes);
+                        break;
+                    case TextEvent text:
+                        log($"{text.Printable}(Test: keine Eingabe)");
+                        text.SetResult(null);
+                        break;
+                    case ProgressEvent:
+                        break;
+                    case StdEvent std:
+                        log(std.Printable);
+                        lines.Add(std.Printable);
+                        break;
+                    case ErrEvent err:
+                        log(err.Printable);
+                        break;
+                    default:
+                        log(cliEvent.Printable);
+                        lines.Add(cliEvent.Printable);
+                        break;
+                }
             }
 
             return new CliRunResult(0, lines);
@@ -211,10 +191,10 @@ public sealed class CliLifecycleFixture : IDisposable
             await RunCheckedAsync(new VmDeleteOptions { Name = VmName, Purge = true }, log);
         }
 
-        var modelDirectory = Path.Combine(store.Path, "models", ImageName);
-        if (Directory.Exists(modelDirectory))
+        var profileDirectory = Path.Combine(store.Path, "profiles", ImageName);
+        if (Directory.Exists(profileDirectory))
         {
-            await RunCheckedAsync(new ImageDeleteOptions { Name = ImageName }, log);
+            await RunCheckedAsync(new InitDeleteOptions { Name = ImageName }, log);
         }
     }
 

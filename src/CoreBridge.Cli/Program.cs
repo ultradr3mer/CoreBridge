@@ -1,9 +1,11 @@
 using System.Runtime.CompilerServices;
 using System.Text;
+using System.Threading.Channels;
 using CommandLine;
 using CoreBridge.Core.Common;
 using CoreBridge.Core.Config;
-using CoreBridge.Core.Images;
+using CoreBridge.Core.Git;
+using CoreBridge.Core.Inits;
 using CoreBridge.Core.Multipass;
 using CoreBridge.Core.Vm;
 using Microsoft.Extensions.Configuration;
@@ -30,9 +32,17 @@ public static class Program
         typeof(VmConnectOptions),
         typeof(VmPutOptions),
         typeof(VmGetOptions),
-        typeof(ImageConfigureOptions),
-        typeof(ImageListOptions),
-        typeof(ImageDeleteOptions)
+        typeof(VmCloneOptions),
+        typeof(VmSnapshotOptions),
+        typeof(VmSnapshotsOptions),
+        typeof(VmRestoreOptions),
+        typeof(VmInstallOptions),
+        typeof(VmResizeOptions),
+        typeof(RepoSendOptions),
+        typeof(RepoReceiveOptions),
+        typeof(InitConfigureOptions),
+        typeof(InitListOptions),
+        typeof(InitDeleteOptions)
     ];
 
     /// <summary>
@@ -80,17 +90,12 @@ public static class Program
 
         try
         {
-            await foreach (var line in Run(config, options, cancellation.Token, ConfirmOnConsole, PromptOnConsole))
-            {
-                WriteOutput(line);
-            }
-
-            EndProgressLine();
-            return 0;
+            // Konsument des Ereignisstroms: er schreibt alles auf die Konsole
+            // und beantwortet die Rückfragen des Kommandos.
+            return await new ConsoleAdapter().AcceptEventStream(Run(config, options, cancellation.Token));
         }
         catch (ProgramExecutionException exception)
         {
-            EndProgressLine();
             Console.Error.WriteLine(exception.Message);
             return exception.ExitCode;
         }
@@ -126,70 +131,6 @@ public static class Program
         return true;
     }
 
-    private static bool _midProgressLine;
-
-    /// <summary>
-    /// Schreibt eine Meldung; <see cref="Progress.ProgressTick"/>-Zeilen werden
-    /// hintereinander in dieselbe Zeile geschrieben.
-    /// </summary>
-    private static void WriteOutput(string line)
-    {
-        if (line == Progress.ProgressTick)
-        {
-            Console.Write(line);
-            _midProgressLine = true;
-            return;
-        }
-
-        if (_midProgressLine && line == "OK")
-        {
-            Console.WriteLine(line);
-            _midProgressLine = false;
-            return;
-        }
-
-        EndProgressLine();
-        Console.WriteLine(line);
-    }
-
-    /// <summary>Schließt eine offene Punktezeile ab, bevor anderer Text folgt.</summary>
-    private static void EndProgressLine()
-    {
-        if (_midProgressLine)
-        {
-            Console.WriteLine();
-            _midProgressLine = false;
-        }
-    }
-
-    /// <summary>Ja/Nein-Rückfrage auf der Konsole; ohne interaktive Eingabe immer Nein.</summary>
-    private static bool ConfirmOnConsole(string question)
-    {
-        EndProgressLine();
-        if (Console.IsInputRedirected)
-        {
-            Console.WriteLine($"{question} [y/n] n (keine interaktive Eingabe)");
-            return false;
-        }
-
-        Console.Write($"{question} [y/n] ");
-        return Console.ReadLine()?.Trim().ToLowerInvariant() is "y" or "yes" or "j" or "ja";
-    }
-
-    /// <summary>Freitext-Eingabe auf der Konsole; ohne interaktive Eingabe <c>null</c>.</summary>
-    private static string? PromptOnConsole(string question)
-    {
-        EndProgressLine();
-        if (Console.IsInputRedirected)
-        {
-            Console.WriteLine($"{question}(no interactive input)");
-            return null;
-        }
-
-        Console.Write(question);
-        return Console.ReadLine();
-    }
-
     /// <summary>
     /// Einziger Kommando-Dispatcher nach dem Parsen. Services werden aus dem
     /// übergebenen Config erzeugt; es gibt keine statischen Vm-/Config-Zustände.
@@ -199,25 +140,67 @@ public static class Program
     /// an (siehe <see cref="ToExecutionException"/>); alles andere ist ein Bug und
     /// wird unverändert weitergeworfen.
     /// </summary>
-    /// <param name="confirm">
-    /// Ja/Nein-Rückfrage für Kommandos, die vor riskanten Schritten fragen
-    /// (multipass-restart, vm-create). Ohne Angabe wird jede Rückfrage mit Nein beantwortet.
-    /// </param>
-    /// <param name="prompt">
-    /// Freitext-Eingabe, z. B. das Folgekommando nach abgebrochenem Warten in
-    /// vm-create. Ohne Angabe gibt es keine Eingabe (<c>null</c>).
-    /// </param>
-    public static IAsyncEnumerable<string> Run(
+    public static IAsyncEnumerable<CliEvent> Run(
         AppConfig config,
         IOptions options,
-        CancellationToken cancellationToken = default,
-        Func<string, bool>? confirm = null,
-        Func<string, string?>? prompt = null)
+        CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(config);
         ArgumentNullException.ThrowIfNull(options);
 
-        return RunCore(ApplyTimeoutOverride(config, options), options, confirm ?? (_ => false), prompt ?? (_ => null), cancellationToken);
+        // Der Kanal ist die Grenze zwischen Erzeuger und Konsument: das Kommando
+        // schiebt Ereignisse hinein, der Konsument zieht sie heraus und
+        // beantwortet Rückfragen. Er ist unbeschränkt, damit ein wartendes
+        // Kommando nie an einer vollen Queue hängen bleibt.
+        var channel = Channel.CreateUnbounded<CliEvent>(new UnboundedChannelOptions
+        {
+            SingleReader = true,
+            SingleWriter = false
+        });
+
+        var factory = new EventFactory(channel.Writer);
+        _ = ProduceAsync(channel, ApplyTimeoutOverride(config, options), options, factory, cancellationToken);
+
+        return channel.Reader.ReadAllAsync(cancellationToken);
+    }
+
+    /// <summary>
+    /// Führt das Kommando aus und übersetzt dabei erwartete Fehler. Läuft als
+    /// eigener Task, damit die Rückfragen der <c>Func&lt;bool&gt;</c>-Callbacks
+    /// aus CoreBridge.Core den Kanal bedienen können, während hier blockiert
+    /// wird.
+    /// </summary>
+    private static async Task ProduceAsync(
+        Channel<CliEvent> channel,
+        AppConfig config,
+        IOptions options,
+        EventFactory factory,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            await Execute(config, options, factory, cancellationToken);
+            factory.AssertNoOpenInteractions();
+        }
+        catch (Exception exception) when (ToExecutionException(exception) is { } failure)
+        {
+            channel.Writer.TryComplete(failure);
+            return;
+        }
+        catch (Exception exception)
+        {
+            // Unerwartet = Bug; die Meldung wandert trotzdem über den Kanal,
+            // damit der Konsument sie sieht statt sie zu verschlucken.
+            channel.Writer.TryComplete(exception);
+            return;
+        }
+        finally
+        {
+            // Offene Rückfragen verwerfen, damit niemand auf eine Antwort wartet,
+            // die nie kommen wird.
+            factory.CancelOpen();
+            channel.Writer.TryComplete();
+        }
     }
 
     /// <summary>
@@ -233,37 +216,6 @@ public static class Program
                 DefaultTimeout = ovr.OverrideTimeout ?? config.DefaultTimeout
             }
             : config;
-    }
-
-    /// <summary>
-    /// Reicht den Ausgabestrom durch und übersetzt dabei erwartete Fehler. Weil
-    /// <c>yield</c> nicht in einem <c>try</c> mit <c>catch</c> stehen darf, wird
-    /// nur <c>MoveNextAsync</c> überwacht.
-    /// </summary>
-    private static async IAsyncEnumerable<string> RunCore(
-        AppConfig config,
-        IOptions options,
-        Func<string, bool> confirm,
-        Func<string, string?> prompt,
-        [EnumeratorCancellation] CancellationToken cancellationToken)
-    {
-        await using var lines = Execute(config, options, confirm, prompt, cancellationToken).GetAsyncEnumerator(cancellationToken);
-        while (true)
-        {
-            try
-            {
-                if (!await lines.MoveNextAsync())
-                {
-                    yield break;
-                }
-            }
-            catch (Exception exception) when (ToExecutionException(exception) is { } failure)
-            {
-                throw failure;
-            }
-
-            yield return lines.Current;
-        }
     }
 
     /// <summary>
@@ -283,6 +235,7 @@ public static class Program
                     + "Hängt der Multipass-Dienst, hilft `cb multipass-restart` (als Administrator).",
                 exception),
             MultipassException => new(1, exception.Message, exception),
+            GitException => new(1, exception.Message, exception),
             System.Text.Json.JsonException => new(1, $"Unerwartete Multipass-Antwort (kein JSON): {exception.Message}", exception),
             FormatException => new(1, $"Configuration error: {exception.Message}", exception),
             IOException or UnauthorizedAccessException => new(1, $"CLI-I/O-Fehler: {exception.Message}", exception),
@@ -295,29 +248,38 @@ public static class Program
         };
     }
 
-    private static async IAsyncEnumerable<string> Execute(
+    private static async Task Execute(
         AppConfig config,
         IOptions options,
-        Func<string, bool> confirm,
-        Func<string, string?> prompt,
-        [EnumeratorCancellation] CancellationToken cancellationToken)
+        EventFactory factory,
+        CancellationToken cancellationToken)
     {
-        ImageStore.Initialize(config.Images.StoreRoot);
-        var context = new CommandContext(config, new VmService(), confirm, prompt, cancellationToken);
-        await foreach (var line in Dispatch(context, options))
+        InitStore.Initialize(config.Images.StoreRoot);
+        using var services = CoreBridgeContainer.Create(config);
+        var cli = MultipassCliFactory.Create(services);
+        var context = new CommandContext(config, new VmService(cli), factory, cancellationToken, new GitCli());
+        if (cli is IMultipassDouble && options is RepoSendOptions or RepoReceiveOptions)
         {
-            yield return line;
+            // git auf dem Host erreicht keine simulierte VM.
+            throw new ProgramExecutionException(1, "repo-send/repo-receive are not supported in simulation — git has to run inside a real VM.");
         }
+
+        if (cli is IMultipassDouble multipassDouble && options is not (InitConfigureOptions or InitListOptions or InitDeleteOptions or MultipassRestartOptions))
+        {
+            // Unübersehbar, damit niemand Ergebnisse einer Attrappe für echte VMs hält.
+            await factory.Emit(factory.Err($"[{multipassDouble.BinaryLabel}] kein echtes Multipass ({cli.GetType().Name})."));
+        }
+
+        await Dispatch(context, options);
     }
 
-    private static IAsyncEnumerable<string> Dispatch(CommandContext context, IOptions options)
+    private static Task Dispatch(CommandContext context, IOptions options)
     {
-        var (config, vms, cancellationToken) = (context.Config, context.Vms, context.CancellationToken);
         return options switch
         {
-            MultipassStatusOptions => RunMultipassStatus(cancellationToken),
+            MultipassStatusOptions => RunMultipassStatus(context),
             MultipassRestartOptions => RunMultipassRestart(context),
-            VmListOptions => RunVmList(vms, context.DefaultTimeoutMs, cancellationToken),
+            VmListOptions => RunVmList(context),
             VmCreateOptions o => RunVmCreate(context, o),
             VmStartOptions o => RunVmStart(context, o),
             VmStopOptions o => RunVmStop(context, o),
@@ -326,9 +288,17 @@ public static class Program
             VmConnectOptions o => RunVmConnect(context, o),
             VmPutOptions o => RunVmPut(context, o),
             VmGetOptions o => RunVmGet(context, o),
-            ImageConfigureOptions o => RunImageConfigure(config, o, cancellationToken),
-            ImageListOptions => RunImageList(config, cancellationToken),
-            ImageDeleteOptions o => RunImageDelete(config, o, cancellationToken),
+            VmCloneOptions o => RunVmClone(context, o),
+            VmSnapshotOptions o => RunVmSnapshot(context, o),
+            VmSnapshotsOptions o => RunVmSnapshots(context, o),
+            VmRestoreOptions o => RunVmRestore(context, o),
+            VmInstallOptions o => RunVmInstall(context, o),
+            VmResizeOptions o => RunVmResize(context, o),
+            RepoSendOptions o => RunRepoSend(context, o),
+            RepoReceiveOptions o => RunRepoReceive(context, o),
+            InitConfigureOptions o => RunInitConfigure(context, o),
+            InitListOptions => RunInitList(context),
+            InitDeleteOptions o => RunInitDelete(context, o),
             _ => throw new MultipassException($"Unbekannter CLI-Options-Typ: {options.GetType().Name}")
         };
     }
@@ -394,11 +364,11 @@ public static class Program
     /// Liefert stdout des Multipass-Aufrufs zeilenweise. Bei Exit ≠ 0 folgt die
     /// Exception mit stderr; sonst wird stderr als reguläre Meldung geliefert.
     /// </summary>
-    private static IEnumerable<string> Report(MultipassRunResult result)
+    private static async Task Report(EventFactory events, MultipassRunResult result)
     {
         foreach (var line in Lines(result.StdOut))
         {
-            yield return line;
+            await events.Emit(events.Std(line));
         }
 
         if (result.ExitCode != 0)
@@ -408,14 +378,22 @@ public static class Program
 
         foreach (var line in Lines(result.StdErr))
         {
-            yield return line;
+            await events.Emit(events.Std(line));
         }
     }
 
-    private static async IAsyncEnumerable<string> RunMultipassStatus(
-        [EnumeratorCancellation] CancellationToken cancellationToken)
+    private static async Task RunMultipassStatus(CommandContext context)
     {
-        var report = await Task.Run(() => Doctor.Check(), cancellationToken);
+        var events = context.Events;
+
+        // Bei Wiedergabe/Simulation gibt es weder Binary noch Daemon: den
+        // Pseudo-Pfad melden, damit der Erfolgspfad (Parsing der Version) durchläuft.
+        var cli = context.Vms.Cli;
+        var report = await Task.Run(
+            () => cli is IMultipassDouble multipassDouble
+                ? Doctor.Check(() => multipassDouble.BinaryLabel, cli)
+                : Doctor.Check(cli: cli),
+            context.CancellationToken);
         if (!report.Found)
         {
             var message = new StringBuilder("Multipass nicht gefunden.\n");
@@ -427,51 +405,57 @@ public static class Program
             throw new ProgramExecutionException(1, message.ToString());
         }
 
-        yield return $"Binary:  {report.BinaryPath}";
-        yield return $"CLI:     {report.ClientVersion ?? "unbekannt"}";
-        yield return $"Daemon:  {report.DaemonVersion ?? "keine Antwort"}";
+        await events.Emit(events.Std($"Binary:  {report.BinaryPath}"));
+        await events.Emit(events.Std($"CLI:     {report.ClientVersion ?? "unbekannt"}"));
+        await events.Emit(events.Std($"Daemon:  {report.DaemonVersion ?? "keine Antwort"}"));
         if (report.Error is not null)
         {
-            yield return string.Empty;
-            yield return $"Hinweis: {report.Error}";
+            await events.Emit(events.Std(string.Empty));
+            await events.Emit(events.Std($"Hinweis: {report.Error}"));
             foreach (var line in Lines(report.RawVersionOutput ?? string.Empty))
             {
-                yield return line;
+                await events.Emit(events.Std(line));
             }
         }
     }
 
-    private static async IAsyncEnumerable<string> RunMultipassRestart(CommandContext context)
+    private static async Task RunMultipassRestart(CommandContext context)
     {
+        var events = context.Events;
         var cancellationToken = context.CancellationToken;
         var timeout = context.Config.DefaultTimeout.ReadTime();
         var stopwatch = System.Diagnostics.Stopwatch.StartNew();
         var service = new MultipassService(commandTimeout: timeout);
         if (!service.IsElevated())
         {
-            yield return $"Warnung: Der Neustart des Dienstes {MultipassService.ServiceName} benötigt Administratorrechte.";
-            if (!context.Confirm("Mit Administratorrechten in einem neuen Fenster fortfahren?"))
+            await events.Emit(events.Std($"Warnung: Der Neustart des Dienstes {MultipassService.ServiceName} benötigt Administratorrechte."));
+            if (!await context.ConfirmAsync("Mit Administratorrechten in einem neuen Fenster fortfahren?"))
             {
                 throw new ProgramExecutionException(1, "Abgebrochen — ohne Administratorrechte kein Neustart.");
             }
 
-            yield return "Starte erhöht (UAC-Abfrage) — Ausgabe und Rückfragen folgen im Administratorfenster ...";
+            await events.Emit(events.Std("Starte erhöht (UAC-Abfrage) — Ausgabe und Rückfragen folgen im Administratorfenster ..."));
             var exitCode = await RunElevatedAsync(context.Config.DefaultTimeout, cancellationToken);
             if (exitCode != 0)
             {
                 throw new ProgramExecutionException(exitCode, $"multipass-restart im Administratorfenster fehlgeschlagen (Exit {exitCode}).");
             }
 
-            yield return $"multipass-restart: OK ({stopwatch.Elapsed.TotalSeconds:F1} s, erhöht) — State: {service.QueryState()}";
-            yield break;
+            await events.Emit(events.Std($"multipass-restart: OK ({stopwatch.Elapsed.TotalSeconds:F1} s, erhöht) — State: {service.QueryState()}"));
+            return;
         }
 
-        await foreach (var line in service.Restart(timeout, context.Confirm, cancellationToken))
+        // MultipassService erwartet Func<string,bool>; die blockiert auf einem
+        // Threadpool-Thread, während der Konsument den Kanal bedient.
+        bool ConfirmInCore(string question)
+            => events.Ask(events.Choice<YesNoOptions>(question)) == YesNoOptions.Yes;
+
+        await foreach (var line in service.Restart(timeout, ConfirmInCore, cancellationToken))
         {
-            yield return line;
+            await events.Emit(line == Progress.ProgressTick ? events.Tick() : events.Std(line));
         }
 
-        yield return $"multipass-restart: OK ({stopwatch.Elapsed.TotalSeconds:F1} s) — State: {service.QueryState()}";
+        await events.Emit(events.Std($"multipass-restart: OK ({stopwatch.Elapsed.TotalSeconds:F1} s) — State: {service.QueryState()}"));
     }
 
     /// <summary>
@@ -520,22 +504,20 @@ public static class Program
         return elevated.ExitCode;
     }
 
-    private static async IAsyncEnumerable<string> RunVmList(
-        VmService vms,
-        int timeoutMs,
-        [EnumeratorCancellation] CancellationToken cancellationToken)
+    private static async Task RunVmList(CommandContext context)
     {
-        var list = await Task.Run(() => vms.List(timeoutMs), cancellationToken);
+        var events = context.Events;
+        var list = await Task.Run(() => context.Vms.List(context.DefaultTimeoutMs), context.CancellationToken);
         if (list.Count == 0)
         {
-            yield return "No VMs — create one with `cb vm-create -n <name>`.";
-            yield break;
+            await events.Emit(events.Std("No VMs — create one with `cb vm-create -n <name>`."));
+            return;
         }
 
-        yield return $"{"Name",-30} {"State",-10} IPv4";
+        await events.Emit(events.Std($"{"Name",-30} {"State",-10} IPv4"));
         foreach (var vm in list)
         {
-            yield return $"{vm.Name,-30} {vm.State ?? "?",-10} {string.Join(", ", vm.Ipv4)}";
+            await events.Emit(events.Std($"{vm.Name,-30} {vm.State ?? "?",-10} {string.Join(", ", vm.Ipv4)}"));
         }
     }
 
@@ -550,14 +532,15 @@ public static class Program
     /// läuft der Launch im Multipass-Daemon weiter, und der Benutzer kann ein
     /// Folgekommando eingeben, das wie ein normaler CLI-Aufruf ausgeführt wird.
     /// </summary>
-    private static async IAsyncEnumerable<string> RunVmCreate(CommandContext context, VmCreateOptions options)
+    private static async Task RunVmCreate(CommandContext context, VmCreateOptions options)
     {
+        var events = context.Events;
         var (config, vms, cancellationToken) = (context.Config, context.Vms, context.CancellationToken);
         var waitSlice = config.DefaultTimeoutVmCreation.ReadTime();
         var requestedImage = string.IsNullOrWhiteSpace(options.Image)
             ? config.Images.DefaultRuntimeImage
             : options.Image.Trim();
-        var profile = ImageProfileResolver.Resolve(config.Images, requestedImage, options.CloudInit);
+        var profile = InitProfileResolver.Resolve(config.Images, requestedImage, options.CloudInit);
         var launchImage = profile?.RuntimeImage ?? requestedImage;
         var cloudInit = options.CloudInit ?? profile?.CloudInitPath;
         if (!VmNamePattern.IsMatch(options.Name))
@@ -572,30 +555,27 @@ public static class Program
             throw new ProgramExecutionException(1, $"cloud-init file not found: {cloudInit}");
         }
 
-        await foreach (var line in ReplaceExistingVm(context, options.Name))
-        {
-            yield return line;
-        }
+        await ReplaceExistingVm(context, options.Name);
 
-        yield return $"Lege VM `{options.Name}` an (Image: {requestedImage}"
+        await events.Emit(events.Std($"Lege VM `{options.Name}` an (Image: {requestedImage}"
             + (profile is null ? string.Empty : $" → Runtime: {launchImage}")
             + $"{(options.Disk is null ? string.Empty : $", Disk: {options.Disk}")}"
-            + $"{(cloudInit is null ? string.Empty : ", cloud-init")}) ...";
+            + $"{(cloudInit is null ? string.Empty : ", cloud-init")}) ..."));
 
         var stopwatch = System.Diagnostics.Stopwatch.StartNew();
         MultipassRunResult? result;
         try
         {
-            result = await Task.Run(
+            result = await WithProgress(
+                context,
                 () => vms.Create(
                     options.Name,
                     launchImage,
                     options.Disk,
                     cloudInit,
                     waitSlice,
-                    () => context.Confirm(
-                        $"VM `{options.Name}` is not ready after {stopwatch.Elapsed.TotalSeconds:F0} s — keep waiting?")),
-                cancellationToken);
+                    () => context.Events.Ask(context.Events.Choice<YesNoOptions>(
+                        $"VM `{options.Name}` is not ready after {stopwatch.Elapsed.TotalSeconds:F0} s — keep waiting?")) == YesNoOptions.Yes));
         }
         catch (MultipassTimeoutException)
         {
@@ -604,11 +584,11 @@ public static class Program
 
         if (result is null)
         {
-            yield return "Stopped waiting — Multipass keeps creating the VM in the background (check with `cb vm-list`).";
-            var followUp = context.Prompt("Follow-up command (empty = quit): ");
+            await events.Emit(events.Std("Stopped waiting — Multipass keeps creating the VM in the background (check with `cb vm-list`)."));
+            var followUp = await context.PromptAsync("Follow-up command (empty = quit): ");
             if (string.IsNullOrWhiteSpace(followUp))
             {
-                yield break;
+                return;
             }
 
             if (!TryParseOptions(SplitCommandLine(followUp), out var followUpOptions, out _))
@@ -617,19 +597,15 @@ public static class Program
             }
 
             var followUpContext = context with { Config = ApplyTimeoutOverride(context.Config, followUpOptions) };
-            await foreach (var line in Dispatch(followUpContext, followUpOptions))
-            {
-                yield return line;
-            }
-
-            yield break;
+            await Dispatch(followUpContext, followUpOptions);
+            return;
         }
 
         if (result.ExitCode != 0)
         {
             foreach (var line in Lines(result.StdOut))
             {
-                yield return line;
+                await events.Emit(events.Std(line));
             }
 
             throw Failure(result);
@@ -637,35 +613,31 @@ public static class Program
 
         if (profile is not null)
         {
-            yield return $"Image-Profil: {profile.Name} (Runtime: {profile.RuntimeImage})";
-            yield return "Gast-Provisionierung: cloud-init";
+            await events.Emit(events.Std($"Profil: {profile.Name} (Runtime: {profile.RuntimeImage})"));
+            await events.Emit(events.Std("Gast-Provisionierung: cloud-init"));
         }
 
-        yield return await Completed(vms, options.Name, $"create {options.Name}", result, cancellationToken);
-    }
+        await events.Emit(events.Std(await Completed(vms, options.Name, $"create {options.Name}", result, cancellationToken)));
 
-    private static async IAsyncEnumerable<string> RunVmExec(CommandContext context, VmExecOptions options)
-    {
-        await foreach (var line in EnsureRunning(context, options.Name))
+        if (cloudInit is not null)
         {
-            yield return line;
-        }
-
-        var result = await Task.Run(
-            () => context.Vms.Exec(options.Name, options.Command, context.DefaultTimeoutMs),
-            context.CancellationToken);
-        foreach (var line in Report(result))
-        {
-            yield return line;
+            await OfferSnapshotAfterConfiguration(context, options.Name, profile?.Name ?? "provisioned", options.Snapshot);
         }
     }
 
-    private static async IAsyncEnumerable<string> RunVmConnect(CommandContext context, VmConnectOptions options)
+    private static async Task RunVmExec(CommandContext context, VmExecOptions options)
     {
-        await foreach (var line in EnsureRunning(context, options.Name))
-        {
-            yield return line;
-        }
+        await EnsureRunning(context, options.Name);
+
+        var result = await WithProgress(
+            context,
+            () => context.Vms.Exec(options.Name, options.Command, context.DefaultTimeoutMs));
+        await Report(context.Events, result);
+    }
+
+    private static async Task RunVmConnect(CommandContext context, VmConnectOptions options)
+    {
+        await EnsureRunning(context, options.Name);
 
         var exitCode = await Task.Run(() => context.Vms.Connect(options.Name), context.CancellationToken);
         if (exitCode != 0)
@@ -674,7 +646,7 @@ public static class Program
         }
     }
 
-    private static async IAsyncEnumerable<string> RunVmStart(CommandContext context, VmStartOptions options)
+    private static async Task RunVmStart(CommandContext context, VmStartOptions options)
     {
         var name = options.Name;
         var vm = await RequireVm(context, name);
@@ -685,22 +657,18 @@ public static class Program
 
         if (vm.IsRunning)
         {
-            yield return $"start {name}: OK (lief bereits) — State: Running";
-            yield break;
+            await context.Events.Emit(context.Events.Std($"start {name}: OK (lief bereits) — State: Running"));
+            return;
         }
 
-        await foreach (var line in RunVmStateCommand(
-            context.Vms,
+        await RunVmStateCommand(
+            context,
             name,
             $"start {name}",
-            () => context.Vms.Start(name, context.DefaultTimeoutMs, KeepWaiting(context, $"start {name}")),
-            context.CancellationToken))
-        {
-            yield return line;
-        }
+            () => context.Vms.Start(name, context.DefaultTimeoutMs, KeepWaiting(context, $"start {name}")));
     }
 
-    private static async IAsyncEnumerable<string> RunVmStop(CommandContext context, VmStopOptions options)
+    private static async Task RunVmStop(CommandContext context, VmStopOptions options)
     {
         var name = options.Name;
         var vm = await RequireVm(context, name);
@@ -711,20 +679,17 @@ public static class Program
 
         if (vm.IsStopped)
         {
-            yield return $"stop {name}: OK (was already stopped) — State: {vm.State}";
-            yield break;
+            await context.Events.Emit(context.Events.Std($"stop {name}: OK (was already stopped) — State: {vm.State}"));
+            return;
         }
 
         if (vm.IsTransitional
-            && !context.Confirm($"VM `{name}` is {vm.State} — Multipass can only power it off (--force). Power it off?"))
+            && !await context.ConfirmAsync($"VM `{name}` is {vm.State} — Multipass can only power it off (--force). Power it off?"))
         {
             throw new ProgramExecutionException(1, $"Cancelled — VM `{name}` was not stopped (State: {vm.State}).");
         }
 
-        await foreach (var line in StopVm(context, vm))
-        {
-            yield return line;
-        }
+        await StopVm(context, vm);
     }
 
     /// <summary>
@@ -732,16 +697,15 @@ public static class Program
     /// mit <c>--force</c>, weil Multipass den normalen Stop dort ablehnt. Die
     /// Rückfrage dazu stellt der Aufrufer.
     /// </summary>
-    private static IAsyncEnumerable<string> StopVm(CommandContext context, VmInfo vm)
+    private static Task StopVm(CommandContext context, VmInfo vm)
     {
         var force = vm.IsTransitional;
         var label = force ? $"stop --force {vm.Name}" : $"stop {vm.Name}";
         return RunVmStateCommand(
-            context.Vms,
+            context,
             vm.Name,
             label,
-            () => context.Vms.Stop(vm.Name, context.DefaultTimeoutMs, KeepWaiting(context, label), force),
-            context.CancellationToken);
+            () => context.Vms.Stop(vm.Name, context.DefaultTimeoutMs, KeepWaiting(context, label), force));
     }
 
     /// <summary>
@@ -749,59 +713,52 @@ public static class Program
     /// Löschen einer laufenden VM wird gefragt; eine VM im Papierkorb ohne
     /// <c>--purge</c> ist bereits gelöscht.
     /// </summary>
-    private static async IAsyncEnumerable<string> RunVmDelete(CommandContext context, VmDeleteOptions options)
+    private static async Task RunVmDelete(CommandContext context, VmDeleteOptions options)
     {
         var name = options.Name;
         var vm = await RequireVm(context, name);
         if (vm.IsDeleted && !options.Purge)
         {
-            yield return $"delete {name}: OK (already in the trash; --purge removes it for good) — State: Deleted";
-            yield break;
+            await context.Events.Emit(context.Events.Std($"delete {name}: OK (already in the trash; --purge removes it for good) — State: Deleted"));
+            return;
         }
 
         if (!vm.IsDeleted
             && !vm.IsStopped
-            && !context.Confirm($"VM `{name}` is {vm.State} — stop and delete it?"))
+            && !await context.ConfirmAsync($"VM `{name}` is {vm.State} — stop and delete it?"))
         {
             throw new ProgramExecutionException(1, $"Cancelled — VM `{name}` was not deleted (State: {vm.State}).");
         }
 
         if (!vm.IsDeleted && !vm.IsStopped)
         {
-            await foreach (var line in StopVm(context, vm))
-            {
-                yield return line;
-            }
+            await StopVm(context, vm);
         }
 
         var label = $"delete {name}{(options.Purge ? " --purge" : string.Empty)}";
-        await foreach (var line in RunVmStateCommand(
-            context.Vms,
+        await RunVmStateCommand(
+            context,
             name,
             label,
-            () => context.Vms.Delete(name, options.Purge, context.DefaultTimeoutMs, KeepWaiting(context, label)),
-            context.CancellationToken))
-        {
-            yield return line;
-        }
+            () => context.Vms.Delete(name, options.Purge, context.DefaultTimeoutMs, KeepWaiting(context, label)));
     }
 
     /// <summary>
     /// Gibt es die VM schon (auch im Papierkorb), wird gefragt, ob sie gestoppt,
     /// endgültig gelöscht und neu angelegt werden darf; bei Nein bricht vm-create ab.
     /// </summary>
-    private static async IAsyncEnumerable<string> ReplaceExistingVm(CommandContext context, string name)
+    private static async Task ReplaceExistingVm(CommandContext context, string name)
     {
         var existing = await Task.Run(() => context.Vms.Find(name), context.CancellationToken);
         if (existing is null)
         {
-            yield break;
+            return;
         }
 
         var question = existing.IsDeleted
             ? $"VM `{name}` is still in the trash (Deleted) — purge it and create it again?"
             : $"VM `{name}` already exists ({existing.State}) — {(existing.IsStopped ? "delete" : "stop and delete")} it and create it again?";
-        if (!context.Confirm(question))
+        if (!await context.ConfirmAsync(question))
         {
             throw new ProgramExecutionException(
                 1,
@@ -810,21 +767,14 @@ public static class Program
 
         if (!existing.IsDeleted && !existing.IsStopped)
         {
-            await foreach (var line in StopVm(context, existing))
-            {
-                yield return line;
-            }
+            await StopVm(context, existing);
         }
 
-        await foreach (var line in RunVmStateCommand(
-            context.Vms,
+        await RunVmStateCommand(
+            context,
             name,
             $"delete {name} --purge",
-            () => context.Vms.Delete(name, purge: true, context.DefaultTimeoutMs, KeepWaiting(context, $"delete {name}")),
-            context.CancellationToken))
-        {
-            yield return line;
-        }
+            () => context.Vms.Delete(name, purge: true, context.DefaultTimeoutMs, KeepWaiting(context, $"delete {name}")));
     }
 
     /// <summary>
@@ -832,8 +782,13 @@ public static class Program
     /// es eine fertige Meldung; ist sie gestoppt, wird nach Rückfrage gestartet.
     /// Übergangszustände (Starting, Restarting …) wartet Multipass selbst ab.
     /// </summary>
-    private static async IAsyncEnumerable<string> EnsureRunning(CommandContext context, string name)
+    /// <param name="ask">
+    /// <c>false</c>: ohne Rückfrage starten — für Befehle, die eine laufende VM
+    /// ausdrücklich voraussetzen (<c>vm-install</c>).
+    /// </param>
+    private static async Task EnsureRunning(CommandContext context, string name, bool ask = true)
     {
+        var events = context.Events;
         var vm = await RequireVm(context, name);
         if (vm.IsDeleted)
         {
@@ -842,28 +797,24 @@ public static class Program
 
         if (vm.IsTransitional)
         {
-            yield return $"VM `{name}` is {vm.State} — waiting for it to come up (if it hangs: `cb vm-stop -n {name}` powers it off) ...";
+            await events.Emit(events.Std($"VM `{name}` is {vm.State} — waiting for it to come up (if it hangs: `cb vm-stop -n {name}` powers it off) ..."));
         }
 
         if (!vm.IsStopped)
         {
-            yield break;
+            return;
         }
 
-        if (!context.Confirm($"VM `{name}` is {vm.State} — start it now?"))
+        if (ask && !await context.ConfirmAsync($"VM `{name}` is {vm.State} — start it now?"))
         {
             throw new ProgramExecutionException(1, $"Cancelled — VM `{name}` is {vm.State}; start it with `cb vm-start -n {name}`.");
         }
 
-        await foreach (var line in RunVmStateCommand(
-            context.Vms,
+        await RunVmStateCommand(
+            context,
             name,
             $"start {name}",
-            () => context.Vms.Start(name, context.DefaultTimeoutMs, KeepWaiting(context, $"start {name}")),
-            context.CancellationToken))
-        {
-            yield return line;
-        }
+            () => context.Vms.Start(name, context.DefaultTimeoutMs, KeepWaiting(context, $"start {name}")));
     }
 
     /// <summary>VM laut vm-list; fehlt sie, gibt es eine fertige Meldung mit den vorhandenen Namen.</summary>
@@ -888,36 +839,77 @@ public static class Program
 
     /// <summary>
     /// Rückfrage „weiter warten?“ für VM-Kommandos, die länger als
-    /// <c>DefaultTimeout</c> brauchen; die Zeit läuft ab Erzeugung.
+    /// <c>DefaultTimeout</c> brauchen; die Zeit läuft ab Erzeugung. Wird von
+    /// CoreBridge.Core auf einem Threadpool-Thread aufgerufen, kann also nicht
+    /// <c>await</c>en — der <see cref="EventFactory.Ask{T}"/>-Weg blockiert
+    /// stattdessen, während der Konsument die Frage über den Kanal beantwortet.
     /// </summary>
     private static Func<bool> KeepWaiting(CommandContext context, string label)
     {
         var stopwatch = System.Diagnostics.Stopwatch.StartNew();
-        return () => context.Confirm($"`{label}` is still running after {stopwatch.Elapsed.TotalSeconds:F0} s — keep waiting?");
+        return () => context.Events.Ask(context.Events.Choice<YesNoOptions>(
+            $"`{label}` is still running after {stopwatch.Elapsed.TotalSeconds:F0} s — keep waiting?")) == YesNoOptions.Yes;
+    }
+
+    /// <summary>Abstand der Fortschritts-Ticks während einer lang laufenden Multipass-Aktion.</summary>
+    private static readonly TimeSpan ProgressInterval = TimeSpan.FromMilliseconds(200);
+
+    /// <summary>
+    /// Führt eine blockierende Multipass-Aktion auf dem Threadpool aus und meldet
+    /// währenddessen alle <see cref="ProgressInterval"/> einen Tick, den der
+    /// <see cref="ConsoleAdapter"/> als Spinner zeichnet. Solange eine Rückfrage
+    /// offen ist (etwa „weiter warten?“ aus <c>keepWaiting</c>), pausiert er —
+    /// sonst schriebe er in die Eingabezeile.
+    /// </summary>
+    private static async Task<T> WithProgress<T>(CommandContext context, Func<T> action)
+    {
+        var events = context.Events;
+        var work = Task.Run(action, context.CancellationToken);
+        while (await Task.WhenAny(work, Task.Delay(ProgressInterval, context.CancellationToken)) != work)
+        {
+            if (events.OpenInteractionCount == 0)
+            {
+                await events.Emit(events.Tick());
+            }
+        }
+
+        return await work;
     }
 
     /// <summary>
     /// Führt ein zustandsänderndes VM-Kommando aus und meldet zum Schluss
     /// Erfolg, Dauer und den neuen State laut vm-list.
     /// </summary>
-    private static async IAsyncEnumerable<string> RunVmStateCommand(
-        VmService vms,
+    private static async Task RunVmStateCommand(
+        CommandContext context,
         string name,
         string label,
-        Func<MultipassRunResult> action,
-        [EnumeratorCancellation] CancellationToken cancellationToken)
+        Func<MultipassRunResult> action)
     {
-        yield return $"{label} ...";
-        var result = await Task.Run(action, cancellationToken);
-        if (result.ExitCode != 0)
+        var events = context.Events;
+        await events.Emit(events.Std($"{label} ..."));
+        MultipassRunResult result;
+        try
         {
-            foreach (var line in Report(result))
-            {
-                yield return line;
-            }
+            result = await WithProgress(context, action);
+        }
+        catch (MultipassTimeoutException)
+        {
+            // Hier endet ein Timeout nur, wenn der Benutzer "weiter warten?" verneint
+            // hat — der Daemon arbeitet weiter, der Dienst hängt nicht. Exit 1, weil
+            // ein folgender Schritt (Löschen nach Stopp, exec nach Start) nicht auf
+            // einem unfertigen Zustand aufsetzen darf.
+            throw new ProgramExecutionException(
+                1,
+                $"Stopped waiting — Multipass keeps running `{label}` in the background (check with `cb vm-list`).");
         }
 
-        yield return await Completed(vms, name, label, result, cancellationToken);
+        if (result.ExitCode != 0)
+        {
+            await Report(events, result);
+        }
+
+        await events.Emit(events.Std(await Completed(context.Vms, name, label, result, context.CancellationToken)));
     }
 
     /// <summary>Abschlusszeile: <c>&lt;label&gt;: OK (&lt;Dauer&gt;) — State: &lt;State&gt;</c>.</summary>
@@ -941,39 +933,32 @@ public static class Program
             ?.State;
     }
 
-    private static async IAsyncEnumerable<string> RunVmPut(CommandContext context, VmPutOptions options)
+    private static async Task RunVmPut(CommandContext context, VmPutOptions options)
     {
+        var events = context.Events;
         if (!File.Exists(options.Source))
         {
             throw new ProgramExecutionException(1, $"Quelldatei fehlt: {options.Source}");
         }
 
-        await foreach (var line in EnsureRunning(context, options.Name))
-        {
-            yield return line;
-        }
+        await EnsureRunning(context, options.Name);
 
-        yield return $"transfer {options.Source} → {options.Name} ...";
-        var result = await Task.Run(
-            () => context.Vms.Put(options.Source, options.Name, options.Destination, context.DefaultTimeoutMs),
-            context.CancellationToken);
+        await events.Emit(events.Std($"transfer {options.Source} → {options.Name} ..."));
+        var result = await WithProgress(
+            context,
+            () => context.Vms.Put(options.Source, options.Name, options.Destination, context.DefaultTimeoutMs));
         if (result.ExitCode != 0)
         {
-            foreach (var line in Report(result))
-            {
-                yield return line;
-            }
+            await Report(events, result);
         }
 
-        yield return $"transfer: OK ({result.DurationMs / 1000.0:F1} s)";
+        await events.Emit(events.Std($"transfer: OK ({result.DurationMs / 1000.0:F1} s)"));
     }
 
-    private static async IAsyncEnumerable<string> RunVmGet(CommandContext context, VmGetOptions options)
+    private static async Task RunVmGet(CommandContext context, VmGetOptions options)
     {
-        await foreach (var line in EnsureRunning(context, options.Name))
-        {
-            yield return line;
-        }
+        var events = context.Events;
+        await EnsureRunning(context, options.Name);
 
         var targetDirectory = Path.GetDirectoryName(Path.GetFullPath(options.Destination));
         if (!string.IsNullOrEmpty(targetDirectory) && !Directory.Exists(targetDirectory))
@@ -981,82 +966,857 @@ public static class Program
             Directory.CreateDirectory(targetDirectory);
         }
 
-        yield return $"transfer {options.Name}:{options.Remote} → {options.Destination} ...";
-        var result = await Task.Run(
-            () => context.Vms.Get(options.Name, options.Remote, options.Destination, context.DefaultTimeoutMs),
-            context.CancellationToken);
+        await events.Emit(events.Std($"transfer {options.Name}:{options.Remote} → {options.Destination} ..."));
+        var result = await WithProgress(
+            context,
+            () => context.Vms.Get(options.Name, options.Remote, options.Destination, context.DefaultTimeoutMs));
         if (!File.Exists(options.Destination))
         {
-            foreach (var line in Report(result))
-            {
-                yield return line;
-            }
-
-            yield break;
+            await Report(events, result);
+            return;
         }
 
         var megaBytes = new FileInfo(options.Destination).Length / (1024.0 * 1024.0);
-        yield return $"transfer: OK — {megaBytes:N0} MB ({result.DurationMs / 1000.0:F1} s)";
+        await events.Emit(events.Std($"transfer: OK — {megaBytes:N0} MB ({result.DurationMs / 1000.0:F1} s)"));
         if (result.ExitCode != 0)
         {
-            yield return $"Hinweis: Exit-Code {result.ExitCode} — {result.StdErr.Trim()}";
+            await events.Emit(events.Std($"Hinweis: Exit-Code {result.ExitCode} — {result.StdErr.Trim()}"));
         }
     }
 
-    private static async IAsyncEnumerable<string> RunImageConfigure(
-        AppConfig config,
-        ImageConfigureOptions options,
-        [EnumeratorCancellation] CancellationToken cancellationToken)
+    /// <summary>
+    /// Klont eine gestoppte VM (<c>multipass clone</c>); der Klon bringt alles mit,
+    /// was cloud-init in der Quelle installiert hat. Ein vorhandener Klon-Name wird
+    /// wie bei vm-create nur nach Rückfrage ersetzt.
+    /// </summary>
+    private static async Task RunVmClone(CommandContext context, VmCloneOptions options)
     {
+        var source = options.Source;
+        var destination = string.IsNullOrWhiteSpace(options.Name) ? null : options.Name.Trim();
+        if (destination is not null)
+        {
+            RequireValidName(destination);
+            if (string.Equals(source, destination, StringComparison.OrdinalIgnoreCase))
+            {
+                throw new ProgramExecutionException(1, $"The clone needs a name other than its source `{source}`.");
+            }
+        }
+
+        var vm = await RequireVm(context, source);
+        await EnsureStopped(context, vm, "cloning");
+        if (destination is not null)
+        {
+            await ReplaceExistingVm(context, destination);
+        }
+
+        // Ein Klon kopiert die ganze Disk — dafür ist DefaultTimeout zu knapp; wie
+        // vm-create wird in Abschnitten von DefaultTimeoutVmCreation gewartet.
+        var label = destination is null ? $"clone {source}" : $"clone {source} → {destination}";
+        var waitMs = (int)context.Config.DefaultTimeoutVmCreation.ReadTime().TotalMilliseconds;
+        MultipassRunResult result;
+        try
+        {
+            result = await RunReported(
+                context,
+                label,
+                () => context.Vms.Clone(source, destination, waitMs, KeepWaiting(context, label)));
+        }
+        catch (MultipassTimeoutException)
+        {
+            await context.Events.Emit(context.Events.Std(
+                "Stopped waiting — Multipass keeps cloning in the background (check with `cb vm-list`)."));
+            return;
+        }
+
+        var cloned = destination ?? ParseCloneName(result.StdOut);
+        await context.Events.Emit(context.Events.Std(cloned is null
+            ? $"{label}: OK ({result.DurationMs / 1000.0:F1} s)"
+            : await Completed(context.Vms, cloned, destination is null ? $"{label} → {cloned}" : label, result, context.CancellationToken)));
+        await context.Events.Emit(context.Events.Std($"Source `{source}` stays stopped — start it with `cb vm-start -n {source}`."));
+    }
+
+    /// <summary>Klon-Name aus „Cloned from &lt;source&gt; to &lt;name&gt;.“; <c>null</c>, wenn die Zeile fehlt.</summary>
+    private static string? ParseCloneName(string stdOut)
+    {
+        var match = System.Text.RegularExpressions.Regex.Match(stdOut, @"\bto\s+""?([A-Za-z][A-Za-z0-9-]*)");
+        return match.Success ? match.Groups[1].Value : null;
+    }
+
+    /// <summary>Sichert den Stand einer gestoppten VM (<c>multipass snapshot</c>).</summary>
+    private static async Task RunVmSnapshot(CommandContext context, VmSnapshotOptions options)
+    {
+        var name = options.Name;
+        var snapshot = string.IsNullOrWhiteSpace(options.Snapshot) ? null : options.Snapshot.Trim();
+        if (snapshot is not null)
+        {
+            RequireValidName(snapshot);
+        }
+
+        var vm = await RequireVm(context, name);
+        if (snapshot is not null)
+        {
+            var existing = await Task.Run(() => context.Vms.ListSnapshots(name, context.DefaultTimeoutMs), context.CancellationToken);
+            if (existing.Any(s => string.Equals(s.Name, snapshot, StringComparison.OrdinalIgnoreCase)))
+            {
+                throw new ProgramExecutionException(
+                    1,
+                    $"VM `{name}` already has a snapshot `{snapshot}` — pick another name (existing: {string.Join(", ", existing.Select(s => s.Name))}).");
+            }
+        }
+
+        await EnsureStopped(context, vm, "the snapshot");
+
+        var label = snapshot is null ? $"snapshot {name}" : $"snapshot {name}.{snapshot}";
+        var result = await RunReported(
+            context,
+            label,
+            () => context.Vms.Snapshot(name, snapshot, options.Comment, context.DefaultTimeoutMs, KeepWaiting(context, label)));
+        await context.Events.Emit(context.Events.Std(await Completed(context.Vms, name, label, result, context.CancellationToken)));
+    }
+
+    private static async Task RunVmSnapshots(CommandContext context, VmSnapshotsOptions options)
+    {
+        var events = context.Events;
+        var name = string.IsNullOrWhiteSpace(options.Name) ? null : options.Name.Trim();
+        if (name is not null)
+        {
+            await RequireVm(context, name);
+        }
+
+        var snapshots = await Task.Run(() => context.Vms.ListSnapshots(name, context.DefaultTimeoutMs), context.CancellationToken);
+        if (snapshots.Count == 0)
+        {
+            await events.Emit(events.Std(name is null
+                ? "No snapshots — take one with `cb vm-snapshot -n <vm>`."
+                : $"VM `{name}` has no snapshots — take one with `cb vm-snapshot -n {name}`."));
+            return;
+        }
+
+        await events.Emit(events.Std($"{"VM",-30} {"Snapshot",-20} {"Parent",-20} Comment"));
+        foreach (var snapshot in snapshots)
+        {
+            await events.Emit(events.Std($"{snapshot.Instance,-30} {snapshot.Name,-20} {(string.IsNullOrEmpty(snapshot.Parent) ? "--" : snapshot.Parent),-20} {snapshot.Comment}"));
+        }
+    }
+
+    /// <summary>
+    /// Setzt eine gestoppte VM auf einen Snapshot zurück. Der aktuelle Stand wird
+    /// vorher als Snapshot gesichert, außer der Benutzer verwirft ihn ausdrücklich —
+    /// ohne interaktive Eingabe (Antwort Nein) wird also immer gesichert.
+    /// </summary>
+    private static async Task RunVmRestore(CommandContext context, VmRestoreOptions options)
+    {
+        var events = context.Events;
+        var (name, snapshot) = (options.Name, options.Snapshot);
+        var vm = await RequireVm(context, name);
+        var snapshots = await Task.Run(() => context.Vms.ListSnapshots(name, context.DefaultTimeoutMs), context.CancellationToken);
+        if (!snapshots.Any(s => string.Equals(s.Name, snapshot, StringComparison.OrdinalIgnoreCase)))
+        {
+            throw new ProgramExecutionException(
+                1,
+                $"VM `{name}` has no snapshot `{snapshot}`. "
+                + (snapshots.Count == 0
+                    ? $"Take one with `cb vm-snapshot -n {name}`."
+                    : $"Existing snapshots: {string.Join(", ", snapshots.Select(s => s.Name))}."));
+        }
+
+        await EnsureStopped(context, vm, "the restore");
+
+        if (!await context.ConfirmAsync($"Discard the current state of `{name}` without a backup snapshot?"))
+        {
+            var backupLabel = $"snapshot {name} (backup before restore)";
+            var backup = await RunReported(
+                context,
+                backupLabel,
+                () => context.Vms.Snapshot(
+                    name,
+                    comment: $"Backup before restore to {snapshot}",
+                    timeoutMs: context.DefaultTimeoutMs,
+                    keepWaiting: KeepWaiting(context, backupLabel)));
+            await events.Emit(events.Std($"{backupLabel}: OK ({backup.DurationMs / 1000.0:F1} s)"));
+        }
+
+        var label = $"restore {name}.{snapshot}";
+        var result = await RunReported(
+            context,
+            label,
+            () => context.Vms.Restore(name, snapshot, context.DefaultTimeoutMs, KeepWaiting(context, label)));
+        await events.Emit(events.Std(await Completed(context.Vms, name, label, result, context.CancellationToken)));
+    }
+
+    /// <summary>
+    /// Vergrößert die Disk einer VM (<c>multipass set local.&lt;vm&gt;.disk</c>). Multipass
+    /// ändert nur gestoppte VMs und verkleinert nie — beides wird geprüft, bevor eine
+    /// laufende VM (nach Rückfrage) gestoppt wird; sie startet danach wieder, und der
+    /// Gast zieht seine Root-Partition beim Boot per cloud-init <c>growpart</c> nach.
+    /// </summary>
+    private static async Task RunVmResize(CommandContext context, VmResizeOptions options)
+    {
+        var events = context.Events;
+        var name = options.Name;
+        var size = options.Disk.Trim();
+        if (!MultipassSize.TryParse(size, out var requested))
+        {
+            throw new ProgramExecutionException(
+                1,
+                $"Invalid disk size `{size}` — use a number followed by K, M or G, e.g. 20G or 0.5G.");
+        }
+
+        var vm = await RequireVm(context, name);
+        if (vm.IsDeleted)
+        {
+            throw InTrash(name);
+        }
+
+        var current = await Task.Run(() => context.Vms.GetDisk(name, context.DefaultTimeoutMs), context.CancellationToken);
+        if (MultipassSize.TryParse(current, out var currentBytes))
+        {
+            if (requested < currentBytes)
+            {
+                throw new ProgramExecutionException(
+                    1,
+                    $"VM `{name}` has a {current} disk — Multipass can only grow it, not shrink it to {size}.");
+            }
+
+            if (requested == currentBytes)
+            {
+                await events.Emit(events.Std($"resize {name}: OK (disk is already {current}) — State: {vm.State}"));
+                return;
+            }
+        }
+
+        var wasRunning = !vm.IsStopped;
+        await EnsureStopped(context, vm, "the resize");
+
+        var label = $"resize {name} disk {current} -> {size}";
+        var result = await RunReported(
+            context,
+            label,
+            () => context.Vms.SetDisk(name, size, context.DefaultTimeoutMs, KeepWaiting(context, label)));
+        var resized = await Task.Run(() => context.Vms.GetDisk(name, context.DefaultTimeoutMs), context.CancellationToken);
+        await events.Emit(events.Std($"{label}: OK ({result.DurationMs / 1000.0:F1} s) — disk now {resized}"));
+
+        if (!wasRunning)
+        {
+            await events.Emit(events.Std($"VM `{name}` stays stopped — the guest grows its root partition to the new size on the next start (`cb vm-start -n {name}`)."));
+            return;
+        }
+
+        await RunVmStateCommand(
+            context,
+            name,
+            $"start {name}",
+            () => context.Vms.Start(name, context.DefaultTimeoutMs, KeepWaiting(context, $"start {name}")));
+        await events.Emit(events.Std($"cloud-init grows the root partition while booting — check with `cb vm-exec -n {name} -c \"df -h /\"`."));
+    }
+
+    /// <summary>
+    /// Schickt <c>main</c> eines Host-Repositorys in eine VM (wiederholbar): prüft die git-Komponente,
+    /// legt das Bare-Repo an, bringt <c>main</c> samt Historie als Bundle hinein (beim
+    /// nächsten Mal nur, was neu ist) und klont bzw. fetcht die Arbeitskopie. Fehlt die
+    /// git-Komponente, wird nichts angelegt (fail closed).
+    /// </summary>
+    private static async Task RunRepoSend(CommandContext context, RepoSendOptions options)
+    {
+        var events = context.Events;
+        var name = options.Name;
+        var (root, repo) = await ResolveRepo(context, options.Repo);
+        var hostMain = await RunGit(context, root, "rev-parse", "--verify", "--quiet", SandboxRepo.MainRef);
+        if (hostMain.ExitCode != 0)
+        {
+            throw new ProgramExecutionException(1, $"Repository `{root}` has no branch `main` — repo-send transfers `main`.");
+        }
+
+        await EnsureRunning(context, name);
+        await RequireGitComponent(context, name);
+
+        var bare = SandboxRepo.BareDir(repo);
+        await RunVmStep(context, name, $"bare repo {bare}", SandboxRepo.InitBareCommand(repo));
+
+        var vmRefs = RequireVmSuccess($"refs of {name}", await VmQuery(context, name, SandboxRepo.ListRefsCommand(repo, SandboxRepo.MainRef)));
+        var vmMain = SandboxRepo.ParseRefs(vmRefs.StdOut).GetValueOrDefault(SandboxRepo.MainRef);
+        if (vmMain == hostMain.StdOut.Trim())
+        {
+            await events.Emit(events.Std($"main in {name}: up to date ({vmMain[..7]})"));
+        }
+        else
+        {
+            // Nur das Neue bündeln, wenn der Host den Stand der VM kennt; sonst alles (git
+            // lehnt beim Einlesen ab, was kein Vorspulen ist — wie ein push ohne --force).
+            var incremental = vmMain is not null && await HostHasCommit(context, root, vmMain);
+            string[] range = incremental ? ["main", $"^{vmMain}"] : ["main"];
+            await TransferBundleToVm(context, root, name, repo, range, incremental ? "new commits of main" : "main with full history");
+        }
+
+        await RunVmStep(context, name, $"workspace {SandboxRepo.WorkDir(repo)}", SandboxRepo.WorkspaceCommand(name, repo));
+        var work = SandboxRepo.WorkDir(repo);
+        await events.Emit(events.Std($"main of `{repo}` is in `{name}`: {work}."));
+        await events.Emit(events.Std(
+            $"Work there on a branch claude/<id> and push it to origin; bring it back with `cb repo-receive -n {name} -i <id>` (from a checkout with main checked out)."));
+    }
+
+    /// <summary>Bundle auf dem Host packen, per transfer in die VM legen und dort ins Bare-Repo einlesen; temporäre Dateien werden auf beiden Seiten entfernt.</summary>
+    private static async Task TransferBundleToVm(CommandContext context, string root, string name, string repo, string[] range, string what)
+    {
+        var local = Path.Combine(Path.GetTempPath(), $"corebridge-{Guid.NewGuid():N}.bundle");
+        var remote = SandboxRepo.VmBundlePath(repo, "main");
+        try
+        {
+            await RunGitReported(context, root, $"git bundle ({what})", ["bundle", "create", "-q", local, .. range]);
+            await RunTransfer(context, $"transfer bundle ({new FileInfo(local).Length / 1024.0:F1} KiB) → {name}", () => context.Vms.Put(local, name, remote, TransferTimeoutMs(context)));
+            await RunVmStep(context, name, $"main → {SandboxRepo.BareDir(repo)}", SandboxRepo.FetchMainBundleCommand(repo, remote));
+        }
+        finally
+        {
+            File.Delete(local);
+        }
+    }
+
+    /// <summary>
+    /// Holt <c>claude/&lt;id&gt;</c> als Bundle und spult <c>main</c> darauf vor (<c>merge
+    /// --ff-only</c>) — nur nach Rückfrage (ohne Konsole: nein) oder mit <c>--yes</c>. Geht
+    /// das nicht, weil main eigene Commits hat, bleibt alles unverändert. Ohne Id: Liste
+    /// der Task-Branches.
+    /// </summary>
+    private static async Task RunRepoReceive(CommandContext context, RepoReceiveOptions options)
+    {
+        var events = context.Events;
+        var name = options.Name;
+        var (root, repo) = await ResolveRepo(context, options.Repo);
+        var id = string.IsNullOrWhiteSpace(options.Id) ? null : options.Id.Trim();
+        if (id is not null)
+        {
+            if (!SandboxRepo.IsValidId(id))
+            {
+                throw new ProgramExecutionException(1, $"Invalid id `{id}` — use letters, digits, `.`, `_` and `-` (e.g. 20260927-1432).");
+            }
+
+            await RequireCleanMain(context, root);
+        }
+
+        await EnsureRunning(context, name);
+        if ((await VmQuery(context, name, SandboxRepo.BareExistsCommand(repo))).ExitCode != 0)
+        {
+            throw new ProgramExecutionException(1, $"VM `{name}` has no repository `{repo}` yet — send it first with `cb repo-send -n {name}`.");
+        }
+
+        if (id is null)
+        {
+            await ListTaskBranches(context, name, repo);
+            return;
+        }
+
+        var branch = SandboxRepo.TaskBranch(id);
+        var vmRefs = RequireVmSuccess(
+            $"refs of {name}",
+            await VmQuery(context, name, SandboxRepo.ListRefsCommand(repo, SandboxRepo.MainRef, SandboxRepo.TaskRef(id))));
+        var refs = SandboxRepo.ParseRefs(vmRefs.StdOut);
+        if (!refs.TryGetValue(SandboxRepo.TaskRef(id), out var taskCommit))
+        {
+            throw new ProgramExecutionException(1, $"VM `{name}` has no branch {branch} — list the ids with `cb repo-receive -n {name}`.");
+        }
+
+        var tracking = SandboxRepo.TrackingRef(name, id);
+        if (await HostHasCommit(context, root, taskCommit))
+        {
+            // Schon einmal geholt (oder nichts Neues): kein Transfer nötig.
+            RequireGitSuccess($"update-ref {tracking}", await RunGit(context, root, "update-ref", tracking, taskCommit));
+            await events.Emit(events.Std($"{branch}: already on the host ({taskCommit[..7]})"));
+        }
+        else
+        {
+            // Nur bündeln, was über den main der VM hinausgeht — sofern der Host ihn kennt.
+            var vmMain = refs.GetValueOrDefault(SandboxRepo.MainRef);
+            var exclude = vmMain is not null && await HostHasCommit(context, root, vmMain) ? vmMain : null;
+            await TransferBundleFromVm(context, root, name, repo, id, exclude, tracking);
+        }
+
+        if (await IsAncestor(context, root, tracking, SandboxRepo.MainRef))
+        {
+            await events.Emit(events.Std($"Nothing new — {branch} is already contained in main."));
+            return;
+        }
+
+        // Nur Vorspulen: main muss Vorfahr des Task-Branches sein. Hat main seit dem Task-Start
+        // eigene Commits bekommen, wird nichts verändert — kein Merge-Commit, kein Konflikt.
+        if (!await IsAncestor(context, root, SandboxRepo.MainRef, tracking))
+        {
+            throw new ProgramExecutionException(
+                1,
+                $"main has commits that {branch} doesn't have — a fast-forward isn't possible, nothing was changed. "
+                    + $"Rebase the task onto the current main in the VM (send it first with `cb repo-send -n {name}`), or merge by hand: `git merge {tracking}`.");
+        }
+
+        var count = RequireGitSuccess("rev-list --count", await RunGit(context, root, "rev-list", "--count", $"main..{tracking}")).StdOut.Trim();
+        await EmitGit(context, await RunGit(context, root, "log", "--oneline", "--no-decorate", "--reverse", $"main..{tracking}"));
+        await EmitGit(context, await RunGit(context, root, "diff", "--stat", "main", tracking));
+        if (options.Diff)
+        {
+            await EmitGit(context, await RunGit(context, root, "diff", "main", tracking));
+        }
+
+        var commits = count == "1" ? "1 commit" : $"{count} commits";
+        if (!options.Yes && !await context.ConfirmAsync($"Fast-forward main by {commits} from {branch}?"))
+        {
+            await events.Emit(events.Std($"Not merged — run again with `--yes` or answer yes: `cb repo-receive -n {name} -i {id}`."));
+            return;
+        }
+
+        var merge = await RunGit(context, root, "merge", "--ff-only", "-q", tracking);
+        if (merge.ExitCode != 0)
+        {
+            throw new ProgramExecutionException(1, $"`git merge --ff-only {tracking}` failed: {FirstLine(merge.StdErr, merge.StdOut)} — main is unchanged.");
+        }
+
+        await events.Emit(events.Std($"main fast-forwarded to {taskCommit[..7]} ({commits} from {branch})."));
+    }
+
+    /// <summary>Bundle von <c>claude/&lt;id&gt;</c> in der VM packen, per transfer holen und nach <paramref name="tracking"/> einlesen; temporäre Dateien werden auf beiden Seiten entfernt.</summary>
+    private static async Task TransferBundleFromVm(CommandContext context, string root, string name, string repo, string id, string? exclude, string tracking)
+    {
+        var branch = SandboxRepo.TaskBranch(id);
+        var local = Path.Combine(Path.GetTempPath(), $"corebridge-{Guid.NewGuid():N}.bundle");
+        var remote = SandboxRepo.VmBundlePath(repo, id);
+        try
+        {
+            await RunVmStep(context, name, $"git bundle {branch} in {name}", SandboxRepo.CreateTaskBundleCommand(repo, id, remote, exclude));
+            await RunTransfer(context, $"transfer bundle {name} → host", () => IgnoreLocalPermissionError(context.Vms.Get(name, remote, local, TransferTimeoutMs(context)), local));
+            await RunGitReported(context, root, $"git fetch bundle {branch} → {tracking}", ["fetch", "-q", local, $"+{SandboxRepo.TaskRef(id)}:{tracking}"]);
+        }
+        finally
+        {
+            File.Delete(local);
+            await VmQuery(context, name, $"rm -f {Shell.Quote(remote)}");
+        }
+    }
+
+    private static async Task ListTaskBranches(CommandContext context, string name, string repo)
+    {
+        var events = context.Events;
+        var refs = RequireVmSuccess($"refs of {name}", await VmQuery(context, name, SandboxRepo.ListRefsCommand(repo, "refs/heads/claude/")));
+        var ids = SandboxRepo.ParseRefs(refs.StdOut).Keys
+            .Where(reference => reference.StartsWith("refs/heads/claude/", StringComparison.Ordinal))
+            .Select(reference => reference["refs/heads/claude/".Length..])
+            .ToArray();
+        if (ids.Length == 0)
+        {
+            await events.Emit(events.Std($"No claude/* branches in `{name}` yet."));
+            return;
+        }
+
+        await events.Emit(events.Std($"Task branches in `{name}` (receive one with `cb repo-receive -n {name} -i <id>`):"));
+        foreach (var taskId in ids)
+        {
+            await events.Emit(events.Std($"  {taskId}"));
+        }
+    }
+
+    /// <summary>Vorspulen nur auf ausgechecktem <c>main</c> ohne Änderungen an getrackten Dateien.</summary>
+    private static async Task RequireCleanMain(CommandContext context, string root)
+    {
+        var head = await RunGit(context, root, "symbolic-ref", "--short", "-q", "HEAD");
+        if (head.ExitCode != 0 || head.StdOut.Trim() != "main")
+        {
+            throw new ProgramExecutionException(1, $"`{root}` is not on main (HEAD: {(head.ExitCode == 0 ? head.StdOut.Trim() : "detached")}) — repo-receive fast-forwards main; switch with `git switch main`.");
+        }
+
+        var status = await RunGit(context, root, "status", "--porcelain", "--untracked-files=no");
+        RequireGitSuccess("status", status);
+        if (GitLines(status.StdOut).Any())
+        {
+            throw new ProgramExecutionException(1, $"`{root}` has uncommitted changes — commit or stash them before repo-receive.");
+        }
+    }
+
+    /// <summary>git-Komponente in der VM (Marker und git im PATH); sonst der Hinweis auf vm-install.</summary>
+    private static async Task RequireGitComponent(CommandContext context, string name)
+    {
+        if ((await VmQuery(context, name, SandboxRepo.ReadyCommand())).ExitCode != 0)
+        {
+            throw new ProgramExecutionException(1, $"VM `{name}` has no git component yet — install it with `cb vm-install -n {name} -c git`.");
+        }
+
+        await context.Events.Emit(context.Events.Std($"git component in {name}: OK"));
+    }
+
+    /// <summary><c>git merge-base --is-ancestor</c>: ist <paramref name="ancestor"/> in <paramref name="descendant"/> enthalten?</summary>
+    private static async Task<bool> IsAncestor(CommandContext context, string root, string ancestor, string descendant)
+    {
+        var result = await RunGit(context, root, "merge-base", "--is-ancestor", ancestor, descendant);
+        return result.ExitCode switch
+        {
+            0 => true,
+            1 => false,
+            _ => throw new ProgramExecutionException(1, $"`git merge-base --is-ancestor {ancestor} {descendant}` failed: {FirstLine(result.StdErr, result.StdOut)}")
+        };
+    }
+
+    private static async Task<bool> HostHasCommit(CommandContext context, string root, string commit)
+    {
+        return (await RunGit(context, root, "cat-file", "-e", $"{commit}^{{commit}}")).ExitCode == 0;
+    }
+
+    /// <summary>Host-Repository zu <paramref name="path"/> (Standard: aktuelles Verzeichnis); Name aus dem gemeinsamen .git — in einem Worktree also der des Haupt-Repos.</summary>
+    private static async Task<(string Root, string Name)> ResolveRepo(CommandContext context, string? path)
+    {
+        var start = Path.GetFullPath(string.IsNullOrWhiteSpace(path) ? Environment.CurrentDirectory : path);
+        if (!Directory.Exists(start))
+        {
+            throw new ProgramExecutionException(1, $"Folder `{start}` does not exist.");
+        }
+
+        var top = await RunGit(context, start, "rev-parse", "--show-toplevel");
+        if (top.ExitCode != 0)
+        {
+            throw new ProgramExecutionException(1, $"`{start}` is not inside a git repository.");
+        }
+
+        var common = await RunGit(context, start, "rev-parse", "--path-format=absolute", "--git-common-dir");
+        RequireGitSuccess("rev-parse --git-common-dir", common);
+        var commonDir = Path.GetFullPath(common.StdOut.Trim()).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        var name = Path.GetFileName(commonDir) == ".git"
+            ? Path.GetFileName(Path.GetDirectoryName(commonDir))!
+            : Path.GetFileNameWithoutExtension(commonDir);
+        if (!SandboxRepo.IsValidRepoName(name))
+        {
+            throw new ProgramExecutionException(1, $"Repository name `{name}` can't be used in the VM — use letters, digits, `.`, `_` and `-`.");
+        }
+
+        return (Path.GetFullPath(top.StdOut.Trim()), name);
+    }
+
+    private static Task<GitRunResult> RunGit(CommandContext context, string root, params string[] args)
+    {
+        return Task.Run(() => context.Git.Run(args, root, context.DefaultTimeoutMs), context.CancellationToken);
+    }
+
+    /// <summary>Lange git-Aufrufe (bundle/fetch): mit Fortschritt und <c>DefaultTimeoutVmCreation</c>; bei Exit ≠ 0 die fertige Meldung.</summary>
+    private static async Task<GitRunResult> RunGitReported(CommandContext context, string root, string label, params string[] args)
+    {
+        await context.Events.Emit(context.Events.Std($"{label} ..."));
+        var result = await WithProgress(context, () => context.Git.Run(args, root, TransferTimeoutMs(context)));
+        RequireGitSuccess(label, result);
+        await context.Events.Emit(context.Events.Std($"{label}: OK ({result.DurationMs / 1000.0:F1} s)"));
+        return result;
+    }
+
+    /// <summary>Shell-Zeile in der VM (multipass exec); bei Exit ≠ 0 die fertige Meldung.</summary>
+    private static async Task RunVmStep(CommandContext context, string name, string label, string command)
+    {
+        var result = await RunReported(context, label, () => context.Vms.Exec(name, command, TransferTimeoutMs(context)));
+        await context.Events.Emit(context.Events.Std($"{label}: OK ({result.DurationMs / 1000.0:F1} s)"));
+    }
+
+    /// <summary>Kurze Abfrage in der VM ohne Ausgabe; der Aufrufer wertet Exit-Code und stdout aus.</summary>
+    private static Task<MultipassRunResult> VmQuery(CommandContext context, string name, string command)
+    {
+        return Task.Run(() => context.Vms.Exec(name, command, context.DefaultTimeoutMs), context.CancellationToken);
+    }
+
+    private static MultipassRunResult RequireVmSuccess(string label, MultipassRunResult result)
+    {
+        if (result.ExitCode != 0)
+        {
+            throw new ProgramExecutionException(1, $"`{label}` failed (exit {result.ExitCode}): {FirstLine(result.StdErr, result.StdOut)}");
+        }
+
+        return result;
+    }
+
+    /// <summary>multipass transfer eines Bundles, mit Fortschritt; bei Exit ≠ 0 die fertige Meldung.</summary>
+    private static async Task RunTransfer(CommandContext context, string label, Func<MultipassRunResult> transfer)
+    {
+        var result = await RunReported(context, label, transfer);
+        await context.Events.Emit(context.Events.Std($"{label}: OK ({result.DurationMs / 1000.0:F1} s)"));
+    }
+
+    /// <summary>
+    /// Multipass holt Dateien unter Windows vollständig, meldet dann aber Exit 2, weil es
+    /// die Unix-Rechte nicht setzen kann („cannot set permissions for local file“). Nur
+    /// genau das gilt als Erfolg; ob die Datei heil ist, prüft danach git selbst.
+    /// </summary>
+    private static MultipassRunResult IgnoreLocalPermissionError(MultipassRunResult result, string localPath)
+    {
+        var onlyPermissions = result.ExitCode != 0
+            && File.Exists(localPath)
+            && Lines(result.StdErr).Any()
+            && Lines(result.StdErr).All(line => line.Contains("cannot set permissions for local file", StringComparison.Ordinal));
+        return onlyPermissions ? result with { ExitCode = 0, StdErr = string.Empty } : result;
+    }
+
+    /// <summary>Bundles mit ganzer Historie können dauern: <c>DefaultTimeoutVmCreation</c> statt <c>DefaultTimeout</c>.</summary>
+    private static int TransferTimeoutMs(CommandContext context)
+    {
+        return (int)context.Config.DefaultTimeoutVmCreation.ReadTime().TotalMilliseconds;
+    }
+
+    private static GitRunResult RequireGitSuccess(string label, GitRunResult result)
+    {
+        if (result.ExitCode != 0)
+        {
+            throw new ProgramExecutionException(1, $"`{label}` failed (exit {result.ExitCode}): {FirstLine(result.StdErr, result.StdOut)}");
+        }
+
+        return result;
+    }
+
+    private static async Task EmitGit(CommandContext context, GitRunResult result)
+    {
+        foreach (var line in GitLines(result.StdOut).Concat(GitLines(result.StdErr)))
+        {
+            await context.Events.Emit(context.Events.Std("  " + line));
+        }
+    }
+
+    private static IEnumerable<string> GitLines(string text)
+    {
+        return text.Split('\n').Select(line => line.TrimEnd('\r')).Where(line => line.Length > 0);
+    }
+
+    private static string FirstLine(params string[] texts)
+    {
+        return texts.SelectMany(GitLines).FirstOrDefault() ?? "no output";
+    }
+
+    /// <summary>
+    /// Installiert Komponenten in eine vorhandene VM — dieselben Schritte wie
+    /// cloud-init beim Anlegen (<see cref="InitInstall.Plan"/>). Der erste
+    /// fehlgeschlagene Schritt beendet den Befehl; die VM läuft dann zur Diagnose
+    /// weiter. Nach Erfolg wird ein Snapshot empfohlen.
+    /// </summary>
+    private static async Task RunVmInstall(CommandContext context, VmInstallOptions options)
+    {
+        var events = context.Events;
+        var name = options.Name;
+        var components = options.Components.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        if (components.Length == 0)
+        {
+            throw new ProgramExecutionException(1, "No components given — e.g. `-c dotnet,python`.");
+        }
+
+        if (options.Snapshot is not null)
+        {
+            RequireValidName(options.Snapshot);
+        }
+
+        var steps = InitInstall.Plan(context.Config.Images, components);
+        await EnsureRunning(context, name, ask: false);
+
+        // apt und snap brauchen Minuten: gewartet wird in Abschnitten von
+        // DefaultTimeoutVmCreation, danach fragt die CLI „weiter warten?“.
+        var waitMs = (int)context.Config.DefaultTimeoutVmCreation.ReadTime().TotalMilliseconds;
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+        for (var i = 0; i < steps.Count; i++)
+        {
+            var step = steps[i];
+            var label = $"[{i + 1}/{steps.Count}] {step.Title}";
+            MultipassRunResult result;
+            string? upload = null;
+            try
+            {
+                if (step.IsUpload)
+                {
+                    upload = Path.Combine(Path.GetTempPath(), $"corebridge-{Guid.NewGuid():N}.sh");
+                    await File.WriteAllTextAsync(upload, InitInstall.ReadScript(step.ScriptSource!), context.CancellationToken);
+                    result = await RunStep(context, label, () => context.Vms.Put(upload, name, step.RemotePath, waitMs));
+                }
+                else
+                {
+                    result = await RunStep(context, label, () => context.Vms.Exec(name, step.Command!, waitMs, KeepWaiting(context, label)));
+                }
+            }
+            catch (MultipassTimeoutException)
+            {
+                throw new ProgramExecutionException(
+                    1,
+                    $"Stopped waiting — `{step.Title}` keeps running inside `{name}`. The VM stays running; check with `cb vm-exec -n {name} -c ...`.");
+            }
+            finally
+            {
+                if (upload is not null)
+                {
+                    File.Delete(upload);
+                }
+            }
+
+            if (result.ExitCode != 0)
+            {
+                var detail = step.Marker is not null
+                    ? $"the script ran but did not set its marker `{step.Marker}` — the installation counts as incomplete"
+                    : $"exit {result.ExitCode}";
+                throw new ProgramExecutionException(
+                    result.ExitCode,
+                    $"vm-install {name}: step `{step.Title}` failed ({detail}). The VM stays running for diagnosis (`cb vm-exec -n {name} -c ...`); no snapshot was taken.");
+            }
+        }
+
+        await events.Emit(events.Std($"install {string.Join(", ", components)} → {name}: OK ({stopwatch.Elapsed.TotalSeconds:F1} s)"));
+        await OfferSnapshotAfterConfiguration(context, name, string.Join("-", components), options.Snapshot);
+    }
+
+    /// <summary>
+    /// Ein Installationsschritt: ankündigen, mit Spinner ausführen, stdout und
+    /// stderr zeigen. Anders als <see cref="RunReported"/> wirft er bei Exit ≠ 0
+    /// nicht, damit <see cref="RunVmInstall"/> den Schritt in der Meldung nennen kann.
+    /// </summary>
+    private static async Task<MultipassRunResult> RunStep(CommandContext context, string label, Func<MultipassRunResult> action)
+    {
+        var events = context.Events;
+        await events.Emit(events.Std($"{label} ..."));
+        var result = await WithProgress(context, action);
+        foreach (var line in Lines(result.StdOut).Concat(Lines(MultipassStdErr.Clean(result.StdErr))))
+        {
+            await events.Emit(events.Std($"    {line}"));
+        }
+
+        return result;
+    }
+
+    /// <summary>
+    /// Empfehlung nach jeder Konfiguration: einen Snapshot anlegen, solange der
+    /// Stand frisch ist und noch niemand verbunden hat. Mit
+    /// <paramref name="explicitName"/> (<c>--snapshot</c>) ohne Rückfrage; sonst wird
+    /// gefragt — ohne Konsole gilt Nein. Die VM wird dafür gestoppt und bleibt gestoppt.
+    /// </summary>
+    private static async Task OfferSnapshotAfterConfiguration(
+        CommandContext context,
+        string name,
+        string suggestedName,
+        string? explicitName)
+    {
+        var events = context.Events;
+        if (explicitName is null
+            && !await context.ConfirmAsync(
+                $"Recommended: take a snapshot of `{name}` now that it is configured — a stable state before anyone connects (the VM gets stopped). Take one now?"))
+        {
+            await events.Emit(events.Std($"No snapshot — take one later with `cb vm-snapshot -n {name}`."));
+            return;
+        }
+
+        var existing = await Task.Run(() => context.Vms.ListSnapshots(name, context.DefaultTimeoutMs), context.CancellationToken);
+        string? snapshot = explicitName ?? (VmNamePattern.IsMatch(suggestedName) ? suggestedName : null);
+        if (snapshot is not null && existing.Any(s => string.Equals(s.Name, snapshot, StringComparison.OrdinalIgnoreCase)))
+        {
+            if (explicitName is not null)
+            {
+                throw new ProgramExecutionException(
+                    1,
+                    $"VM `{name}` already has a snapshot `{snapshot}` — the installation is done, take a snapshot with another name via `cb vm-snapshot -n {name} -s <name>`.");
+            }
+
+            // Vorschlag vergeben: Multipass wählt dann snapshotN.
+            snapshot = null;
+        }
+
+        var vm = await RequireVm(context, name);
+        if (!vm.IsStopped)
+        {
+            await StopVm(context, vm);
+        }
+
+        var label = snapshot is null ? $"snapshot {name}" : $"snapshot {name}.{snapshot}";
+        var result = await RunReported(
+            context,
+            label,
+            () => context.Vms.Snapshot(name, snapshot, $"after configuration ({suggestedName})", context.DefaultTimeoutMs, KeepWaiting(context, label)));
+        await events.Emit(events.Std(await Completed(context.Vms, name, label, result, context.CancellationToken)));
+        await events.Emit(events.Std($"VM `{name}` stays stopped — start it with `cb vm-start -n {name}`."));
+    }
+
+    /// <summary>
+    /// Clone, Snapshot und Restore gehen nur auf gestoppten VMs: eine laufende
+    /// wird nach Rückfrage gestoppt, eine im Papierkorb abgewiesen.
+    /// </summary>
+    private static async Task EnsureStopped(CommandContext context, VmInfo vm, string purpose)
+    {
+        if (vm.IsDeleted)
+        {
+            throw InTrash(vm.Name);
+        }
+
+        if (vm.IsStopped)
+        {
+            return;
+        }
+
+        if (!await context.ConfirmAsync($"VM `{vm.Name}` is {vm.State} — stop it for {purpose}?"))
+        {
+            throw new ProgramExecutionException(1, $"Cancelled — {purpose} needs a stopped VM; `{vm.Name}` is {vm.State}.");
+        }
+
+        await StopVm(context, vm);
+    }
+
+    /// <summary>Kündigt das Kommando an, führt es aus und meldet stdout; bei Exit ≠ 0 folgt die fertige Fehlermeldung.</summary>
+    private static async Task<MultipassRunResult> RunReported(
+        CommandContext context,
+        string label,
+        Func<MultipassRunResult> action)
+    {
+        await context.Events.Emit(context.Events.Std($"{label} ..."));
+        var result = await WithProgress(context, action);
+        await Report(context.Events, result);
+        return result;
+    }
+
+    private static void RequireValidName(string name)
+    {
+        if (!VmNamePattern.IsMatch(name))
+        {
+            throw new ProgramExecutionException(
+                1,
+                $"Invalid name `{name}` — use letters, digits and hyphens, starting with a letter and not ending with a hyphen (e.g. dev-01).");
+        }
+    }
+
+    private static async Task RunInitConfigure(CommandContext context, InitConfigureOptions options)
+    {
+        var events = context.Events;
+        var config = context.Config;
         var components = options.Components.Split(',', StringSplitOptions.RemoveEmptyEntries);
-        yield return $"Konfiguriere Image '{options.Name}' ({string.Join(", ", components)}) ...";
-        using var http = new HttpClient { Timeout = config.DefaultTimeout.ReadTime() };
-        var images = new ImageService(config.Images, http);
+        await events.Emit(events.Std($"Erzeuge Profil '{options.Name}' ({string.Join(", ", components)}) ..."));
+        var inits = new InitService(config.Images);
         var result = await Task.Run(
-            () => images.Configure(
+            () => inits.Configure(
                 options.Name,
                 components,
-                options.ModelUrl,
                 force: options.Force,
                 runtimeImage: options.RuntimeImage),
-            cancellationToken);
+            context.CancellationToken);
 
-        yield return $"Image '{result.Name}' konfiguriert.";
-        yield return $"  Modell:       {result.ModelPath} (Canonical dangerous, unverändert signiert)";
-        yield return $"  Config:       {result.ConfigPath}";
-        yield return $"  Runtime-Image: {result.RuntimeImage}";
-        yield return $"  Snaps:        {(result.Snaps.Length == 0 ? "keine" : string.Join(", ", result.Snaps))}";
-        yield return result.CloudInitPath is null
+        await events.Emit(events.Std($"Profil '{result.Name}' erzeugt."));
+        await events.Emit(events.Std($"  Config:       {result.ConfigPath}"));
+        await events.Emit(events.Std($"  Runtime-Image: {result.RuntimeImage}"));
+        await events.Emit(events.Std($"  Snaps:        {(result.Snaps.Length == 0 ? "keine" : string.Join(", ", result.Snaps))}"));
+        await events.Emit(events.Std(result.CloudInitPath is null
             ? "  cloud-init: nicht nötig (keine Gast-Provisionierung)."
-            : $"  cloud-init: {result.CloudInitPath}";
-        yield return string.Empty;
-        yield return $"VM starten: cb vm-create --name <vm> --image {result.Name}";
+            : $"  cloud-init: {result.CloudInitPath}"));
+        await events.Emit(events.Std(string.Empty));
+        await events.Emit(events.Std($"VM starten: cb vm-create --name <vm> --image {result.Name}"));
     }
 
-    private static async IAsyncEnumerable<string> RunImageList(
-        AppConfig config,
-        [EnumeratorCancellation] CancellationToken cancellationToken)
+    private static async Task RunInitList(CommandContext context)
     {
-        var entries = await Task.Run(() => new ImageService(config.Images).List(), cancellationToken);
+        var events = context.Events;
+        var entries = await Task.Run(() => new InitService(context.Config.Images).List(), context.CancellationToken);
         if (entries.Count == 0)
         {
-            yield return "Keine konfigurierten Classic-Profile.";
-            yield break;
+            await events.Emit(events.Std("Keine konfigurierten Profile."));
+            return;
         }
 
-        yield return $"{"Name",-20} {"Komponenten",-28} Snaps";
+        await events.Emit(events.Std($"{"Name",-20} {"Komponenten",-28} Snaps"));
         foreach (var entry in entries)
         {
-            yield return $"{entry.Name,-20} {string.Join(",", entry.Components),-28} {string.Join(",", entry.Snaps)}";
+            await events.Emit(events.Std($"{entry.Name,-20} {string.Join(",", entry.Components),-28} {string.Join(",", entry.Snaps)}"));
         }
     }
 
-    private static async IAsyncEnumerable<string> RunImageDelete(
-        AppConfig config,
-        ImageDeleteOptions options,
-        [EnumeratorCancellation] CancellationToken cancellationToken)
+    private static async Task RunInitDelete(CommandContext context, InitDeleteOptions options)
     {
-        var result = await Task.Run(() => new ImageService(config.Images).Delete(options.Name), cancellationToken);
-        yield return $"Konfiguration gelöscht: {result.ModelDir}";
+        var result = await Task.Run(
+            () => new InitService(context.Config.Images).Delete(options.Name),
+            context.CancellationToken);
+        await context.Events.Emit(context.Events.Std($"Konfiguration gelöscht: {result.ProfileDir}"));
     }
 }

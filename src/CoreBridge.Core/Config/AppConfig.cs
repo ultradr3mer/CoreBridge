@@ -1,3 +1,5 @@
+using CoreBridge.Core.Multipass;
+
 namespace CoreBridge.Core.Config;
 
 /// <summary>
@@ -23,22 +25,44 @@ public sealed record AppConfig
     /// Standard-Timeout für Multipass-Start/Stop/Restart, z. B. 10s, 1000ms.
     /// </summary>
     public string DefaultTimeout { get; init; } = "10s";
+
+    /// <summary>
+    /// Verzeichnis für das Multipass-Aufrufprotokoll (JSON Lines, eine Datei je
+    /// Prozess). Gesetzt = Protokoll an; leer = aus. Absolut oder relativ zur
+    /// Repo-Wurzel (<see cref="Common.RepoPaths.Resolve"/>).
+    /// </summary>
+    /// <remarks>
+    /// Ist <see cref="IMultipassCli"/> in <see cref="Bootstrap"/> auf
+    /// <see cref="ReplayMultipassCli"/> gemappt, ist dies die Quelle der
+    /// Wiedergabe und es wird nicht zusätzlich protokolliert.
+    /// </remarks>
+    public string? MultipassLogPath { get; init; }
+
+    /// <summary>
+    /// Dauer, die der Multipass-Simulator (<c>CoreBridge.Simulation</c>, nur Debug/Tests) lang laufende Verben
+    /// (launch, start, stop, restart, clone) vorgibt, z. B. <c>4s</c> oder <c>0ms</c>.
+    /// Länger als ein Warteabschnitt (<see cref="DefaultTimeout"/> bzw.
+    /// <see cref="DefaultTimeoutVmCreation"/>) löst die Rückfrage „weiter warten?“ aus.
+    /// </summary>
+    public string MultipassSimulationDelay { get; init; } = "4s";
+
+    /// <summary>
+    /// Typ-Zuordnungen für den <see cref="Common.CoreBridgeContainer"/>:
+    /// voller Name der Schnittstelle → voller Name der Implementierung.
+    /// Zum Mocken z. B. <see cref="IMultipassCli"/> → <see cref="ReplayMultipassCli"/>.
+    /// </summary>
+    public Dictionary<string, string> Bootstrap { get; init; } = new()
+    {
+        [typeof(IMultipassCli).FullName!] = typeof(MultipassCli).FullName!
+    };
 }
 
 public sealed record ImagesConfig
 {
     /// <summary>
-    /// Kanonisches Modell für neu konfigurierte Classic-Ubuntu-Images.
-    /// 26.10 ist aktuell der Edge-Stand; der Runtime-Image-Katalog muss dazu
-    /// passend konfiguriert werden (<see cref="DefaultRuntimeImage"/>).
-    /// </summary>
-    public string DefaultModelUrl { get; init; } =
-        "https://raw.githubusercontent.com/canonical/models/main/ubuntu-classic-2610-amd64-dangerous.model";
-
-    /// <summary>
-    /// Multipass-Katalogname, der für VMs aus einem konfigurierten Image-Profil
-    /// verwendet wird. Der Classic-26.10-Stand ist im T02-Katalog als
-    /// <c>daily:26.10</c> verfügbar.
+    /// Multipass-Katalogname, der beim Starten einer VM zugrunde liegt.
+    /// Der Classic-26.10-Stand ist im T02-Katalog als <c>daily:26.10</c>
+    /// verfügbar. Ein Profil (<c>init-configure</c>) überschreibt diesen Wert.
     /// </summary>
     public string DefaultRuntimeImage { get; init; } = "daily:26.10";
 

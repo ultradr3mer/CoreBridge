@@ -4,12 +4,15 @@ namespace CoreBridge.Core.Vm;
 
 public sealed class VmService
 {
-    private readonly MultipassCli _cli;
+    private readonly IMultipassCli _cli;
 
-    public VmService(MultipassCli? cli = null)
+    public VmService(IMultipassCli? cli = null)
     {
         _cli = cli ?? new MultipassCli();
     }
+
+    /// <summary>Der Client, über den alle Verben laufen.</summary>
+    public IMultipassCli Cli => _cli;
 
     public IReadOnlyList<VmInfo> List(int timeoutMs = 60_000)
     {
@@ -99,6 +102,117 @@ public sealed class VmService
         return Run(args, timeoutMs, keepWaiting);
     }
 
+    /// <summary>
+    /// <c>multipass clone</c>: unabhängige Kopie einer <em>gestoppten</em> VM —
+    /// samt allem, was cloud-init darin schon installiert hat. Ohne
+    /// <paramref name="destination"/> vergibt Multipass <c>&lt;source&gt;-cloneN</c>.
+    /// </summary>
+    /// <inheritdoc cref="Start"/>
+    public MultipassRunResult Clone(
+        string source,
+        string? destination = null,
+        int timeoutMs = 600_000,
+        Func<bool>? keepWaiting = null)
+    {
+        var args = new List<string> { "clone", source };
+        if (destination is not null)
+        {
+            args.Add("--name");
+            args.Add(destination);
+        }
+
+        return Run(args, timeoutMs, keepWaiting);
+    }
+
+    /// <summary>
+    /// <c>multipass snapshot</c> einer <em>gestoppten</em> VM. Ohne
+    /// <paramref name="snapshot"/> vergibt Multipass <c>snapshotN</c>.
+    /// </summary>
+    /// <inheritdoc cref="Start"/>
+    public MultipassRunResult Snapshot(
+        string name,
+        string? snapshot = null,
+        string? comment = null,
+        int timeoutMs = 600_000,
+        Func<bool>? keepWaiting = null)
+    {
+        var args = new List<string> { "snapshot", name };
+        if (snapshot is not null)
+        {
+            args.Add("--name");
+            args.Add(snapshot);
+        }
+
+        if (comment is not null)
+        {
+            args.Add("--comment");
+            args.Add(comment);
+        }
+
+        return Run(args, timeoutMs, keepWaiting);
+    }
+
+    /// <summary>
+    /// <c>multipass restore &lt;vm&gt;.&lt;snapshot&gt; --destructive</c> auf einer
+    /// <em>gestoppten</em> VM. Immer <c>--destructive</c>: ohne fragt Multipass
+    /// interaktiv, ob der aktuelle Stand gesichert werden soll — mit umgeleiteter
+    /// Ausgabe sähe niemand die Frage und der Aufruf hinge. Das Sichern übernimmt
+    /// bei Bedarf der Aufrufer vorher per <see cref="Snapshot"/>.
+    /// </summary>
+    /// <inheritdoc cref="Start"/>
+    public MultipassRunResult Restore(
+        string name,
+        string snapshot,
+        int timeoutMs = 600_000,
+        Func<bool>? keepWaiting = null)
+    {
+        return Run(new[] { "restore", $"{name}.{snapshot}", "--destructive" }, timeoutMs, keepWaiting);
+    }
+
+    /// <summary>Disk-Größe laut <c>multipass get local.&lt;vm&gt;.disk</c>, z. B. <c>5.0GiB</c>.</summary>
+    public string GetDisk(string name, int timeoutMs = 60_000)
+    {
+        var result = _cli.Run(new[] { "get", $"local.{name}.disk" }, timeoutMs);
+        if (result.ExitCode != 0)
+        {
+            var message = MultipassStdErr.Clean(result.StdErr);
+            throw new MultipassException(string.IsNullOrEmpty(message)
+                ? $"multipass get local.{name}.disk beendet mit Exit {result.ExitCode}."
+                : $"{message} (multipass Exit {result.ExitCode})");
+        }
+
+        return MultipassOutput.CleanLines(result.StdOut).FirstOrDefault()?.Trim() ?? string.Empty;
+    }
+
+    /// <summary>
+    /// <c>multipass set local.&lt;vm&gt;.disk=&lt;size&gt;</c> auf einer <em>gestoppten</em>
+    /// VM. Multipass vergrößert nur („Disk can only be expanded“); die Partition im
+    /// Gast wächst beim nächsten Boot per cloud-init <c>growpart</c> mit.
+    /// </summary>
+    /// <inheritdoc cref="Start"/>
+    public MultipassRunResult SetDisk(string name, string size, int timeoutMs = 180_000, Func<bool>? keepWaiting = null)
+    {
+        return Run(new[] { "set", $"local.{name}.disk={size}" }, timeoutMs, keepWaiting);
+    }
+
+    /// <summary>Snapshots laut <c>multipass list --snapshots</c>, optional nur die einer VM.</summary>
+    public IReadOnlyList<VmSnapshotInfo> ListSnapshots(string? name = null, int timeoutMs = 60_000)
+    {
+        var result = _cli.Run(new[] { "list", "--snapshots", "--format", "json" }, timeoutMs);
+        if (result.ExitCode != 0)
+        {
+            var message = MultipassStdErr.Clean(result.StdErr);
+            throw new MultipassException(string.IsNullOrEmpty(message)
+                ? $"multipass list --snapshots beendet mit Exit {result.ExitCode}."
+                : $"{message} (multipass Exit {result.ExitCode})");
+        }
+
+        var snapshots = MultipassSnapshotList.Parse(result.StdOut);
+        return name is null
+            ? snapshots
+            : snapshots.Where(s => string.Equals(s.Instance, name, StringComparison.OrdinalIgnoreCase)).ToArray();
+    }
+
     /// <summary>VM laut <c>multipass list</c>; <c>null</c>, wenn es sie nicht gibt (auch nicht im Papierkorb).</summary>
     public VmInfo? Find(string name, int timeoutMs = 60_000)
     {
@@ -113,9 +227,13 @@ public sealed class VmService
             : _cli.RunWithExtensions(args, TimeSpan.FromMilliseconds(timeoutMs), keepWaiting);
     }
 
-    public MultipassRunResult Exec(string name, string command, int timeoutMs = 600_000)
+    /// <param name="keepWaiting">
+    /// Optional: nach je <paramref name="timeoutMs"/> gefragt, ob weiter gewartet wird —
+    /// für lange Installationen (apt, snap); ohne Angabe ein festes Limit.
+    /// </param>
+    public MultipassRunResult Exec(string name, string command, int timeoutMs = 600_000, Func<bool>? keepWaiting = null)
     {
-        return _cli.Run(new[] { "exec", name, "--", "/bin/sh", "-c", command }, timeoutMs);
+        return Run(new[] { "exec", name, "--", "/bin/sh", "-c", command }, timeoutMs, keepWaiting);
     }
 
     public MultipassRunResult Put(string localPath, string name, string? remotePath = null, int timeoutMs = 600_000)
@@ -135,25 +253,15 @@ public sealed class VmService
     }
 
     /// <summary>
-    /// Testbare Konsolen-Session auf der VM: Befehle senden, Ausgaben sammeln
-    /// und prüfen. Läuft über den exec-Kanal (pro Befehl ein exec) — gepipetes
-    /// stdin forwardet der Multipass-Windows-Client nicht, `multipass shell`
-    /// ist ohne TTY unbrauchbar. Optionaler log-Callback (z. B.
-    /// ITestOutputHelper.WriteLine im Test) schreibt die Ausgabe live mit.
+    /// vm-connect in programmierbarer Form: Befehle senden, Ausgaben sammeln
+    /// und prüfen. Läuft über den exec-Kanal (pro Befehl ein exec, das
+    /// Arbeitsverzeichnis wandert mit) — gepipetes stdin forwardet der
+    /// Multipass-Windows-Client nicht, `multipass shell` ist ohne TTY
+    /// unbrauchbar. Optionaler log-Callback (z. B. ITestOutputHelper.WriteLine
+    /// im Test) schreibt die Ausgabe live mit.
     /// </summary>
-    public VmExecSession OpenConsole(string name, Action<string>? log = null)
+    public VmExecSession OpenConsole(string name, Action<string>? log = null, int timeoutMs = 600_000)
     {
-        return new VmExecSession(name, log);
-    }
-
-    /// <summary>
-    /// Echte interaktive Shell über natives SSH (SSH.NET, PTY): gemeinsamer
-    /// Shell-Status, Prompt-Ausgabe, vm-connect in testbarer Form. Benötigt
-    /// SSH-Key auf der VM (cloud-init ssh_authorized_keys) — Verbindungsaufbau
-    /// nur Host→VM (Plan §6).
-    /// </summary>
-    public VmSshSession OpenSshSession(string name, Action<string>? log = null, string? privateKeyPath = null)
-    {
-        return VmSshSession.Open(name, log, privateKeyPath);
+        return new VmExecSession(name, log, timeoutMs, _cli);
     }
 }

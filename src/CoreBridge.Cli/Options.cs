@@ -47,44 +47,44 @@ public sealed class VmCreateOptions : MultipassOptions
     [Option('n', "name", Required = true, HelpText = "Name der neuen VM.")]
     public string Name { get; set; } = string.Empty;
 
-    [Option('i', "image", HelpText = "Katalog-Image, URL/Pfad oder Name eines per image-configure konfigurierten Profils. Ohne Angabe: Images:DefaultRuntimeImage.")]
+    [Option('i', "image", HelpText = "Katalog-Image (z. B. daily:26.10), URL/Pfad oder Name eines per init-configure erzeugten Profils. Ohne Angabe: Images:DefaultRuntimeImage.")]
     public string? Image { get; set; }
 
-    [Option('c', "cloud-init", HelpText = "Pfad zu einer cloud-init-YAML (z. B. aus image-configure).")]
+    [Option('c', "cloud-init", HelpText = "Pfad zu einer cloud-init-YAML; überschreibt die cloud-init eines Profils (z. B. aus init-configure).")]
     public string? CloudInit { get; set; }
 
     [Option('d', "disk", HelpText = "Disk-Größe, z. B. 20G (multipass-Standard: 5G).")]
     public string? Disk { get; set; }
+
+    [Option("snapshot", HelpText = "Nach erfolgreicher Provisionierung (Profil/cloud-init) ohne Rückfrage stoppen und diesen Snapshot anlegen.")]
+    public string? Snapshot { get; set; }
 }
 
-[Verb("image-configure", HelpText = "Erzeugt ein Classic-Profil mit Basis-Modell (Canonical dangerous, signiert) und cloud-init für den Gast.")]
-public sealed class ImageConfigureOptions : MultipassOptions
+[Verb("init-configure", HelpText = "Erzeugt ein cloud-init-Profil für den Gast (Pakete, Benutzer, Snaps, Komponenten-Skripte).")]
+public sealed class InitConfigureOptions : MultipassOptions
 {
-    [Option('n', "name", Required = true, HelpText = "Name des Images (Namespace für Modell/Config/cloud-init/Ausgabe-.img).")]
+    [Option('n', "name", Required = true, HelpText = "Name des Profils (Namespace für Profilkonfiguration und cloud-init).")]
     public string Name { get; set; } = string.Empty;
 
     [Option('c', "components", Default = "claude,dotnet", HelpText = "Komma-Liste der Komponenten (verfügbar laut Config Images:Components, z. B. claude,dotnet,opencode,python,cline).")]
     public string Components { get; set; } = "claude,dotnet";
 
-    [Option("model-url", HelpText = "URL des Basis-Modells (Standard: Config Images:DefaultModelUrl).")]
-    public string? ModelUrl { get; set; }
-
-    [Option("runtime-image", HelpText = "Runtime-Image für das erzeugte Profil (Standard: Config Images:DefaultRuntimeImage).")]
+    [Option("runtime-image", HelpText = "Multipass-Katalogname, den vm-create für dieses Profil startet (Standard: Config Images:DefaultRuntimeImage).")]
     public string? RuntimeImage { get; set; }
 
-    [Option('f', "force", HelpText = "Existierende Konfiguration überschreiben (sonst Fehler, wenn das Image schon konfiguriert ist).")]
+    [Option('f', "force", HelpText = "Existierende Konfiguration überschreiben (sonst Fehler, wenn das Profil schon existiert).")]
     public bool Force { get; set; }
 }
 
-[Verb("image-list", HelpText = "Listet konfigurierte Classic-Profile (Komponenten und Snaps).")]
-public sealed class ImageListOptions : IOptions
+[Verb("init-list", HelpText = "Listet konfigurierte cloud-init-Profile (Komponenten und Snaps).")]
+public sealed class InitListOptions : IOptions
 {
 }
 
-[Verb("image-delete", HelpText = "Löscht ein Classic-Profil (Modell, Profilkonfiguration und cloud-init).")]
-public sealed class ImageDeleteOptions : IOptions
+[Verb("init-delete", HelpText = "Löscht ein cloud-init-Profil (Profilkonfiguration und cloud-init).")]
+public sealed class InitDeleteOptions : IOptions
 {
-    [Option('n', "name", Required = true, HelpText = "Name des Images (aus image-list).")]
+    [Option('n', "name", Required = true, HelpText = "Name des Profils (aus init-list).")]
     public string Name { get; set; } = string.Empty;
 }
 
@@ -153,4 +153,96 @@ public sealed class VmPutOptions : MultipassOptions
 
     [Option('d', "destination", HelpText = "Zielpfad in der VM, relativ zu $HOME (Standard: Dateiname).")]
     public string? Destination { get; set; }
+}
+
+[Verb("vm-clone", HelpText = "Klont eine VM (multipass clone) — samt allem, was cloud-init darin installiert hat; eine laufende Quelle wird nach Rückfrage gestoppt.")]
+public sealed class VmCloneOptions : MultipassOptions
+{
+    [Option('s', "source", Required = true, HelpText = "Name der Quell-VM.")]
+    public string Source { get; set; } = string.Empty;
+
+    [Option('n', "name", HelpText = "Name des Klons (Standard von Multipass: <source>-cloneN).")]
+    public string? Name { get; set; }
+}
+
+[Verb("vm-snapshot", HelpText = "Sichert den Stand einer VM als Snapshot (multipass snapshot); eine laufende VM wird nach Rückfrage gestoppt.")]
+public sealed class VmSnapshotOptions : MultipassOptions
+{
+    [Option('n', "name", Required = true, HelpText = "Name der VM.")]
+    public string Name { get; set; } = string.Empty;
+
+    [Option('s', "snapshot", HelpText = "Name des Snapshots (Standard von Multipass: snapshotN).")]
+    public string? Snapshot { get; set; }
+
+    [Option('m', "comment", HelpText = "Freitext zum Snapshot.")]
+    public string? Comment { get; set; }
+}
+
+[Verb("vm-snapshots", HelpText = "Listet die Snapshots aller VMs oder einer VM (multipass list --snapshots).")]
+public sealed class VmSnapshotsOptions : MultipassOptions
+{
+    [Option('n', "name", HelpText = "Nur die Snapshots dieser VM.")]
+    public string? Name { get; set; }
+}
+
+[Verb("vm-restore", HelpText = "Setzt eine VM auf einen Snapshot zurück (multipass restore); fragt, ob der aktuelle Stand vorher gesichert werden soll.")]
+public sealed class VmRestoreOptions : MultipassOptions
+{
+    [Option('n', "name", Required = true, HelpText = "Name der VM.")]
+    public string Name { get; set; } = string.Empty;
+
+    [Option('s', "snapshot", Required = true, HelpText = "Name des Snapshots (aus vm-snapshots).")]
+    public string Snapshot { get; set; } = string.Empty;
+}
+
+[Verb("vm-resize", HelpText = "Vergrößert die Disk einer VM (multipass set local.<vm>.disk=<size>) — z. B. klein aufsetzen, zum Arbeiten wachsen lassen; eine laufende VM wird nach Rückfrage gestoppt und danach wieder gestartet.")]
+public sealed class VmResizeOptions : MultipassOptions
+{
+    [Option('n', "name", Required = true, HelpText = "Name der VM.")]
+    public string Name { get; set; } = string.Empty;
+
+    [Option('d', "disk", Required = true, HelpText = "Neue Disk-Größe, z. B. 20G (nur größer als die aktuelle; Multipass verkleinert nicht).")]
+    public string Disk { get; set; } = string.Empty;
+}
+
+[Verb("vm-install", HelpText = "Installiert Komponenten in eine vorhandene VM (dieselben Schritte wie cloud-init: Pakete, Snaps, Komponenten-Skript, Marker-Prüfung) und empfiehlt danach einen Snapshot.")]
+public sealed class VmInstallOptions : MultipassOptions
+{
+    [Option('n', "name", Required = true, HelpText = "Name der VM.")]
+    public string Name { get; set; } = string.Empty;
+
+    [Option('c', "components", Required = true, HelpText = "Komma-Liste der Komponenten (Config Images:Components, z. B. dotnet,python).")]
+    public string Components { get; set; } = string.Empty;
+
+    [Option("snapshot", HelpText = "Nach erfolgreicher Installation ohne Rückfrage stoppen und diesen Snapshot anlegen.")]
+    public string? Snapshot { get; set; }
+}
+
+[Verb("repo-send", HelpText = "Schickt main eines Host-Repositorys in eine VM: Bare-Repo ~/repos/<repo>.git, main samt Historie als git bundle per transfer (danach nur Neues, nur Vorspulen), Arbeitskopie ~/work/<repo>. Wiederholbar; braucht die Komponente git (cb vm-install -n <vm> -c git).")]
+public sealed class RepoSendOptions : MultipassOptions
+{
+    [Option('n', "name", Required = true, HelpText = "Name der VM.")]
+    public string Name { get; set; } = string.Empty;
+
+    [Option('r', "repo", HelpText = "Pfad im Host-Repository (Standard: aktuelles Verzeichnis).")]
+    public string? Repo { get; set; }
+}
+
+[Verb("repo-receive", HelpText = "Holt claude/<id> der VM als git bundle und spult main darauf vor (merge --ff-only) — nur nach Rückfrage oder mit --yes; hat main eigene Commits, bleibt alles unverändert. Ohne --id: listet die claude/*-Branches der VM.")]
+public sealed class RepoReceiveOptions : MultipassOptions
+{
+    [Option('n', "name", Required = true, HelpText = "Name der VM.")]
+    public string Name { get; set; } = string.Empty;
+
+    [Option('i', "id", HelpText = "Task-Id; geholt wird claude/<id>. Ohne Angabe: vorhandene Ids auflisten.")]
+    public string? Id { get; set; }
+
+    [Option('r', "repo", HelpText = "Pfad im Host-Repository (Standard: aktuelles Verzeichnis).")]
+    public string? Repo { get; set; }
+
+    [Option("diff", HelpText = "Vor der Rückfrage den vollständigen Diff zeigen (sonst nur die Statistik).")]
+    public bool Diff { get; set; }
+
+    [Option('y', "yes", HelpText = "Ohne Rückfrage vorspulen (ausdrückliche Zustimmung).")]
+    public bool Yes { get; set; }
 }
