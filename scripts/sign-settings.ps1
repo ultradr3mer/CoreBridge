@@ -14,6 +14,9 @@
   Fingerprint nennen) und per `cb settings-verify -f` gegen den eingebetteten
   Schlüssel. Die Passphrase fragt gpg-agent/pinentry ab; das Skript sieht sie nie.
 
+  Mit -ClearSign entsteht stattdessen <datei>.clearsigned.asc (gpg --clearsign:
+  Inhalt und Signatur in einer Datei); die abgetrennte <datei>.asc bleibt unberührt.
+
   Ohne gpg-agent (CI): tools/CoreBridge.Signer.
 
 .PARAMETER Files
@@ -27,15 +30,22 @@
 .PARAMETER NoCliCheck
   Überspringt die Gegenprobe mit `cb settings-verify` (nur die gpg-Prüfung).
 
+.PARAMETER ClearSign
+  Klartextsignatur (gpg --clearsign) nach <datei>.clearsigned.asc statt abgetrennter
+  Signatur. Geprüft wird nur per gpg; `cb settings-verify` kennt das Format nicht.
+
 .EXAMPLE
   .\scripts\sign-settings.ps1
 .EXAMPLE
   .\scripts\sign-settings.ps1 -Files src\CoreBridge.Cli\appsettings.json
+.EXAMPLE
+  .\scripts\sign-settings.ps1 -ClearSign
 #>
 param(
     [string[]] $Files,
     [string] $KeyId = $(if ($env:CORE_BRIDGE_SIGNING_KEY) { $env:CORE_BRIDGE_SIGNING_KEY } else { '7D67FF405BAA2BB53027F57280E7816D2A7F227B' }),
-    [switch] $NoCliCheck
+    [switch] $NoCliCheck,
+    [switch] $ClearSign
 )
 
 $ErrorActionPreference = 'Stop'
@@ -61,13 +71,26 @@ Write-Host "gpg: $($gpg.Source)"
 Write-Host "Schlüssel: $KeyId"
 
 foreach ($file in $Files) {
-    $signature = "$file.asc"
-    & $gpg.Source --batch --yes --local-user $KeyId --detach-sign --armor --textmode --digest-algo SHA256 --output $signature $file
+    if ($ClearSign) {
+        $signature = "$file.clearsigned.asc"
+        & $gpg.Source --batch --yes --local-user $KeyId --clearsign --digest-algo SHA256 --output $signature $file
+    }
+    else {
+        $signature = "$file.asc"
+        & $gpg.Source --batch --yes --local-user $KeyId --detach-sign --armor --textmode --digest-algo SHA256 --output $signature $file
+    }
+
     if ($LASTEXITCODE -ne 0) {
         throw "Signieren fehlgeschlagen: $file (gpg exit $LASTEXITCODE)"
     }
 
-    $status = & $gpg.Source --batch --status-fd 1 --verify $signature $file 2>$null
+    # Eine Klartextsignatur enthält den Inhalt selbst; die abgetrennte braucht die Datei dazu.
+    $status = if ($ClearSign) {
+        & $gpg.Source --batch --status-fd 1 --verify $signature 2>$null
+    }
+    else {
+        & $gpg.Source --batch --status-fd 1 --verify $signature $file 2>$null
+    }
     $valid = $status | Where-Object { $_ -match '^\[GNUPG:\] VALIDSIG (\S+)' -and $Matches[1] -eq $KeyId }
     if (-not $valid) {
         throw "gpg-Prüfung fehlgeschlagen: $signature ist keine gültige Signatur von $KeyId."
@@ -76,7 +99,10 @@ foreach ($file in $Files) {
     Write-Host "signiert: $signature"
 }
 
-if (-not $NoCliCheck) {
+if ($ClearSign) {
+    Write-Host 'cb settings-verify übersprungen: prüft nur abgetrennte Signaturen (<datei>.asc).'
+}
+elseif (-not $NoCliCheck) {
     # Gegenprobe mit dem eingebetteten Schlüssel, wie CoreBridge beim Start prüft.
     & dotnet run --project (Join-Path $root 'src\CoreBridge.Cli') -- settings-verify -f ($Files -join ',')
     if ($LASTEXITCODE -ne 0) {
