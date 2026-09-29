@@ -4,6 +4,9 @@
     <Project Path="src/CoreBridge.Core/CoreBridge.Core.csproj" />
     <Project Path="src/CoreBridge.Tui/CoreBridge.Tui.csproj" />
   </Folder>
+  <Folder Name="/tools/">
+    <Project Path="tools/CoreBridge.Signer/CoreBridge.Signer.csproj" />
+  </Folder>
   <Folder Name="/test/">
     <Project Path="test/CoreBridge.Cli.Tests/CoreBridge.Cli.Tests.csproj" />
     <Project Path="test/CoreBridge.Core.Tests/CoreBridge.Core.Tests.csproj" />
