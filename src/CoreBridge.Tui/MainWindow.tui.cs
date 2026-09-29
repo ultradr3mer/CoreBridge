@@ -4,7 +4,7 @@ using Terminal.Gui.Views;
 
 namespace CoreBridge.Tui;
 
-public class MainWindow : Runnable
+public partial class MainWindow : Runnable
 {
     private readonly Splitter splitter;
 

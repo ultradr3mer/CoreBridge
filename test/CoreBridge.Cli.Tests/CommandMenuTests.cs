@@ -5,68 +5,111 @@ using CoreBridge.Cli;
 namespace CoreBridge.Cli.Tests;
 
 /// <summary>
-/// Sichert ab, dass die von Hand gepflegten <see cref="CommandMenu"/>-Deklarationen mit
-/// den <c>[Verb]</c>-/<c>[Option]</c>-Attributen der Optionsklassen übereinstimmen.
-/// Reflection ist hier ausdrücklich erlaubt und gewollt — nur im Test.
+/// Prüft das Menü, das aus den <c>[Verb]</c>-/<c>[Option]</c>-Attributen gelesen wird:
+/// Vollständigkeit, Vererbung (das geerbte <c>-t/--timeout</c>) und vor allem, dass die
+/// Angaben vom echten Parser akzeptiert werden. Reflection ist hier (nur im Test) erlaubt,
+/// um den Parser generisch über den jeweiligen Options-Typ aufzurufen.
 /// </summary>
 public class CommandMenuTests
 {
     [Fact]
-    public void MenuesEnthaeltGenauDieRegistriertenVerbe()
+    public void MenueEnthaeltGenauDieRegistriertenVerbe()
     {
-        var registered = Program.RegisteredOptionTypes;
-        Assert.Equal(registered.Count, CommandMenus.All.Count);
-        Assert.Equal(registered.Count, CommandMenus.ByName.Count);
+        Assert.Equal(Program.RegisteredOptionTypes.Count, CommandMenus.All.Count);
+        Assert.Equal(CommandMenus.All.Count, CommandMenus.ByName.Count);
 
-        foreach (var type in registered)
+        foreach (var type in Program.RegisteredOptionTypes)
         {
-            var verb = type.GetCustomAttribute<VerbAttribute>();
-            Assert.NotNull(verb);
-            Assert.True(
-                CommandMenus.ByName.ContainsKey(verb!.Name),
-                $"Verb {verb.Name} ({type.Name}) fehlt in CommandMenus.");
+            var menu = CommandMenus.For(type);
+            Assert.Equal(menu, CommandMenus.Find(menu.Name));
         }
     }
 
     [Fact]
-    public void MenueStimmtMitDenAttributenUeberein()
+    public void JedesVerbLaesstSichMitDenPflichtparameternParsen()
     {
-        var nachTyp = Program.RegisteredOptionTypes
-            .ToDictionary(t => t.Name, t => CommandMenus.ByName[VerbName(t)]);
-
-        foreach (var (typName, menu) in nachTyp)
+        // Beweis, dass das Menü nicht nur abgelesene, sondern gültige Angaben enthält:
+        // ein Aufruf mit genau den im Menü genannten Pflichtoptionen muss fehlerfrei sein.
+        foreach (var (menu, type) in Paare())
         {
-            var type = Program.RegisteredOptionTypes.Single(t => t.Name == typName);
-            var verb = type.GetCustomAttribute<VerbAttribute>()!;
-            Assert.Equal(verb.Name, menu.Name);
-            Assert.Equal(verb.HelpText, menu.Help);
-
-            // Erwartete Parameter: alle nicht versteckten [Option]-Properties
-            // (inklusive der Basisklasse) minus die [Option]-Properties mit Setter
-            // ohne Attribut (die private Getter-Variante -t/--timeout zählt mit).
-            var erwartet = type
-                .GetProperties(BindingFlags.Public | BindingFlags.Instance)
-                .Select(p => p.GetCustomAttribute<OptionAttribute>())
-                .Where(o => o is not null && !o.Hidden)
-                .Select(o => (o!.LongName, Abbrev(o.ShortName), o.Required, o.HelpText))
-                .ToList();
-
-            var ist = menu.Parameters
-                .Select(p => (p.Name, p.Abbreviation?.TrimStart('-'), p.Required, p.Help))
-                .ToList();
-
-            Assert.Equal(erwartet.Count, ist.Count);
-            for (var i = 0; i < erwartet.Count; i++)
+            var args = new List<string> { menu.Name };
+            foreach (var parameter in menu.Parameters.Where(p => p.Required))
             {
-                Assert.Equal(erwartet[i].Item1, ist[i].Name);
-                Assert.Equal(erwartet[i].Item2, ist[i].Item2);
-                Assert.Equal(erwartet[i].Required, ist[i].Required);
-                Assert.Equal(erwartet[i].HelpText, ist[i].Help);
+                args.Add(parameter.Abbreviation ?? $"--{parameter.Name}");
+                if (IstSchalter(type, parameter))
+                {
+                    continue;
+                }
+
+                args.Add("x");
             }
+
+            var fehler = Parse(args, type);
+            Assert.Empty(fehler);
         }
     }
 
-    private static string VerbName(Type type) => type.GetCustomAttribute<VerbAttribute>()!.Name;
+    [Fact]
+    public void FehlendePflichtoptionenMeldetDerParserGenausoWieDasMenu()
+    {
+        // Umgekehrte Richtung: ohne Angaben meldet der Parser genau die Optionen, die
+        // das Menü als Required ausweist.
+        foreach (var (menu, type) in Paare().Where(p => p.Item1.Parameters.Any(x => x.Required)))
+        {
+            var fehlend = Parse([menu.Name], type).OfType<MissingRequiredOptionError>().Count();
+            Assert.Equal(menu.Parameters.Count(p => p.Required), fehlend);
+        }
+    }
 
-    private static string? Abbrev(string? shortName) => string.IsNullOrEmpty(shortName) ? null : shortName.TrimStart('-');
+    [Fact]
+    public void GeerbterTimeoutErscheintNurBeiMultipassVerben()
+    {
+        foreach (var (menu, type) in Paare())
+        {
+            var erwartet = typeof(MultipassOptions).IsAssignableFrom(type);
+            Assert.Equal(erwartet, menu.Parameters.Any(p => p.Name == "timeout"));
+        }
+    }
+
+    [Fact]
+    public void VersteckteOptionenErscheinenNichtImMenu()
+    {
+        Assert.DoesNotContain(CommandMenus.For<MultipassRestartOptions>().Parameters, p => p.Name == "pause-on-exit");
+    }
+
+    [Fact]
+    public void UnbekanntesVerbLiefertNull()
+    {
+        Assert.Null(CommandMenus.Find("gibtsnicht"));
+    }
+
+    private static IEnumerable<(CommandMenu Menu, Type Type)> Paare()
+        => Program.RegisteredOptionTypes.Select(type => (CommandMenus.For(type), type));
+
+    private static bool IstSchalter(Type optionsType, CommandParameter parameter)
+        => optionsType
+            .GetProperties(BindingFlags.Public | BindingFlags.Instance)
+            .First(p => p.GetCustomAttribute<OptionAttribute>()?.LongName == parameter.Name)
+            .PropertyType == typeof(bool);
+    /// <summary>
+    /// Ruft den echten Parser generisch über <paramref name="optionsType"/> auf und
+    /// liefert seine Fehler. Das Ergebnis ist <c>ParserResult&lt;TOptions&gt;</c>, und
+    /// <c>Errors</c> ist unabhängig von <c>T</c> immer <c>IEnumerable&lt;Error&gt;</c> —
+    /// deshalb wird die Property statt des Ergebnisses geholt (kein Cast nötig).
+    /// </summary>
+    private static IReadOnlyList<Error> Parse(IReadOnlyList<string> args, Type optionsType)
+    {
+        // ParseArguments ist mehrfach überladen (IEnumerable<string> und string[]);
+        // hier ist die Variante mit genau einem Parameter gemeint.
+        var methode = typeof(Parser)
+            .GetMethods(BindingFlags.Public | BindingFlags.Instance)
+            .Single(m => m.Name == nameof(Parser.ParseArguments)
+                && m.IsGenericMethodDefinition
+                && m.GetGenericArguments().Length == 1
+                && m.GetParameters().Length == 1);
+
+        var ergebnis = methode.MakeGenericMethod(optionsType).Invoke(Parser.Default, [args.ToArray()]);
+        var errors = (IEnumerable<Error>)ergebnis!.GetType().GetProperty("Errors")!.GetValue(ergebnis)!;
+        return errors.ToList();
+    }
 }

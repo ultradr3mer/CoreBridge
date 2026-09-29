@@ -1,97 +1,80 @@
+using System.Reflection;
+using CommandLine;
+
 namespace CoreBridge.Cli;
 
 /// <summary>
-/// Ein Parameter eines Verbs — ohne Reflection aus den <c>[Option]</c>-Attributen
-/// gelesen, sondern von Hand in der Menu-Deklaration der Optionsklasse gepflegt
-/// (die Übereinstimmung sichert <c>CommandMenuTests</c>).
+/// Ein Parameter eines Verbs, gelesen aus dem <c>[Option]</c>-Attribut der
+/// Optionsklasse. <c>Abbreviation</c> ist die Kurzform mit Bindestrich
+/// (z. B. <c>-n</c>) oder <c>null</c> ohne.
 /// </summary>
-/// <param name="Name">Langer Name, z. B. <c>name</c>.</param>
-/// <param name="Abbreviation">Kurzform wie <c>-n</c> (mit Bindestrich) oder <c>null</c>.</param>
-/// <param name="Required">Pflichtparameter wie in <c>[Option(Required = true)]</c>.</param>
-/// <param name="Help">Hilfetext, wie er in der CLI-Hilfe erscheint.</param>
-public sealed record CommandParameter(string Name, string? Abbreviation, bool Required, string Help)
-{
-    /// <summary>Parameter mit Kurzform.</summary>
-    public static CommandParameter Short(string abbreviation, string name, bool required, string help)
-        => new(name, abbreviation.StartsWith('-') ? abbreviation : "-" + abbreviation, required, help);
-
-    /// <summary>Parameter ohne Kurzform.</summary>
-    public static CommandParameter Long(string name, bool required, string help) => new(name, null, required, help);
-}
+public sealed record CommandParameter(string Name, string? Abbreviation, bool Required, string Help);
 
 /// <summary>
-/// Beschreibung eines Verbs für Menü-/Hilfeanzeigen (TUI, Shell-Auswahl, Doku).
+/// Ein Verb mit Hilfe und Parametern, gelesen aus <c>[Verb]</c> und <c>[Option]</c>.
 /// </summary>
-/// <param name="Name">Verbname, z. B. <c>vm-create</c>.</param>
-/// <param name="Help">Hilfetext des Verbs.</param>
-/// <param name="Parameters">Parameter in Eingabereihenfolge.</param>
-public sealed record CommandMenu(string Name, string Help, IReadOnlyList<CommandParameter> Parameters)
-{
-    /// <summary>Verb ohne Parameter.</summary>
-    public static CommandMenu Simple(string name, string help) => new(name, help, Array.Empty<CommandParameter>());
-
-    /// <summary>
-    /// Das von allen Verben aus <c>MultipassOptions</c> angebotene
-    /// <c>-t/--timeout</c> (siehe <see cref="MultipassOptions"/>).
-    /// </summary>
-    public static CommandParameter Timeout { get; } =
-        CommandParameter.Short("t", "timeout", false,
-            "Timeout for this call, e.g. 300s or 1000ms (overrides DefaultTimeout / DefaultTimeoutVmCreation from the config).");
-
-    /// <summary>Parameterliste eines Verbs, das von <c>MultipassOptions</c> erbt (hinten <c>-t/--timeout</c>).</summary>
-    public static IReadOnlyList<CommandParameter> WithTimeout(params CommandParameter[] parameters)
-    {
-        var all = new CommandParameter[parameters.Length + 1];
-        parameters.CopyTo(all, 0);
-        all[^1] = Timeout;
-        return all;
-    }
-}
+public sealed record CommandMenu(string Name, string Help, IReadOnlyList<CommandParameter> Parameters);
 
 /// <summary>
-/// Das Menü aller registrierten Verben: <see cref="All"/> in deklarierter Reihenfolge
-/// (dieselbe Reihenfolge wie <c>Program.RegisteredOptionTypes</c>), <see cref="ByName"/>
-/// zum Nachschlagen. Die Zuordnung entsteht beim Start aus den
-/// <c>public static CommandMenu Menu</c>-Membern der Optionsklassen — ohne Reflection.
-/// Das Member steht bewusst nicht als <c>static abstract</c> in <see cref="IOptions"/>:
-/// statische Member werden nicht vererbt, die abstrakte <c>MultipassOptions</c> müsste
-/// das Member also ohnehin nur erneut als abstrakt deklarieren. Die Liste unten erzwingt
-/// die Vollständigkeit genauso, und <c>CommandMenuTests</c> prüft sie gegen die Attribute.
+/// Das Menü aller registrierten Verben: <see cref="All"/> in der Reihenfolge von
+/// <c>Program.RegisteredOptionTypes</c>, <see cref="ByName"/> zum Nachschlagen.
+/// <para>
+/// Die Attribute in <c>Options.cs</c> sind die einzige Quelle — Name, Hilfetext,
+/// Kurzform und Pflichtangabe stehen genau einmal, am <c>[Verb]</c>-/<c>[Option]</c>-Attribut.
+/// Gelesen wird per Reflection, einmalig beim ersten Zugriff und danach gecacht.
+/// </para>
 /// </summary>
 public static class CommandMenus
 {
-    /// <summary>Alle Verben mit ihren Parametern, in Ausführungs-/Menüreihenfolge.</summary>
-    public static IReadOnlyList<CommandMenu> All { get; } =
-    [
-        MultipassStatusOptions.Menu,
-        MultipassRestartOptions.Menu,
-        VmListOptions.Menu,
-        VmCreateOptions.Menu,
-        VmStartOptions.Menu,
-        VmStopOptions.Menu,
-        VmDeleteOptions.Menu,
-        VmExecOptions.Menu,
-        VmConnectOptions.Menu,
-        VmPutOptions.Menu,
-        VmGetOptions.Menu,
-        VmCloneOptions.Menu,
-        VmSnapshotOptions.Menu,
-        VmSnapshotsOptions.Menu,
-        VmRestoreOptions.Menu,
-        VmInstallOptions.Menu,
-        VmResizeOptions.Menu,
-        RepoSendOptions.Menu,
-        RepoReceiveOptions.Menu,
-        InitConfigureOptions.Menu,
-        InitListOptions.Menu,
-        InitDeleteOptions.Menu
-    ];
+    private static readonly Lazy<IReadOnlyList<CommandMenu>> Cache =
+        new(BaueAlle, LazyThreadSafetyMode.ExecutionAndPublication);
+
+    /// <summary>Alle Verben mit ihren Parametern, in der Reihenfolge von <c>Program.RegisteredOptionTypes</c>.</summary>
+    public static IReadOnlyList<CommandMenu> All => Cache.Value;
 
     /// <summary>Wie <see cref="All"/>, aber nach Verbnamen (Groß-/Kleinschreibung egal).</summary>
     public static IReadOnlyDictionary<string, CommandMenu> ByName { get; } =
-        All.ToDictionary(menu => menu.Name, StringComparer.OrdinalIgnoreCase);
+        Cache.Value.ToDictionary(menu => menu.Name, StringComparer.OrdinalIgnoreCase);
 
     /// <summary>Menü eines Verbs oder <c>null</c>, wenn es das Verb nicht gibt.</summary>
     public static CommandMenu? Find(string name)
         => ByName.TryGetValue(name, out var menu) ? menu : null;
+
+    /// <summary>Menü einer Optionsklasse, z. B. <c>CommandMenus.For&lt;VmCreateOptions&gt;()</c>.</summary>
+    public static CommandMenu For<TOptions>() where TOptions : IOptions
+        => For(typeof(TOptions));
+
+    /// <summary>Menü einer Optionsklasse; <paramref name="optionsType"/> muss eine <c>[Verb]</c>-Klasse sein.</summary>
+    public static CommandMenu For(Type optionsType)
+    {
+        var name = optionsType.GetCustomAttribute<VerbAttribute>()?.Name
+            ?? throw new ArgumentException($"{optionsType.Name} ist keine [Verb]-Klasse.", nameof(optionsType));
+        return ByName[name];
+    }
+
+    private static IReadOnlyList<CommandMenu> BaueAlle()
+        => Program.RegisteredOptionTypes
+            .Where(type => type.GetCustomAttribute<VerbAttribute>() is not null)
+            .Select(Baue)
+            .ToList();
+
+    private static CommandMenu Baue(Type optionsType)
+    {
+        var verb = optionsType.GetCustomAttribute<VerbAttribute>()!;
+        var parameter = optionsType
+            // GetProperties liefert die eigenen und die geerbten Properties mit, so
+            // kommt das -t/--timeout aus MultipassOptions automatisch mit. Versteckte
+            // Optionen (z. B. --pause-on-exit) gehören nicht ins Menü.
+            .GetProperties(BindingFlags.Public | BindingFlags.Instance)
+            .Select(property => (Property: property, Option: property.GetCustomAttribute<OptionAttribute>()))
+            .Where(x => x.Option is { Hidden: false })
+            .Select(x => new CommandParameter(
+                Name: x.Option!.LongName ?? x.Property.Name.ToLowerInvariant(),
+                Abbreviation: string.IsNullOrEmpty(x.Option.ShortName) ? null : "-" + x.Option.ShortName.TrimStart('-'),
+                Required: x.Option.Required,
+                Help: x.Option.HelpText ?? string.Empty))
+            .ToList();
+
+        return new CommandMenu(verb.Name, verb.HelpText ?? string.Empty, parameter);
+    }
 }
