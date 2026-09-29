@@ -6,14 +6,19 @@ namespace CoreBridge.Core.Authenticity;
 /// <summary>
 /// Ergebnis einer Signaturprüfung für eine Datei. <see cref="Reason"/> ist bei
 /// Erfolg die Kurzbeschreibung des Signierers, sonst der Grund der Ablehnung —
-/// fertig zum Anzeigen.
+/// fertig zum Anzeigen. <see cref="SignerUserId"/> ist die erste User-ID des
+/// Primärschlüssels (z. B. <c>CoreBridge &lt;core@brid.ge&gt;</c>), sobald der
+/// Schlüssel bekannt ist. <see cref="ContentMismatch"/> ist nur gesetzt, wenn
+/// Schlüssel und Signatur in Ordnung sind, der Inhalt aber nicht passt.
 /// </summary>
 public sealed record SignatureCheck(
     string File,
     bool Valid,
     string Reason,
     string? Fingerprint = null,
-    DateTime? SignedAt = null);
+    DateTime? SignedAt = null,
+    string? SignerUserId = null,
+    bool ContentMismatch = false);
 
 /// <summary>
 /// Prüft abgetrennte OpenPGP-Signaturen (<c>&lt;datei&gt;.asc</c>, armored oder
@@ -74,8 +79,36 @@ public static class PgpFileVerifier
         // Bytes prüfen.
         using var buffer = new MemoryStream();
         data.CopyTo(buffer);
-        var content = buffer.ToArray();
+        return VerifyAny(file, buffer.ToArray(), signature, trusted, utcNow, textOnly: false);
+    }
 
+    /// <summary>
+    /// Prüft eine Clearsign-Datei (<see cref="ClearsignedMessage"/>) mit denselben
+    /// Bedingungen wie <see cref="Verify"/>, gegen den kanonischen Text. Clearsign
+    /// ist immer eine Text-Signatur, daher gilt nur CanonicalTextDocument.
+    /// </summary>
+    public static SignatureCheck VerifyClearsigned(
+        string file,
+        ClearsignedMessage message,
+        PgpPublicKeyRingBundle trusted,
+        DateTime utcNow)
+    {
+        ArgumentNullException.ThrowIfNull(message);
+        ArgumentNullException.ThrowIfNull(trusted);
+
+        using var signature = new MemoryStream(message.Signature);
+        return VerifyAny(file, message.CanonicalText, signature, trusted, utcNow, textOnly: true);
+    }
+
+    /// <summary>Gültig, sobald eine Signatur passt; sonst der erste Ablehnungsgrund.</summary>
+    private static SignatureCheck VerifyAny(
+        string file,
+        byte[] content,
+        Stream signature,
+        PgpPublicKeyRingBundle trusted,
+        DateTime utcNow,
+        bool textOnly)
+    {
         PgpSignatureList signatures;
         try
         {
@@ -94,7 +127,9 @@ public static class PgpFileVerifier
         SignatureCheck? firstFailure = null;
         for (var i = 0; i < signatures.Count; i++)
         {
-            var check = VerifyOne(file, content, signatures[i], trusted, utcNow);
+            var check = textOnly && signatures[i].SignatureType != PgpSignature.CanonicalTextDocument
+                ? new SignatureCheck(file, false, $"Signaturtyp 0x{signatures[i].SignatureType:X2} ist keine Text-Signatur.")
+                : VerifyOne(file, content, signatures[i], trusted, utcNow);
             if (check.Valid)
             {
                 return check;
@@ -145,10 +180,11 @@ public static class PgpFileVerifier
         var fingerprint = Convert.ToHexString(key.GetFingerprint());
         var ring = trusted.GetPublicKeyRing(signature.KeyId);
         var master = ring.GetPublicKey();
+        var userId = master.GetUserIds().FirstOrDefault();
 
         if (master.HasRevocation() || key.HasRevocation())
         {
-            return new SignatureCheck(file, false, $"Schlüssel {fingerprint} ist widerrufen.", fingerprint);
+            return new SignatureCheck(file, false, $"Schlüssel {fingerprint} ist widerrufen.", fingerprint, SignerUserId: userId);
         }
 
         // Ein Subkey gilt höchstens so lange wie sein Primärschlüssel.
@@ -164,23 +200,24 @@ public static class PgpFileVerifier
                 file,
                 false,
                 $"Schlüssel {fingerprint} ist am {expiresAt:yyyy-MM-dd} abgelaufen — Schlüssel verlängern, neu exportieren und einbetten.",
-                fingerprint);
+                fingerprint,
+                SignerUserId: userId);
         }
 
         var signedAt = signature.CreationTime;
         if (signedAt < key.CreationTime || signedAt > utcNow + ClockSkew)
         {
-            return new SignatureCheck(file, false, $"Signaturzeitpunkt {signedAt:u} liegt außerhalb der Gültigkeit des Schlüssels.", fingerprint, signedAt);
+            return new SignatureCheck(file, false, $"Signaturzeitpunkt {signedAt:u} liegt außerhalb der Gültigkeit des Schlüssels.", fingerprint, signedAt, userId);
         }
 
         signature.InitVerify(key);
         signature.Update(content);
         if (!signature.Verify())
         {
-            return new SignatureCheck(file, false, "Inhalt passt nicht zur Signatur (nach dem Signieren geändert?).", fingerprint, signedAt);
+            return new SignatureCheck(file, false, "Inhalt passt nicht zur Signatur (nach dem Signieren geändert?).", fingerprint, signedAt, userId, ContentMismatch: true);
         }
 
-        return new SignatureCheck(file, true, $"signiert von {fingerprint} am {signedAt:yyyy-MM-dd HH:mm} UTC", fingerprint, signedAt);
+        return new SignatureCheck(file, true, $"signiert von {fingerprint} am {signedAt:yyyy-MM-dd HH:mm} UTC", fingerprint, signedAt, userId);
     }
 
     private static DateTime? ExpiresAt(PgpPublicKey key, long validSeconds)
