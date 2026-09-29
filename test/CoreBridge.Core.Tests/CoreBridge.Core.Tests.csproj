@@ -24,6 +24,11 @@
     <None Include="Recordings\**\*.jsonl" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
+  <!-- Mit echtem gpg (clearsign) erzeugt; nur der öffentliche Testschlüssel liegt bei. -->
+  <ItemGroup>
+    <None Include="Clearsign\*" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
   <ItemGroup>
     <ProjectReference Include="..\..\src\CoreBridge.Core\CoreBridge.Core.csproj" />
     <ProjectReference Include="..\CoreBridge.Simulation\CoreBridge.Simulation.csproj" />

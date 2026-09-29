@@ -1,4 +1,4 @@
-﻿namespace CoreBridge.Core.Authenticity
+﻿namespace CoreBridge.Core.Diff
 {
   internal class Tracked<T> where T : ITrackable
   {

@@ -1,4 +1,4 @@
-﻿namespace CoreBridge.Core.Authenticity
+﻿namespace CoreBridge.Core.Diff
 {
   using System.Collections.Generic;
 

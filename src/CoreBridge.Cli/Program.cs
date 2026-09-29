@@ -75,7 +75,7 @@ public static class Program
     }
 
     var configuration = new ConfigurationBuilder()
-        .SetBasePath(AppContext.BaseDirectory)
+        .SetFileProvider(new SignedFileProvider(AppContext.BaseDirectory, requireSignature: false))
         .AddJsonFile("appsettings.json", optional: false)
         .AddJsonFile($"appsettings.{environment}.json", optional: true)
         .AddJsonFile("appsettings.local.json", optional: true)
@@ -92,7 +92,7 @@ public static class Program
     var userProfile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
 
     var configuration = new ConfigurationBuilder()
-        .SetBasePath(localAppData)
+        .SetFileProvider(new SignedFileProvider(localAppData, requireSignature: false))
         .AddJsonFile($"appsettings.{userProfile}.json", optional: true)
         .Build();
 

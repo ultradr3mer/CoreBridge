@@ -1,4 +1,4 @@
-﻿namespace CoreBridge.Core.Authenticity
+﻿namespace CoreBridge.Core.Diff
 {
   /// <summary>
   /// Markierungs-Interface für Objekte, deren Eigenschaftsänderungen überwacht werden sollen.
