@@ -687,8 +687,80 @@ public static class Program
 
     if (cloudInit is not null)
     {
+      // Erst wenn die Provisionierung nachweislich fertig ist, gibt es den
+      // Snapshot — sonst hielte er eine halbe Installation fest, und weil
+      // runcmd nur einmal je Instanz läuft, holt kein späterer Start sie nach.
+      await VerifyProvisioning(context, options.Name, profile);
       await OfferSnapshotAfterConfiguration(context, options.Name, profile?.Name ?? "provisioned", options.Snapshot);
     }
+  }
+
+  /// <summary>
+  /// Wartet nach dem Launch, bis cloud-init im Gast fertig ist, und verlangt
+  /// dann die <c>.ready</c>-Marker aller Profil-Komponenten mit Skript. Ein
+  /// fehlender Marker nach beendetem cloud-init heißt: diese Komponente ist
+  /// gescheitert — Exit 1, die VM läuft zur Diagnose weiter, kein Snapshot.
+  /// Ohne Profil (nur <c>--cloud-init</c>) sind keine Komponenten bekannt; dann
+  /// wird nur auf cloud-init gewartet.
+  /// </summary>
+  private static async Task VerifyProvisioning(CommandContext context, string name, InitProfile? profile)
+  {
+    var events = context.Events;
+    var waitMs = (int)context.Config.DefaultTimeoutVmCreation.ReadTime().TotalMilliseconds;
+    const string waitLabel = "cloud-init: warten, bis die Gast-Provisionierung fertig ist";
+    MultipassRunResult waited;
+    try
+    {
+      waited = await RunStep(
+          context,
+          waitLabel,
+          () => context.Vms.Exec(name, InitInstall.WaitForCloudInitCommand, waitMs, KeepWaiting(context, waitLabel)));
+    }
+    catch (MultipassTimeoutException)
+    {
+      throw new ProgramExecutionException(
+          1,
+          $"Stopped waiting — cloud-init keeps provisioning `{name}` in the background; no snapshot was taken. Check later with `cb vm-exec -n {name} -c \"cloud-init status\"`.");
+    }
+
+    if (waited.ExitCode != 0)
+    {
+      throw new ProgramExecutionException(
+          waited.ExitCode,
+          $"vm-create {name}: waiting for cloud-init failed (exit {waited.ExitCode}). The VM stays running for diagnosis; no snapshot was taken.");
+    }
+
+    if (profile is null)
+    {
+      await events.Emit(events.Std("Provisionierung: cloud-init fertig (ohne Profil keine Komponenten zu prüfen)."));
+      return;
+    }
+
+    var markers = InitInstall.Markers(context.Config.Images, profile.Components);
+    var missing = new List<(string Component, string Marker)>();
+    foreach (var (component, marker) in markers)
+    {
+      var probe = await Task.Run(
+          () => context.Vms.Exec(name, InitInstall.MarkerProbe(marker), context.DefaultTimeoutMs),
+          context.CancellationToken);
+      if (probe.ExitCode != 0)
+      {
+        missing.Add((component, marker));
+      }
+    }
+
+    if (missing.Count > 0)
+    {
+      throw new ProgramExecutionException(
+          1,
+          $"vm-create {name}: cloud-init finished, but {string.Join(", ", missing.Select(m => $"`{m.Component}`"))} did not set "
+          + $"{(missing.Count == 1 ? "its marker" : "their markers")} ({string.Join(", ", missing.Select(m => m.Marker))}) — the provisioning is incomplete. "
+          + $"The VM stays running for diagnosis (`cb vm-exec -n {name} -c \"sudo tail -n 50 /var/log/cloud-init-output.log\"`); no snapshot was taken.");
+    }
+
+    await events.Emit(events.Std(markers.Count == 0
+        ? "Provisionierung: cloud-init fertig (keine Komponente mit Marker)."
+        : $"Provisionierung: OK ({string.Join(", ", markers.Select(m => m.Component))})"));
   }
 
   private static async Task RunVmExec(CommandContext context, VmExecOptions options)

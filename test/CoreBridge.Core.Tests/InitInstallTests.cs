@@ -42,6 +42,25 @@ public class InitInstallTests
         Assert.Equal("/var/lib/corebridge/python.ready", steps[7].Marker);
     }
 
+    /// <summary>
+    /// vm-create prüft nach cloud-init genau diese Marker: einer je Komponente mit
+    /// Skript, in Profilreihenfolge; reine Snap-Komponenten (opencode) setzen keinen.
+    /// </summary>
+    [Fact]
+    public void MarkerNurFuerKomponentenMitSkript()
+    {
+        var markers = InitInstall.Markers(LoadShippedImagesConfig(), ["claude", "opencode", "dotnet"]);
+
+        Assert.Equal(
+            new[]
+            {
+                ("claude", "/var/lib/corebridge/claude.ready"),
+                ("dotnet", "/var/lib/corebridge/dotnet.ready")
+            },
+            markers);
+        Assert.Equal("test -f /var/lib/corebridge/claude.ready", InitInstall.MarkerProbe(markers[0].Marker));
+    }
+
     [Fact]
     public void UnbekannteKomponenteNenntDieBekannten()
     {

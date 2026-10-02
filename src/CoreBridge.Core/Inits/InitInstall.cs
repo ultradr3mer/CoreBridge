@@ -33,6 +33,36 @@ public static class InitInstall
 {
     public const string MarkerDirectory = "/var/lib/corebridge";
 
+    /// <summary>
+    /// Wartet im Gast, bis cloud-init fertig ist — auch wenn es mit Fehlern endet.
+    /// Ob die Komponenten installiert sind, sagt erst ihr Marker: das runcmd-Skript
+    /// von cloud-init ist ein schlichtes <c>sh</c> ohne <c>set -e</c>, sein Exit-Code
+    /// ist der des letzten Skripts, cloud-init meldet also auch nach einem
+    /// gescheiterten früheren Skript Erfolg.
+    /// </summary>
+    public const string WaitForCloudInitCommand = "cloud-init status --wait >/dev/null 2>&1 || true";
+
+    public static string MarkerPath(string component) => $"{MarkerDirectory}/{component}.ready";
+
+    /// <summary>Shell-Zeile, die genau dann mit 0 endet, wenn der Marker existiert.</summary>
+    public static string MarkerProbe(string marker) => $"test -f {Quote(marker)}";
+
+    /// <summary>
+    /// Die <c>.ready</c>-Marker der Komponenten: jede Komponente mit Skript setzt
+    /// ihren eigenen, als letzten Schritt nach ihren Prüfungen. Reine Snap-Komponenten
+    /// haben kein Skript und damit keinen Marker.
+    /// </summary>
+    public static IReadOnlyList<(string Component, string Marker)> Markers(ImagesConfig config, IEnumerable<string> components)
+    {
+        var names = components.Select(c => c.Trim()).Where(c => c.Length > 0).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        var resolved = InitComponents.Resolve(config, names);
+        return names
+            .Zip(resolved)
+            .Where(pair => !string.IsNullOrWhiteSpace(pair.Second.Script))
+            .Select(pair => (pair.First, MarkerPath(pair.First)))
+            .ToList();
+    }
+
     public static IReadOnlyList<InstallStep> Plan(ImagesConfig config, IEnumerable<string> components)
     {
         var names = components.Select(c => c.Trim()).Where(c => c.Length > 0).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
@@ -40,7 +70,7 @@ public static class InitInstall
         var steps = new List<InstallStep>
         {
             // Beim ersten Start einer VM kann cloud-init noch apt sperren.
-            new("warten, bis cloud-init fertig ist", "cloud-init status --wait >/dev/null 2>&1 || true")
+            new("warten, bis cloud-init fertig ist", WaitForCloudInitCommand)
         };
 
         if (resolved.Any(c => c.PackageUpdate))
@@ -90,8 +120,8 @@ public static class InitInstall
                 $"{name}: Skript nach {component.InstallPath} installieren",
                 $"sudo install -m 0755 -o root -g root {Quote(upload)} {Quote(component.InstallPath)}"));
             steps.Add(new($"{name}: Skript ausführen (als {user})", $"sudo {Quote(component.InstallPath)} {Quote(user)}"));
-            var marker = $"{MarkerDirectory}/{name}.ready";
-            steps.Add(new($"{name}: Marker {marker} prüfen", $"test -f {Quote(marker)}", Marker: marker));
+            var marker = MarkerPath(name);
+            steps.Add(new($"{name}: Marker {marker} prüfen", MarkerProbe(marker), Marker: marker));
         }
 
         return steps;

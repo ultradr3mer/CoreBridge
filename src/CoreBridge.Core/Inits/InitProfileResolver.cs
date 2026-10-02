@@ -7,10 +7,12 @@ namespace CoreBridge.Core.Inits;
 /// <summary>
 /// Aufgelöstes Launch-Profil für einen von <c>init-configure</c> erzeugten Namen.
 /// </summary>
+/// <param name="Components">Die Komponenten, für die <c>init-configure</c> die cloud-init gerendert hat.</param>
 public sealed record InitProfile(
     string Name,
     string RuntimeImage,
-    string? CloudInitPath);
+    string? CloudInitPath,
+    IReadOnlyList<string> Components);
 
 /// <summary>
 /// Trennt normale Multipass-Katalognamen von CoreBridge-Profilen.
@@ -67,7 +69,8 @@ public static class InitProfileResolver
         return new InitProfile(
             requestedImage,
             runtimeImage,
-            cloudInitPath);
+            cloudInitPath,
+            profileConfig.Components);
     }
 
     private static string? ResolveCloudInit(
