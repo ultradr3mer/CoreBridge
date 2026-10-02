@@ -27,12 +27,44 @@ public class MultipassServiceTests
     }
 
     [Fact]
-    public async Task OhneAdminrechteWirftOhneEingriff()
+    public async Task OhneRechteAmDienstWirftOhneEingriff()
     {
-        var service = new FakeService { Elevated = false };
+        var service = new FakeService { Elevated = false, CanControl = false };
 
-        await Assert.ThrowsAsync<MultipassException>(() => Drain(service));
+        await Assert.ThrowsAsync<MultipassAccessDeniedException>(() => Drain(service));
         Assert.Empty(service.Calls);
+    }
+
+    /// <summary>Erlaubt die Dienst-ACL dem Benutzer Stop/Start, braucht es keine Administratorrechte.</summary>
+    [Fact]
+    public async Task OhneAdminAberMitDienstrechtenStartetNeu()
+    {
+        var service = new FakeService { Elevated = false, CanControl = true, State = MultipassServiceState.Running };
+
+        await Drain(service);
+
+        Assert.Equal(["stop", "start"], service.Calls);
+        Assert.Equal(MultipassServiceState.Running, service.State);
+    }
+
+    /// <summary>
+    /// Den als SYSTEM laufenden Daemon hart zu beenden geht nur mit
+    /// Administratorrechten: Zugriff verweigert, damit die CLI erst jetzt erhöht.
+    /// </summary>
+    [Fact]
+    public async Task KillOhneAdminWirftZugriffVerweigert()
+    {
+        var service = new FakeService
+        {
+            Elevated = false,
+            CanControl = true,
+            State = MultipassServiceState.Running,
+            StopHangs = true,
+            KillDenied = true
+        };
+
+        await Assert.ThrowsAsync<MultipassAccessDeniedException>(() => Drain(service));
+        Assert.Equal(["stop", "confirm", "kill 4711"], service.Calls);
     }
 
     [Fact]
@@ -141,6 +173,10 @@ public class MultipassServiceTests
     {
         public bool Elevated { get; init; } = true;
 
+        public bool CanControl { get; init; }
+
+        public bool KillDenied { get; init; }
+
         public MultipassServiceState State { get; set; }
 
         public bool StopHangs { get; init; }
@@ -157,6 +193,8 @@ public class MultipassServiceTests
         public List<string> Calls { get; } = [];
 
         public override bool IsElevated() => Elevated;
+
+        public override bool CanControlService() => CanControl;
 
         public override MultipassServiceState QueryState() => State;
 
@@ -183,6 +221,11 @@ public class MultipassServiceTests
         public override void KillProcess(int processId)
         {
             Calls.Add($"kill {processId}");
+            if (KillDenied)
+            {
+                throw new MultipassAccessDeniedException("Zugriff verweigert (Test).");
+            }
+
             if (KillRestarts)
             {
                 State = MultipassServiceState.Running;

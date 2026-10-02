@@ -15,7 +15,8 @@ public sealed class EventFactory
     private readonly Stopwatch clock = Stopwatch.StartNew();
     private readonly HashSet<IOpenInteraction> open = [];
 
-    internal EventFactory(ChannelWriter<CliEvent> writer)
+    /// <param name="writer">Kanal zum Konsumenten; der Erzeuger (CLI, TUI) legt ihn je Kommando an.</param>
+    public EventFactory(ChannelWriter<CliEvent> writer)
     {
         this.writer = writer;
     }

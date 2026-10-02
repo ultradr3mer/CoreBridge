@@ -81,13 +81,13 @@ public class InitInstallTests
     }
 
     /// <summary>
-    /// Spielt den Plan über <see cref="VmService"/> gegen den Simulator: python
-    /// endet mit Marker, dotnet ohne — wie das echte <c>install-dotnet.sh</c>.
+    /// Spielt den Plan über <see cref="VmService"/> gegen den Simulator: jeder
+    /// Schritt gelingt, der letzte ist die Marker-Prüfung.
     /// </summary>
     [Theory]
-    [InlineData("python", true)]
-    [InlineData("dotnet", false)]
-    public void PlanImSimulatorSetztMarkerNurWennDasSkriptEsTut(string component, bool markerExpected)
+    [InlineData("python")]
+    [InlineData("dotnet")]
+    public void PlanImSimulatorEndetMitMarker(string component)
     {
         using var temp = new TempDirectory();
         var service = new VmService(SimulatedMultipassCli.At(Path.Combine(temp.Path, "state.json"), TimeSpan.Zero));
@@ -99,14 +99,10 @@ public class InitInstallTests
             last = step.IsUpload
                 ? service.Put(step.ScriptSource!, "sim-a", step.RemotePath)
                 : service.Exec("sim-a", step.Command!);
-            if (last.ExitCode != 0)
-            {
-                Assert.NotNull(step.Marker);
-                break;
-            }
+            Assert.True(last.ExitCode == 0, $"Schritt `{step.Title}` scheitert (Exit {last.ExitCode}).");
         }
 
-        Assert.Equal(markerExpected, last!.ExitCode == 0);
+        Assert.NotNull(last);
     }
 
     private static ImagesConfig LoadShippedImagesConfig()

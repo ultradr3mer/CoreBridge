@@ -14,6 +14,8 @@ public class ComponentScriptTests
     [InlineData("python", "/usr/local/sbin/corebridge-install-python", "python3.14")]
     [InlineData("cline", "/usr/local/sbin/corebridge-install-cline", "npm install -g --allow-scripts=cline,protobufjs cline")]
     [InlineData("git", "/usr/local/sbin/corebridge-install-git", "git --version")]
+    // Auch ohne Login-Shell im PATH (multipass exec), wie /usr/local/bin/claude.
+    [InlineData("dotnet", "/usr/local/sbin/corebridge-install-dotnet", "ln -sfn \"$dotnet_source\" /usr/local/bin/dotnet")]
     public void KomponenteBettetSkriptEinUndRuftEsAuf(string component, string installPath, string scriptMarker)
     {
         var config = LoadShippedImagesConfig();
@@ -24,6 +26,27 @@ public class ComponentScriptTests
         Assert.Contains(scriptMarker, yaml);
         Assert.Contains($"- ['{installPath}', 'ubuntu']", yaml);
         Assert.Contains($"touch /var/lib/corebridge/{component}.ready", yaml);
+    }
+
+    /// <summary>
+    /// vm-create und vm-install halten eine Komponente erst mit ihrem
+    /// <c>.ready</c>-Marker für installiert — ein Skript ohne ihn (wie lange
+    /// install-dotnet.sh) läuft durch und gilt trotzdem als gescheitert.
+    /// </summary>
+    [Fact]
+    public void JedesKomponentenSkriptSetztSeinenMarker()
+    {
+        var config = LoadShippedImagesConfig();
+
+        var withScript = config.Components.Where(c => !string.IsNullOrWhiteSpace(c.Value.Script)).ToList();
+        Assert.NotEmpty(withScript);
+        foreach (var (name, _) in withScript)
+        {
+            var yaml = InitCloudInit.Generate("agent", config, [name]);
+            Assert.True(
+                yaml.Contains($"touch /var/lib/corebridge/{name}.ready", StringComparison.Ordinal),
+                $"Skript der Komponente '{name}' setzt keinen Marker /var/lib/corebridge/{name}.ready.");
+        }
     }
 
     [Fact]

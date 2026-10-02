@@ -480,37 +480,65 @@ public static class Program
     var timeout = context.Config.DefaultTimeout.ReadTime();
     var stopwatch = System.Diagnostics.Stopwatch.StartNew();
     var service = new MultipassService(commandTimeout: timeout);
-    if (!service.IsElevated())
+
+    // Erst ohne Erhöhung: ob der Benutzer den Dienst steuern darf, entscheidet
+    // dessen ACL, nicht die Gruppe. Erhöht wird nur, wenn es wirklich nicht geht —
+    // vorab (keine Rechte am Dienst) oder mittendrin (z. B. multipassd hart
+    // beenden, der als SYSTEM läuft); das erhöhte Fenster setzt dann am
+    // vorgefundenen Zustand fort (StopPending → warten → beenden).
+    if (service.IsElevated() || service.CanControlService())
     {
-      await events.Emit(events.Std($"Warnung: Der Neustart des Dienstes {MultipassService.ServiceName} benötigt Administratorrechte."));
-      if (!await context.ConfirmAsync("Mit Administratorrechten in einem neuen Fenster fortfahren?"))
-      {
-        throw new ProgramExecutionException(1, "Abgebrochen — ohne Administratorrechte kein Neustart.");
-      }
+      // MultipassService erwartet Func<string,bool>; die blockiert auf einem
+      // Threadpool-Thread, während der Konsument den Kanal bedient.
+      bool ConfirmInCore(string question)
+          => events.Ask(events.Choice<YesNoOptions>(question)) == YesNoOptions.Yes;
 
-      await events.Emit(events.Std("Starte erhöht (UAC-Abfrage) — Ausgabe und Rückfragen folgen im Administratorfenster ..."));
-      var exitCode = await RunElevatedAsync(context.Config.DefaultTimeout, cancellationToken);
-      if (exitCode != 0)
+      try
       {
-        throw new ProgramExecutionException(exitCode, $"multipass-restart im Administratorfenster fehlgeschlagen (Exit {exitCode}).");
-      }
+        await foreach (var line in service.Restart(timeout, ConfirmInCore, cancellationToken))
+        {
+          await events.Emit(line == Progress.ProgressTick ? events.Tick() : events.Std(line));
+        }
 
-      await events.Emit(events.Std($"multipass-restart: OK ({stopwatch.Elapsed.TotalSeconds:F1} s, erhöht) — State: {service.QueryState()}"));
-      return;
+        await events.Emit(events.Std($"multipass-restart: OK ({stopwatch.Elapsed.TotalSeconds:F1} s) — State: {service.QueryState()}"));
+        return;
+      }
+      catch (MultipassAccessDeniedException exception) when (!service.IsElevated())
+      {
+        await events.Emit(events.Std($"Warnung: {exception.Message}"));
+      }
+    }
+    else
+    {
+      await events.Emit(events.Std($"Warnung: Der Benutzer darf den Dienst {MultipassService.ServiceName} nicht stoppen und starten — der Neustart benötigt Administratorrechte."));
     }
 
-    // MultipassService erwartet Func<string,bool>; die blockiert auf einem
-    // Threadpool-Thread, während der Konsument den Kanal bedient.
-    bool ConfirmInCore(string question)
-        => events.Ask(events.Choice<YesNoOptions>(question)) == YesNoOptions.Yes;
-
-    await foreach (var line in service.Restart(timeout, ConfirmInCore, cancellationToken))
+    if (!await context.ConfirmAsync("Mit Administratorrechten in einem neuen Fenster fortfahren?"))
     {
-      await events.Emit(line == Progress.ProgressTick ? events.Tick() : events.Std(line));
+      throw new ProgramExecutionException(1, "Abgebrochen — ohne Administratorrechte kein Neustart.");
     }
 
-    await events.Emit(events.Std($"multipass-restart: OK ({stopwatch.Elapsed.TotalSeconds:F1} s) — State: {service.QueryState()}"));
+    await events.Emit(events.Std("Starte erhöht (UAC-Abfrage) — Ausgabe und Rückfragen folgen im Administratorfenster ..."));
+    var exitCode = await RunElevatedAsync(context.Config.DefaultTimeout, cancellationToken);
+    if (exitCode == ControlCExit)
+    {
+      // Fenster geschlossen oder Strg+C statt einer Taste: über das Ergebnis
+      // des Neustarts sagt der Exit-Code dann nichts.
+      throw new ProgramExecutionException(
+          1,
+          $"Das Administratorfenster wurde geschlossen, bevor multipass-restart fertig war (Strg+C oder Fenster zu) — Zustand des Dienstes: {service.QueryState()}; prüfen mit `cb multipass-status`.");
+    }
+
+    if (exitCode != 0)
+    {
+      throw new ProgramExecutionException(exitCode, $"multipass-restart im Administratorfenster fehlgeschlagen (Exit {exitCode}).");
+    }
+
+    await events.Emit(events.Std($"multipass-restart: OK ({stopwatch.Elapsed.TotalSeconds:F1} s, erhöht) — State: {service.QueryState()}"));
   }
+
+  /// <summary><c>STATUS_CONTROL_C_EXIT</c> (0xC000013A): Konsolenfenster geschlossen oder Strg+C.</summary>
+  private const int ControlCExit = unchecked((int)0xC000013A);
 
   /// <summary>
   /// Startet dieselbe CLI per UAC (<c>runas</c>) mit <c>multipass-restart

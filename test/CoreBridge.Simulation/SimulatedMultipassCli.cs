@@ -35,8 +35,7 @@ namespace CoreBridge.Simulation;
 /// gelten als installiert und beantworten ihre Sonden (<c>--version</c>,
 /// <c>/var/lib/corebridge/&lt;name&gt;.ready</c>). Dasselbe gilt, wenn
 /// <c>vm-install</c> ein installiertes Komponenten-Skript per exec ausführt.
-/// Klone und Snapshots tragen beides mit. Wie in echt setzt
-/// <see cref="ComponentsWithoutMarker"/> (dotnet) keinen Marker.
+/// Klone und Snapshots tragen beides mit.
 /// </para>
 /// </remarks>
 public sealed class SimulatedMultipassCli : IMultipassCli, IMultipassDouble
@@ -61,22 +60,6 @@ public sealed class SimulatedMultipassCli : IMultipassCli, IMultipassDouble
     };
 
     private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true };
-
-    /// <summary>
-    /// Komponenten, deren echtes Skript keinen <c>.ready</c>-Marker anlegt:
-    /// <c>scripts/components/install-dotnet.sh</c> hat kein <c>touch</c>. Bleibt
-    /// hier, bis das Skript repariert ist — sonst wäre der Simulator grün, wo
-    /// die echte VM rot ist.
-    /// </summary>
-    private static readonly HashSet<string> ComponentsWithoutMarker = new(StringComparer.Ordinal) { "dotnet" };
-
-    /// <summary>
-    /// Komponenten, die nur eine Login-Shell findet: <c>install-dotnet.sh</c> verlinkt
-    /// dotnet nach <c>~/.local/bin</c>, das erst die <c>.profile</c> in den PATH holt.
-    /// <c>multipass exec … /bin/sh -c</c> ist keine Login-Shell → Exit 127
-    /// (verifiziert am 2026-09-26 mit ai-ubuntu-dotnet, Multipass 1.16.3).
-    /// </summary>
-    private static readonly HashSet<string> ComponentsOnlyInLoginShell = new(StringComparer.Ordinal) { "dotnet" };
 
     /// <summary>Multipass-Standard ohne <c>launch --disk</c>.</summary>
     private const string DefaultDisk = "5.0GiB";
@@ -297,7 +280,7 @@ public sealed class SimulatedMultipassCli : IMultipassCli, IMultipassDouble
             Ip = NextIp(state),
             Disk = Value(args, "--disk", "-d") is { } disk && MultipassSize.TryParse(disk, out var bytes) ? FormatSize(bytes) : DefaultDisk,
             Components = components,
-            Markers = components.Where(c => !ComponentsWithoutMarker.Contains(c)).ToList()
+            Markers = components.ToList()
         });
         return Ok($"Launched: {name}\n");
     }
@@ -669,7 +652,7 @@ public sealed class SimulatedMultipassCli : IMultipassCli, IMultipassDouble
     /// Beantwortet eine Shell-Zeile so, wie es ein provisionierter Gast täte;
     /// Segmente (<c>;</c>, <c>&amp;&amp;</c>) werden einzeln ausgewertet.
     /// </summary>
-    private static MultipassRunResult Respond(SimVm vm, string line, bool loginShell = false)
+    private static MultipassRunResult Respond(SimVm vm, string line)
     {
         var output = new StringBuilder();
         var exitCode = 0;
@@ -677,7 +660,7 @@ public sealed class SimulatedMultipassCli : IMultipassCli, IMultipassDouble
         {
             foreach (var segment in statement.Split("&&", StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
             {
-                var (code, text) = RespondOne(vm, segment, loginShell);
+                var (code, text) = RespondOne(vm, segment);
                 output.Append(text);
                 exitCode = code;
                 if (code != 0)
@@ -690,7 +673,7 @@ public sealed class SimulatedMultipassCli : IMultipassCli, IMultipassDouble
         return new MultipassRunResult(exitCode, output.ToString(), exitCode == 0 ? string.Empty : "simulated command failed\n", 0);
     }
 
-    private static (int ExitCode, string Output) RespondOne(SimVm vm, string command, bool loginShell)
+    private static (int ExitCode, string Output) RespondOne(SimVm vm, string command)
     {
         const int NotFound = 127;
 
@@ -702,12 +685,12 @@ public sealed class SimulatedMultipassCli : IMultipassCli, IMultipassDouble
         var login = Regex.Match(command, @"^(?:ba)?sh\s+-l?c\s+'(.*)'$");
         if (login.Success)
         {
-            var inner = Respond(vm, login.Groups[1].Value, loginShell: true);
+            var inner = Respond(vm, login.Groups[1].Value);
             return (inner.ExitCode, inner.StdOut);
         }
 
         // Ein installiertes Komponenten-Skript läuft durch (vm-install): Komponente
-        // gilt als installiert; den Marker setzt es nur, wenn das echte Skript das tut.
+        // gilt als installiert und setzt seinen Marker wie das echte Skript.
         var install = Regex.Match(command, @"^'?/usr/local/sbin/corebridge-install-([A-Za-z0-9_-]+)'?(\s|$)");
         if (install.Success)
         {
@@ -717,7 +700,7 @@ public sealed class SimulatedMultipassCli : IMultipassCli, IMultipassDouble
                 vm.Components.Add(component);
             }
 
-            if (!ComponentsWithoutMarker.Contains(component) && !vm.Markers.Contains(component))
+            if (!vm.Markers.Contains(component))
             {
                 vm.Markers.Add(component);
             }
@@ -784,11 +767,9 @@ public sealed class SimulatedMultipassCli : IMultipassCli, IMultipassDouble
         {
             var component = probe.Groups[1].Value.StartsWith("python", StringComparison.Ordinal) ? "python" : probe.Groups[1].Value;
             // Ein Pfad zählt nur, wo das echte Skript hinlinkt (/snap/bin/dotnet gibt es nicht);
-            // ohne Pfad findet eine Nicht-Login-Shell manche Komponenten nicht.
+            // ohne Pfad finden alle Shells die Komponenten, weil jedes Skript nach /usr/local/bin linkt.
             var path = command.StartsWith("command -v", StringComparison.Ordinal) ? string.Empty : command.Split(' ')[0];
-            var reachable = path.Contains('/')
-                ? !path.StartsWith("/snap/bin/", StringComparison.Ordinal)
-                : loginShell || !ComponentsOnlyInLoginShell.Contains(component);
+            var reachable = !path.Contains('/') || !path.StartsWith("/snap/bin/", StringComparison.Ordinal);
             return vm.Components.Contains(component) && reachable
                 ? (0, command.StartsWith("command -v", StringComparison.Ordinal) ? $"/usr/local/bin/{probe.Groups[1].Value}\n" : reported + "\n")
                 : (NotFound, string.Empty);

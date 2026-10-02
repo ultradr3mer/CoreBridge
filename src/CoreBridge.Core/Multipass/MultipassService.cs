@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 using System.Security.Principal;
 using System.Text.RegularExpressions;
 using CoreBridge.Core.Common;
@@ -29,6 +30,9 @@ public class MultipassService
 {
     public const string ServiceName = "Multipass";
 
+    /// <summary>Exit-Code von <c>sc.exe</c> bzw. Windows-Fehler „Zugriff verweigert“.</summary>
+    private const int AccessDenied = 5;
+
     public const string DaemonProcessName = "multipassd";
 
     private readonly TimeSpan _pollInterval;
@@ -54,7 +58,10 @@ public class MultipassService
     /// starten und warten, bis der Daemon wieder antwortet. Liefert
     /// Fortschrittsmeldungen, sobald sie entstehen; wirft
     /// <see cref="MultipassException"/>, wenn ein Schritt scheitert oder das
-    /// Beenden abgelehnt wird.
+    /// Beenden abgelehnt wird, und <see cref="MultipassAccessDeniedException"/>,
+    /// sobald ein Schritt Rechte braucht, die der Benutzer nicht hat — vorab, wenn
+    /// er den Dienst gar nicht steuern darf (dann ohne jeden Eingriff), oder
+    /// mitten im Ablauf, z. B. beim harten Beenden des als SYSTEM laufenden Daemons.
     /// </summary>
     /// <param name="confirm">Ja/Nein-Rückfrage an den Benutzer; <c>true</c> = Ja.</param>
     public async IAsyncEnumerable<string> Restart(
@@ -62,10 +69,10 @@ public class MultipassService
         Func<string, bool> confirm,
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
-        if (!IsElevated())
+        if (!IsElevated() && !CanControlService())
         {
-            throw new MultipassException(
-                $"Neustart des Dienstes {ServiceName} benötigt Administratorrechte — PowerShell als Administrator starten.");
+            throw new MultipassAccessDeniedException(
+                $"Der Benutzer darf den Dienst {ServiceName} nicht stoppen und starten — dafür braucht es Administratorrechte.");
         }
 
         var state = QueryState();
@@ -204,6 +211,57 @@ public class MultipassService
         return new WindowsPrincipal(identity).IsInRole(WindowsBuiltInRole.Administrator);
     }
 
+    /// <summary>
+    /// Darf der Benutzer den Dienst stoppen und starten? Fragt die Rechte beim
+    /// Dienststeuerungs-Manager an (<c>OpenService</c> mit <c>SERVICE_START |
+    /// SERVICE_STOP</c>), ohne den Dienst anzufassen. Die Dienst-ACL entscheidet,
+    /// nicht die Gruppe: standardmäßig dürfen das nur Administratoren und SYSTEM.
+    /// </summary>
+    public virtual bool CanControlService()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return false;
+        }
+
+        var manager = OpenSCManager(null, null, ScManagerConnect);
+        if (manager == IntPtr.Zero)
+        {
+            return false;
+        }
+
+        try
+        {
+            var service = OpenService(manager, ServiceName, ServiceQueryStatus | ServiceStart | ServiceStop);
+            if (service == IntPtr.Zero)
+            {
+                return false;
+            }
+
+            CloseServiceHandle(service);
+            return true;
+        }
+        finally
+        {
+            CloseServiceHandle(manager);
+        }
+    }
+
+    private const uint ScManagerConnect = 0x0001;
+    private const uint ServiceQueryStatus = 0x0004;
+    private const uint ServiceStart = 0x0010;
+    private const uint ServiceStop = 0x0020;
+
+    [DllImport("advapi32.dll", EntryPoint = "OpenSCManagerW", SetLastError = true, CharSet = CharSet.Unicode)]
+    private static extern IntPtr OpenSCManager(string? machineName, string? databaseName, uint desiredAccess);
+
+    [DllImport("advapi32.dll", EntryPoint = "OpenServiceW", SetLastError = true, CharSet = CharSet.Unicode)]
+    private static extern IntPtr OpenService(IntPtr manager, string serviceName, uint desiredAccess);
+
+    [DllImport("advapi32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool CloseServiceHandle(IntPtr handle);
+
     public virtual MultipassServiceState QueryState()
     {
         var (exitCode, output) = RunSc("queryex", ServiceName);
@@ -219,6 +277,11 @@ public class MultipassService
     public virtual void RequestStop()
     {
         var (exitCode, output) = RunSc("stop", ServiceName);
+        if (exitCode == AccessDenied)
+        {
+            throw new MultipassAccessDeniedException($"sc stop {ServiceName}: Zugriff verweigert.");
+        }
+
         if (exitCode is not (0 or 1061 or 1062))
         {
             throw new MultipassException($"sc stop {ServiceName} beendet mit Exit {exitCode}: {output.Trim()}");
@@ -229,6 +292,11 @@ public class MultipassService
     public virtual void RequestStart()
     {
         var (exitCode, output) = RunSc("start", ServiceName);
+        if (exitCode == AccessDenied)
+        {
+            throw new MultipassAccessDeniedException($"sc start {ServiceName}: Zugriff verweigert.");
+        }
+
         if (exitCode is not (0 or 1056))
         {
             throw new MultipassException($"sc start {ServiceName} beendet mit Exit {exitCode}: {output.Trim()}");
@@ -259,6 +327,12 @@ public class MultipassService
         catch (ArgumentException)
         {
             // Prozess war bereits beendet.
+        }
+        catch (System.ComponentModel.Win32Exception exception) when (exception.NativeErrorCode == AccessDenied)
+        {
+            throw new MultipassAccessDeniedException(
+                $"{DaemonProcessName} (PID {processId}) läuft als SYSTEM — hart beenden geht nur mit Administratorrechten.",
+                exception);
         }
         catch (System.ComponentModel.Win32Exception exception)
         {

@@ -1,5 +1,4 @@
 using System.Runtime.InteropServices;
-using CoreBridge.Core.Common;
 
 namespace CoreBridge.Interaction;
 
@@ -83,6 +82,12 @@ public class ConsoleAdapter
     private static readonly char[] SpinnerFrames = ['-', '/', '|', '\\'];
 
     /// <summary>
+    /// Fortschrittspunkt bei umgeleiteter Ausgabe: die Punkte reihen sich in
+    /// einer Zeile, statt Wagenrücklauf-Müll ins Log zu schreiben.
+    /// </summary>
+    private const string RedirectedTick = ".";
+
+    /// <summary>
     /// An einer echten Konsole dreht sich ein Spinner an Ort und Stelle; bei
     /// umgeleiteter Ausgabe (Datei, Pipe) bleiben es Punkte, damit kein
     /// Wagenrücklauf-Müll im Log landet.
@@ -114,7 +119,7 @@ public class ConsoleAdapter
         }
         else
         {
-            Console.Write(Progress.ProgressTick);
+            Console.Write(RedirectedTick);
         }
 
         this._midProgressLine = true;
