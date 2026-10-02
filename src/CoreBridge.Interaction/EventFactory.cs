@@ -1,7 +1,7 @@
 using System.Diagnostics;
 using System.Threading.Channels;
 
-namespace CoreBridge.Cli.CliAbstrction;
+namespace CoreBridge.Interaction;
 
 /// <summary>
 /// Erzeugt die Ereignisse eines einzelnen Kommandos und reicht sie an den

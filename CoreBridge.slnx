@@ -2,6 +2,7 @@
   <Folder Name="/src/">
     <Project Path="src/CoreBridge.Cli/CoreBridge.Cli.csproj" />
     <Project Path="src/CoreBridge.Core/CoreBridge.Core.csproj" />
+    <Project Path="src/CoreBridge.Interaction/CoreBridge.Interaction.csproj" />
     <Project Path="src/CoreBridge.Tui/CoreBridge.Tui.csproj" />
   </Folder>
   <Folder Name="/tools/">

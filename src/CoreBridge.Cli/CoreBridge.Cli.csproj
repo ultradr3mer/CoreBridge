@@ -2,6 +2,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\CoreBridge.Core\CoreBridge.Core.csproj" />
+    <ProjectReference Include="..\CoreBridge.Interaction\CoreBridge.Interaction.csproj" />
     <!-- Nur für cb-sim (appsettings.Simulation.json): der Simulator ist kein Teil des Release-Builds. -->
     <ProjectReference Include="..\..\test\CoreBridge.Simulation\CoreBridge.Simulation.csproj" Condition="'$(Configuration)' == 'Debug'" />
   </ItemGroup>
