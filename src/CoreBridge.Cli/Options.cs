@@ -20,7 +20,6 @@ public abstract class MultipassOptions : IOptions, ITimeoutOverride
     public string? OverrideTimeout { set; private get; }
 
     string? ITimeoutOverride.OverrideTimeout => this.OverrideTimeout; 
-
 }
 
 [Verb("multipass-status", HelpText = "Prüft, ob Multipass auffindbar ist, und gibt CLI- und Daemon-Version aus.")]
@@ -282,4 +281,5 @@ public sealed class RepoReceiveOptions : MultipassOptions
 
     [Option('y', "yes", HelpText = "Ohne Rückfrage vorspulen (ausdrückliche Zustimmung).")]
     public bool Yes { get; set; }
+
 }

@@ -9,7 +9,10 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\CoreBridge.Core\CoreBridge.Core.csproj" />
+    <ProjectReference Include="..\CoreBridge.Cli\CoreBridge.Cli.csproj" />
     <PackageReference Include="Terminal.Gui" Version="2.5" />
+    <PackageReference Include="TuiControls" Version="0.1.0" />
   </ItemGroup>
 
   <ItemGroup>

@@ -67,7 +67,7 @@ public class ConsoleAdapter
                 break;
             case ErrEvent err:
                 this.EndProgressLine();
-                Console.Error.WriteLine(err.Printable);
+                WriteColored(Console.Error, ColorErr, ErrColor(err.Printable), err.Printable);
                 break;
             case ProgressEvent progress:
                 this.WriteProgress(progress);
@@ -112,7 +112,8 @@ public class ConsoleAdapter
         {
             var frame = SpinnerFrames[this._spinnerFrame++ % SpinnerFrames.Length];
             var waited = progress.EmissionTime - this._progressStart;
-            Console.Write($"\r{frame} {waited.TotalSeconds:F0} s ");
+            Console.Write("\r");
+            Write(Console.Out, ColorOut, ConsoleColor.DarkCyan, $"{frame} {waited.TotalSeconds:F0} s ");
         }
         else
         {
@@ -129,13 +130,13 @@ public class ConsoleAdapter
     {
         if (this._midProgressLine && line == "OK" && !UseSpinner)
         {
-            Console.WriteLine(line);
+            WriteColored(Console.Out, ColorOut, ConsoleColor.Green, line);
             this._midProgressLine = false;
             return;
         }
 
         this.EndProgressLine();
-        Console.WriteLine(line);
+        WriteColored(Console.Out, ColorOut, line == "OK" ? ConsoleColor.Green : null, line);
     }
 
     /// <summary>
@@ -170,7 +171,7 @@ public class ConsoleAdapter
         this.EndProgressLine();
         if (!ConsoleAvailability.CanPrompt)
         {
-            Console.WriteLine($"{choice.Printable} {choice.PrintOptions(display: false, values: true)} "
+            WriteColored(Console.Out, ColorOut, PromptColor, $"{choice.Printable} {choice.PrintOptions(display: false, values: true)} "
                 + $"{DefaultAnswer.Of<T>()} (keine interaktive Eingabe)");
             choice.SetResult(DefaultAnswer.Of<T>());
             return;
@@ -178,7 +179,7 @@ public class ConsoleAdapter
 
         while (true)
         {
-            Console.Write($"{choice.Printable} {choice.PrintOptions(display: true, values: true).TrimEnd()} ");
+            Write(Console.Out, ColorOut, PromptColor, $"{choice.Printable} {choice.PrintOptions(display: true, values: true).TrimEnd()} ");
             var input = Console.ReadLine();
             if (input is null)
             {
@@ -192,7 +193,7 @@ public class ConsoleAdapter
                 return;
             }
 
-            Console.WriteLine("  Unbekannte Eingabe — bitte erneut.");
+            WriteColored(Console.Out, ColorOut, ConsoleColor.Red, "  Unbekannte Eingabe — bitte erneut.");
         }
     }
 
@@ -205,13 +206,65 @@ public class ConsoleAdapter
         this.EndProgressLine();
         if (!ConsoleAvailability.CanPrompt)
         {
-            Console.WriteLine($"{text.Printable}(no interactive input)");
+            WriteColored(Console.Out, ColorOut, PromptColor, $"{text.Printable}(no interactive input)");
             text.SetResult(null);
             return;
         }
 
-        Console.Write(text.Printable);
+        Write(Console.Out, ColorOut, PromptColor, text.Printable);
         text.SetResult(Console.ReadLine());
+    }
+
+    /// <summary>Farbe der Rückfragen, damit sie sich von der Ausgabe abheben.</summary>
+    private const ConsoleColor PromptColor = ConsoleColor.Yellow;
+
+    /// <summary>
+    /// Farbe nur an einer echten Konsole und ohne <c>NO_COLOR</c>; in Dateien
+    /// und Pipes bleibt der Text unverändert, damit Logs frei von Steuerzeichen bleiben.
+    /// </summary>
+    private static readonly bool ColorOut = !Console.IsOutputRedirected && !NoColor();
+
+    private static readonly bool ColorErr = !Console.IsErrorRedirected && !NoColor();
+
+    private static bool NoColor() => !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("NO_COLOR"));
+
+    /// <summary>
+    /// stderr ist rot — außer dem Hinweis eines Multipass-Doubles
+    /// (<c>[simulation://…] kein echtes Multipass</c>), der nur grau informiert.
+    /// </summary>
+    private static ConsoleColor ErrColor(string line) =>
+        line.StartsWith('[') && line.Contains("kein echtes Multipass", StringComparison.Ordinal)
+            ? ConsoleColor.DarkGray
+            : ConsoleColor.Red;
+
+    private static void WriteColored(TextWriter writer, bool enabled, ConsoleColor? color, string line)
+    {
+        Write(writer, enabled, color, line);
+        writer.WriteLine();
+    }
+
+    /// <summary>
+    /// Schreibt <paramref name="text"/> in <paramref name="color"/> und stellt
+    /// die vorige Farbe wieder her, auch wenn das Schreiben wirft.
+    /// </summary>
+    private static void Write(TextWriter writer, bool enabled, ConsoleColor? color, string text)
+    {
+        if (!enabled || color is null)
+        {
+            writer.Write(text);
+            return;
+        }
+
+        var previous = Console.ForegroundColor;
+        Console.ForegroundColor = color.Value;
+        try
+        {
+            writer.Write(text);
+        }
+        finally
+        {
+            Console.ForegroundColor = previous;
+        }
     }
 }
 

@@ -1,35 +1,43 @@
-using CoreBridge.Tui.Controls;
+using TuiControls;
 using Terminal.Gui.ViewBase;
 using Terminal.Gui.Views;
 
 namespace CoreBridge.Tui;
 
-public class MainWindow : Runnable
+public partial class MainWindow : Runnable
 {
     private readonly Splitter splitter;
 
     public MainWindow()
     {
-        this.splitter = new Splitter
+        // this.splitter = new Splitter
+        // {
+        //     Orientation = Orientation.Vertical,
+        //     FixedPane = SplitterPane.First,
+        //     FixedSize = Dim.Percent(50),
+        //     CanCollapseFirst = true,
+        //     CanCollapseSecond = true
+        // };
+
+        //        var splitter2 = new Splitter
+        // {
+        //     Orientation = Orientation.Horizontal,
+        //     FixedPane = SplitterPane.First,
+        //     FixedSize = Dim.Percent(50),
+        //     CanCollapseFirst = true,
+        //     CanCollapseSecond = true,
+        // };
+
+        // splitter2.First.Add(splitter);
+
+        var dd = new DropDownList
         {
-            Orientation = Orientation.Vertical,
-            FixedPane = SplitterPane.First,
-            FixedSize = Dim.Percent(50),
-            CanCollapseFirst = true,
-            CanCollapseSecond = true
+            X = PosAlign.Center(),
+            Y = PosAlign.Center(),
+            Width = 10,
+            Height = 1
         };
 
-               var splitter2 = new Splitter
-        {
-            Orientation = Orientation.Horizontal,
-            FixedPane = SplitterPane.First,
-            FixedSize = Dim.Percent(50),
-            CanCollapseFirst = true,
-            CanCollapseSecond = true,
-        };
-
-        splitter2.First.Add(splitter);
-
-        this.Add(splitter2);
+        this.Add(dd);
     }
 }
