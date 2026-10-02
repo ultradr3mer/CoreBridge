@@ -1,5 +1,5 @@
 using System.Text.RegularExpressions;
-using CoreBridge.Cli.CliAbstrction;
+using CoreBridge.Interaction;
 using CoreBridge.Core.Common;
 using CoreBridge.Core.Config;
 using CoreBridge.Core.Inits;
@@ -189,8 +189,7 @@ public sealed class CliLifecycleFixture
         pending.Dequeue();
         var accepted = prompt switch
         {
-            ChoiceEvent<YesNoOptions> yesNo => step.Input is not null && yesNo.TryParseChoice(step.Input, out _),
-            ChoiceEvent<OkCancelOptions> okCancel => step.Input is not null && okCancel.TryParseChoice(step.Input, out _),
+            IChoiceInteraction choice => step.Input is not null && choice.TryParseChoice(step.Input),
             TextEvent text => text.SetResult(step.Input),
             _ => false
         };

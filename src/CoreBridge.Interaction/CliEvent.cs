@@ -1,6 +1,4 @@
-using CoreBridge.Core.Common;
-
-namespace CoreBridge.Cli.CliAbstrction;
+namespace CoreBridge.Interaction;
 
 /// <summary>
 /// Basis jedes Ereignisses im Ausgabestrom eines Kommandos. Der Zeitstempel
@@ -43,22 +41,34 @@ public class StdEvent : CliEvent
 /// <summary>Eine Fehlermeldung (stderr).</summary>
 public class ErrEvent : CliEvent
 {
-    public ErrEvent(TimeSpan emissionTime, string printable)
+    /// <param name="emissionTime">Laufzeit des Kommandos beim Entstehen des Ereignisses.</param>
+    /// <param name="printable">Der Text, den die Konsole schreibt.</param>
+    /// <param name="isNotice">Siehe <see cref="IsNotice"/>.</param>
+    public ErrEvent(TimeSpan emissionTime, string printable, bool isNotice = false)
         : base(emissionTime, printable)
     {
+        this.IsNotice = isNotice;
     }
+
+    /// <summary>
+    /// Ein Hinweis, der auf stderr gehört, aber kein Fehler ist (z. B. dass
+    /// gegen eine Simulation gearbeitet wird). Die Oberfläche stellt ihn
+    /// zurückhaltend dar statt als Fehler.
+    /// </summary>
+    public bool IsNotice { get; }
 }
 
 /// <summary>
 /// Ein Fortschrittspunkt eines Warte-Loops. Die Konsole schreibt solche Punkte
-/// hintereinander in dieselbe Zeile, ohne sie abzuschließen — das ersetzt den
-/// früheren Trick, <see cref="Common.Progress.ProgressTick"/> als Textzeile zu
-/// missbrauchen.
+/// hintereinander in dieselbe Zeile, ohne sie abzuschließen.
 /// </summary>
 public class ProgressEvent : CliEvent
 {
+    /// <summary>Der Punkt, den eine Konsole ohne Spinner je Tick schreibt.</summary>
+    public const string Tick = ".";
+
     public ProgressEvent(TimeSpan emissionTime)
-        : base(emissionTime, Progress.ProgressTick)
+        : base(emissionTime, Tick)
     {
     }
 }

@@ -1,7 +1,7 @@
 using System.Runtime.InteropServices;
 using CoreBridge.Core.Common;
 
-namespace CoreBridge.Cli.CliAbstrction;
+namespace CoreBridge.Interaction;
 
 /// <summary>
 /// Erkennt, ob der Prozess überhaupt eine Konsole bedienen kann.
@@ -56,11 +56,8 @@ public class ConsoleAdapter
         {
             // Reihenfolge zählt: InteractionEvent erbt von StdEvent, also müssen
             // die Rückfragen VOR dem StdEvent-Zweig geprüft werden.
-            case ChoiceEvent<YesNoOptions> yesNo:
-                this.AskChoice(yesNo);
-                break;
-            case ChoiceEvent<OkCancelOptions> okCancel:
-                this.AskChoice(okCancel);
+            case IChoiceInteraction choice:
+                this.AskChoice(choice);
                 break;
             case TextEvent text:
                 this.AskText(text);
@@ -166,14 +163,14 @@ public class ConsoleAdapter
     /// Fragt nach einer Auswahl und beantwortet das Ereignis. Unbekannte Eingabe
     /// fragt erneut; ohne interaktive Eingabe gewinnt die Standardantwort.
     /// </summary>
-    private void AskChoice<T>(ChoiceEvent<T> choice) where T : struct, Enum
+    private void AskChoice(IChoiceInteraction choice)
     {
         this.EndProgressLine();
         if (!ConsoleAvailability.CanPrompt)
         {
             WriteColored(Console.Out, ColorOut, PromptColor, $"{choice.Printable} {choice.PrintOptions(display: false, values: true)} "
-                + $"{DefaultAnswer.Of<T>()} (keine interaktive Eingabe)");
-            choice.SetResult(DefaultAnswer.Of<T>());
+                + $"{choice.DefaultOption} (keine interaktive Eingabe)");
+            choice.SetDefault();
             return;
         }
 
@@ -184,11 +181,11 @@ public class ConsoleAdapter
             if (input is null)
             {
                 // EOF (Pipe zu Ende): Standardantwort statt Endlosschleife.
-                choice.SetResult(DefaultAnswer.Of<T>());
+                choice.SetDefault();
                 return;
             }
 
-            if (choice.TryParseChoice(input.Trim(), out _))
+            if (choice.TryParseChoice(input.Trim()))
             {
                 return;
             }
@@ -265,34 +262,5 @@ public class ConsoleAdapter
         {
             Console.ForegroundColor = previous;
         }
-    }
-}
-
-/// <summary>
-/// Die Antwort, mit der eine Rückfrage ohne Benutzereingabe geschlossen wird:
-/// <c>No</c> bzw. <c>Cancel</c> und <c>null</c> für Freitext. So bestätigt
-/// kein automatischer Pfad versehentlich einen riskanten Schritt.
-/// </summary>
-internal static class DefaultAnswer
-{
-    /// <summary>
-    /// Die Antwort, mit der eine Rückfrage ohne Eingabe geschlossen wird: immer
-    /// die ablehnende. Ausdrücklich statt <c>default(T)</c> — der erste Wert
-    /// einer Aufzählung ist hier die bejahende, <c>default</c> würde also
-    /// versehentlich löschen, stoppen oder überschreiben.
-    /// </summary>
-    public static T Of<T>() where T : struct, Enum
-    {
-        if (typeof(T) == typeof(YesNoOptions))
-        {
-            return (T)(object)YesNoOptions.No;
-        }
-
-        if (typeof(T) == typeof(OkCancelOptions))
-        {
-            return (T)(object)OkCancelOptions.Cancel;
-        }
-
-        return default;
     }
 }

@@ -1,4 +1,4 @@
-namespace CoreBridge.Cli.CliAbstrction;
+namespace CoreBridge.Interaction;
 
 /// <summary>
 /// Beschreibt einen Auswahlpunkt eines <see cref="ChoiceEvent{T}"/>: die
@@ -30,6 +30,15 @@ public class OptionDef : Attribute
 
     /// <summary>Tastenkürzel; werden von der Konsolen-Eingabe nicht ausgewertet.</summary>
     public IReadOnlyList<Keys> Keys { get; }
+
+    /// <summary>
+    /// Die Antwort, mit der die Rückfrage ohne Benutzereingabe geschlossen wird
+    /// (keine Konsole, EOF). Genau ein Wert je Aufzählung trägt sie — und das
+    /// sollte der ablehnende sein, damit kein automatischer Pfad versehentlich
+    /// löscht, stoppt oder überschreibt. Bewusst ausdrücklich statt
+    /// <c>default(T)</c>: der erste Wert ist hier meist der bejahende.
+    /// </summary>
+    public bool IsDefault { get; set; }
 
     public bool IsMatch(string input)
     {
@@ -83,6 +92,25 @@ public class OptionDef : Attribute
     }
 
     /// <summary>
+    /// Der Wert von <typeparamref name="T"/> mit <see cref="IsDefault"/>. Fehlt
+    /// er oder gibt es mehrere, ist die Aufzählung falsch deklariert — das
+    /// fällt beim Erzeugen der Rückfrage auf, nicht erst ohne Konsole.
+    /// </summary>
+    public static OptionDefWithValue<T> DefaultOf<T>() where T : struct, Enum
+    {
+        var defaults = Enum.GetValues<T>()
+            .Select(FromAttribute)
+            .Where(option => option.IsDefault)
+            .ToList();
+
+        return defaults.Count == 1
+            ? defaults[0]
+            : throw new InvalidOperationException(
+                $"'{typeof(T).Name}' braucht genau einen Wert mit [OptionDef(..., IsDefault = true)], "
+                + $"hat aber {defaults.Count}.");
+    }
+
+    /// <summary>
     /// Die ersten <paramref name="count"/> Muster als Anzeige: kompakt
     /// kommagetrennt, sonst mit <c>oder</c> vor dem letzten Eintrag.
     /// </summary>
@@ -114,6 +142,7 @@ public class OptionDefWithValue<T> : OptionDef where T : Enum
     public OptionDefWithValue(OptionDef def, T value)
         : base(def.Display, string.Join(',', def.Patterns), def.Keys.ToArray())
     {
+        this.IsDefault = def.IsDefault;
         this.Value = value;
     }
 

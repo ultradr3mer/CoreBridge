@@ -2,7 +2,7 @@ using System.Runtime.CompilerServices;
 using System.Text;
 using System.Threading.Channels;
 using CommandLine;
-using CoreBridge.Cli.CliAbstrction;
+using CoreBridge.Interaction;
 using CoreBridge.Core.Authenticity;
 using CoreBridge.Core.Common;
 using CoreBridge.Core.Config;
