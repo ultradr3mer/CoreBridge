@@ -93,6 +93,29 @@ public class MultipassServiceTests
         Assert.DoesNotContain("start", service.Calls);
     }
 
+    /// <summary>
+    /// Die Wiederherstellungsaktion des Dienstes startet multipassd nach dem Kill
+    /// sofort neu: Running unter neuer PID ist Erfolg, kein Hänger — und kein
+    /// zweiter Start.
+    /// </summary>
+    [Fact]
+    public async Task NachKillAutomatischNeuGestartetIstErfolg()
+    {
+        var service = new FakeService
+        {
+            State = MultipassServiceState.StopPending,
+            StopHangs = true,
+            KillRestarts = true
+        };
+
+        var lines = await Drain(service);
+
+        Assert.Equal(["confirm", "kill 4711"], service.Calls);
+        Assert.Contains("Service Multipass wurde automatisch neu gestartet (PID 4712).", lines);
+        Assert.DoesNotContain("Service gestoppt.", lines);
+        Assert.Equal(MultipassServiceState.Running, service.State);
+    }
+
     [Fact]
     public async Task BereitsGestopptStartetNur()
     {
@@ -124,6 +147,11 @@ public class MultipassServiceTests
 
         public bool KillHelps { get; init; } = true;
 
+        /// <summary>Kill wirkt wie die Wiederherstellungsaktion: sofort wieder Running unter neuer PID.</summary>
+        public bool KillRestarts { get; init; }
+
+        public int ProcessId { get; private set; } = 4711;
+
         public bool Answer { get; init; } = true;
 
         public List<string> Calls { get; } = [];
@@ -150,12 +178,17 @@ public class MultipassServiceTests
             return Answer;
         }
 
-        public override int QueryProcessId() => State == MultipassServiceState.Stopped ? 0 : 4711;
+        public override int QueryProcessId() => State == MultipassServiceState.Stopped ? 0 : ProcessId;
 
         public override void KillProcess(int processId)
         {
             Calls.Add($"kill {processId}");
-            if (KillHelps)
+            if (KillRestarts)
+            {
+                State = MultipassServiceState.Running;
+                ProcessId = 4712;
+            }
+            else if (KillHelps)
             {
                 State = MultipassServiceState.Stopped;
             }

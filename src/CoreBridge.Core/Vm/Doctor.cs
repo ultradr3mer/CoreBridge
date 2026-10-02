@@ -27,7 +27,8 @@ public static class Doctor
     /// Client für die Versionsabfrage. Standard ist <see cref="MultipassCli"/>;
     /// die CLI übergibt den Client aus <see cref="MultipassCliFactory"/>.
     /// </param>
-    public static DoctorReport Check(Func<string?>? locate = null, IMultipassCli? cli = null)
+    /// <param name="timeoutMs">Wartezeit auf <c>multipass version</c>; die CLI übergibt <c>DefaultTimeout</c>.</param>
+    public static DoctorReport Check(Func<string?>? locate = null, IMultipassCli? cli = null, int timeoutMs = 60_000)
     {
         if (locate is null)
         {
@@ -43,7 +44,7 @@ public static class Doctor
         try
         {
             var multipass = cli ?? new MultipassCli(locate);
-            var result = multipass.Run(new[] { "version", "--format", "json" }, 60_000, binary);
+            var result = multipass.Run(new[] { "version", "--format", "json" }, timeoutMs, binary);
             if (result.ExitCode != 0)
             {
                 return new DoctorReport(

@@ -6,8 +6,8 @@ namespace CoreBridge.Core.Common;
 public static partial class StringExtensions
 {
     /// <summary>
-    /// Liest eine Zeitangabe wie <c>10s</c> (Sekunden) oder <c>1000ms</c>
-    /// (Millisekunden); Groß-/Kleinschreibung und Leerraum sind egal.
+    /// Liest eine Zeitangabe wie <c>5m</c> (Minuten), <c>10s</c> (Sekunden) oder
+    /// <c>1000ms</c> (Millisekunden); Groß-/Kleinschreibung und Leerraum sind egal.
     /// </summary>
     /// <exception cref="FormatException">Wenn der Wert leer ist oder keinem der Formate entspricht.</exception>
     public static TimeSpan ReadTime(this string? value)
@@ -16,16 +16,20 @@ public static partial class StringExtensions
         if (!match.Success)
         {
             throw new FormatException(
-                $"Invalid time value \"{value}\" — expected e.g. \"10s\" (seconds) or \"1000ms\" (milliseconds).");
+                $"Invalid time value \"{value}\" — expected e.g. \"5m\" (minutes), \"10s\" (seconds) or \"1000ms\" (milliseconds).");
         }
 
         var amount = long.Parse(match.Groups[1].Value);
-        return match.Groups[2].Value.Equals("ms", StringComparison.OrdinalIgnoreCase)
-            ? TimeSpan.FromMilliseconds(amount)
-            : TimeSpan.FromSeconds(amount);
+        return match.Groups[2].Value.ToLowerInvariant() switch
+        {
+            "ms" => TimeSpan.FromMilliseconds(amount),
+            "m" => TimeSpan.FromMinutes(amount),
+            _ => TimeSpan.FromSeconds(amount)
+        };
     }
 
-    [GeneratedRegex(@"^\s*(\d+)\s*(ms|s)\s*$", RegexOptions.IgnoreCase)]
+    // "ms" vor "m", damit 1000ms nicht als Minuten gelesen wird.
+    [GeneratedRegex(@"^\s*(\d+)\s*(ms|m|s)\s*$", RegexOptions.IgnoreCase)]
     private static partial Regex TimePattern();
 }
 

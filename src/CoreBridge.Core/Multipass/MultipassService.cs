@@ -71,6 +71,10 @@ public class MultipassService
         var state = QueryState();
         yield return $"Service {ServiceName}: {state}";
 
+        // PID, unter der der Dienst nach dem harten Beenden schon wieder läuft
+        // (Wiederherstellungsaktion des Dienststeuerungs-Managers); 0 = nicht neu gestartet.
+        var restartedProcessId = 0;
+
         if (state != MultipassServiceState.Stopped)
         {
             if (state != MultipassServiceState.StopPending)
@@ -126,8 +130,30 @@ public class MultipassService
                 KillProcess(processId);
                 yield return $"Beendet: PID {processId}";
 
-                await foreach (var line in WaitForStateAsync(
-                    MultipassServiceState.Stopped,
+                // Der Dienst ist für Fehler auf „neu starten“ eingestellt: nach dem Kill
+                // meldet er oft gar nicht Stopped, sondern gleich wieder Running unter
+                // neuer PID. Das ist das Ziel des Neustarts, kein Hänger.
+                bool StoppedOrRestarted()
+                {
+                    var current = QueryState();
+                    if (current == MultipassServiceState.Stopped)
+                    {
+                        return true;
+                    }
+
+                    if (current == MultipassServiceState.Running
+                        && QueryProcessId() is var newProcessId and not 0
+                        && newProcessId != processId)
+                    {
+                        restartedProcessId = newProcessId;
+                        return true;
+                    }
+
+                    return false;
+                }
+
+                await foreach (var line in WaitUntilAsync(
+                    StoppedOrRestarted,
                     _killTimeout,
                     () => $"Service {ServiceName} bleibt in {QueryState()}, auch nach dem Beenden von {DaemonProcessName}. "
                         + "Hängende Hyper-V-VMs mit `Stop-VM -TurnOff` ausschalten oder den Rechner neu starten.",
@@ -137,18 +163,23 @@ public class MultipassService
                 }
             }
 
-            yield return "Service gestoppt.";
+            yield return restartedProcessId == 0
+                ? "Service gestoppt."
+                : $"Service {ServiceName} wurde automatisch neu gestartet (PID {restartedProcessId}).";
         }
 
-        yield return "Starte Service ...";
-        RequestStart();
-        await foreach (var line in WaitForStateAsync(
-            MultipassServiceState.Running,
-            timeout,
-            () => $"Service {ServiceName} ist nach {timeout.TotalSeconds:F0} s nicht Running ({QueryState()}).",
-            cancellationToken))
+        if (restartedProcessId == 0)
         {
-            yield return line;
+            yield return "Starte Service ...";
+            RequestStart();
+            await foreach (var line in WaitForStateAsync(
+                MultipassServiceState.Running,
+                timeout,
+                () => $"Service {ServiceName} ist nach {timeout.TotalSeconds:F0} s nicht Running ({QueryState()}).",
+                cancellationToken))
+            {
+                yield return line;
+            }
         }
 
         yield return "Warte auf Daemon ...";

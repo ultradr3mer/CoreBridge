@@ -12,7 +12,7 @@ public sealed record AppConfig
     public ImagesConfig Images { get; init; } = new();
 
     /// <summary>
-    /// Standard-Timeout für Multipass-VM-Erstellung, z. B. 10s, 1000ms, dauert etwas.
+    /// Standard-Timeout für Multipass-VM-Erstellung, z. B. 5m, 10s, 1000ms, dauert etwas.
     /// </summary>
     /// <remarks>
     /// Nach jedem Abschnitt fragt die CLI, ob weiter gewartet werden soll; bei Nein
@@ -22,7 +22,7 @@ public sealed record AppConfig
     public string DefaultTimeoutVmCreation { get; init; } = "120s";
 
     /// <summary>
-    /// Standard-Timeout für Multipass-Start/Stop/Restart, z. B. 10s, 1000ms.
+    /// Standard-Timeout für Multipass-Start/Stop/Restart, z. B. 5m, 10s, 1000ms.
     /// </summary>
     public string DefaultTimeout { get; init; } = "10s";
 

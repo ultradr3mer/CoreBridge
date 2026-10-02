@@ -1,3 +1,4 @@
+using System.Text.RegularExpressions;
 using CoreBridge.Core.Multipass;
 using CoreBridge.Core.Vm;
 using Xunit.Abstractions;
@@ -5,11 +6,13 @@ using Xunit.Abstractions;
 namespace CoreBridge.Cli.Tests;
 
 /// <summary>
-/// Kompletter VM-Zyklus: Status → Profil → Create → List → Start → Exec →
-/// Connect → Stop → Delete, strikt in dieser Reihenfolge
+/// Kompletter VM-Zyklus: Status → Profil → Create (mit Snapshot nach der
+/// Konfiguration) → List → Snapshots → Start → Exec → Connect → Stop → Delete, strikt in dieser Reihenfolge
 /// (<see cref="LifecycleTestCaseOrderer"/>). Jede Stufe setzt den Zustand der
-/// vorherigen voraus und stellt ihn nicht selbst her — schlägt eine Stufe fehl,
-/// schlagen die folgenden ebenfalls fehl. Nur die ganze Klasse ausführen.
+/// vorherigen voraus und prüft ihn nicht erneut. Die Stufen lassen sich auch
+/// einzeln nacheinander ausführen, jede in einem eigenen Lauf: VM, Profil und Store
+/// sind je Checkout fest (<see cref="CliLifecycleFixture"/>) und überleben den Lauf.
+/// Aufgeräumt wird erst in Stage08/Stage09.
 /// </summary>
 [Collection(CliLifecycleCollection.Name)]
 [TestCaseOrderer(
@@ -20,6 +23,9 @@ public sealed class CliLifecycleTests
 {
     private static readonly TimeSpan SessionTimeout = TimeSpan.FromSeconds(60);
 
+    /// <summary>Snapshot, den vm-create nach der Provisionierung per <c>--snapshot</c> anlegt.</summary>
+    private const string ConfiguredSnapshot = "configured";
+
     private readonly CliLifecycleFixture fixture;
     private readonly ITestOutputHelper output;
 
@@ -29,12 +35,66 @@ public sealed class CliLifecycleTests
         this.output = output;
     }
 
+    /// <summary>
+    /// Ebnet das Feld für die folgenden Stufen, je nach vorgefundenem Zustand:
+    /// antwortet der Daemon nicht, wird er neu gestartet; steht die Test-VM noch
+    /// da (früherer, abgebrochener Lauf), wird sie gestoppt und endgültig
+    /// gelöscht und der Daemon danach neu gestartet — sonst hält er Aufgaben zur
+    /// gelöschten VM (z. B. das „Waiting for SSH“ seines Starts) und trifft mit
+    /// ihnen die neue VM gleichen Namens (beobachtet: <c>Save-VM</c> mitten im
+    /// Launch). Zum Schluss muss <c>multipass-status</c> einen gesunden Daemon melden.
+    /// </summary>
     [Fact]
-    public async Task Stage00_MultipassStatus()
+    public async Task Stage00_LevelTheField()
     {
-        var result = await fixture.RunAsync(new MultipassStatusOptions(), output.WriteLine);
+        var list = await fixture.RunAsync(new VmListOptions(), output.WriteLine);
+        if (list.ExitCode != 0)
+        {
+            output.WriteLine($"Ausgangslage: vm-list scheitert ({list.Error}) — Daemon wird neu gestartet.");
+            await RestartDaemonAsync();
+            list = await fixture.RunAsync(new VmListOptions(), output.WriteLine);
+            CliLifecycleFixture.AssertSucceeded(list);
+        }
 
-        CliLifecycleFixture.AssertSucceeded(result);
+        var state = CliLifecycleFixture.FindVmState(list, fixture.VmName);
+        if (state is not null)
+        {
+            output.WriteLine($"Ausgangslage: VM `{fixture.VmName}` ist noch da ({state}) — stoppen, löschen, Daemon neu starten.");
+            if (state is not ("Stopped" or "Deleted"))
+            {
+                var stop = state == "Running"
+                    ? await fixture.RunAsync(new VmStopOptions { Name = fixture.VmName }, output.WriteLine)
+                    : await fixture.RunAsync(
+                        new VmStopOptions { Name = fixture.VmName },
+                        output.WriteLine,
+                        Cli.Asks("Multipass can only power it off (--force). Power it off?").TestInputs("y"));
+                CliLifecycleFixture.AssertCompleted(stop, $"stop{(state == "Running" ? string.Empty : " --force")} {fixture.VmName}", "Stopped");
+            }
+
+            var delete = await fixture.RunAsync(new VmDeleteOptions { Name = fixture.VmName, Purge = true }, output.WriteLine);
+            CliLifecycleFixture.AssertCompleted(delete, $"delete {fixture.VmName} --purge", "nicht vorhanden");
+
+            await RestartDaemonAsync();
+        }
+
+        var status = await fixture.RunAsync(new MultipassStatusOptions(), output.WriteLine);
+        CliLifecycleFixture.AssertSucceeded(status);
+    }
+
+    /// <summary>
+    /// <c>multipass-restart</c>: ohne Administratorrechte fragt die CLI nach dem
+    /// erhöhten Neustart (UAC); Ausgabe und Rückfragen folgen dann im
+    /// Administratorfenster, das am Ende auf eine Taste wartet.
+    /// </summary>
+    private async Task RestartDaemonAsync()
+    {
+        var restart = new MultipassService().IsElevated()
+            ? await fixture.RunAsync(new MultipassRestartOptions(), output.WriteLine)
+            : await fixture.RunAsync(
+                new MultipassRestartOptions(),
+                output.WriteLine,
+                Cli.Asks("Mit Administratorrechten in einem neuen Fenster fortfahren?").TestInputs("y"));
+        CliLifecycleFixture.AssertSucceeded(restart);
     }
 
     [Fact]
@@ -53,6 +113,10 @@ public sealed class CliLifecycleTests
         Assert.True(File.Exists(fixture.CloudInitPath), $"cloud-init fehlt: {fixture.CloudInitPath}");
     }
 
+    /// <summary>
+    /// Snapshot nach der Konfiguration ist Standard: mit <c>--snapshot</c> legt
+    /// vm-create ihn ohne Rückfrage an, stoppt die VM dafür und lässt sie gestoppt.
+    /// </summary>
     [Fact]
     public async Task Stage02_VmCreate()
     {
@@ -60,10 +124,19 @@ public sealed class CliLifecycleTests
         {
             Name = fixture.VmName,
             Image = fixture.ImageName,
-
+            Snapshot = ConfiguredSnapshot
         }, output.WriteLine);
 
-        CliLifecycleFixture.AssertCompleted(result, $"create {fixture.VmName}", "Running");
+        CliLifecycleFixture.AssertSucceeded(result);
+        Assert.Contains(result.Lines, line => Regex.IsMatch(
+            line,
+            $@"^{Regex.Escape($"create {fixture.VmName}")}: OK \([^)]*\) — State: Running$"));
+        Assert.Contains(result.Lines, line => Regex.IsMatch(
+            line,
+            $@"^{Regex.Escape($"snapshot {fixture.VmName}.{ConfiguredSnapshot}")}: OK \([^)]*\) — State: Stopped$"));
+        Assert.Equal(
+            $"VM `{fixture.VmName}` stays stopped — start it with `cb vm-start -n {fixture.VmName}`.",
+            result.Lines[^1]);
     }
 
     [Fact]
@@ -72,7 +145,19 @@ public sealed class CliLifecycleTests
         var result = await fixture.RunAsync(new VmListOptions(), output.WriteLine);
 
         CliLifecycleFixture.AssertSucceeded(result);
-        Assert.Equal("Running", CliLifecycleFixture.FindVmState(result, fixture.VmName));
+        Assert.Equal("Stopped", CliLifecycleFixture.FindVmState(result, fixture.VmName));
+    }
+
+    [Fact]
+    public async Task Stage03b_VmSnapshots()
+    {
+        var result = await fixture.RunAsync(new VmSnapshotsOptions { Name = fixture.VmName }, output.WriteLine);
+
+        CliLifecycleFixture.AssertSucceeded(result);
+        Assert.Contains(result.Lines, line =>
+            line.Split(' ', StringSplitOptions.RemoveEmptyEntries) is [var vm, var snapshot, ..]
+            && vm == fixture.VmName
+            && snapshot == ConfiguredSnapshot);
     }
 
     [Fact]
@@ -185,5 +270,21 @@ public sealed class CliLifecycleTests
             output.WriteLine);
 
         CliLifecycleFixture.AssertCompleted(delete, $"delete {fixture.VmName} --purge", "nicht vorhanden");
+    }
+
+    /// <summary>Räumt das Profil ab; ohne Profil (nie angelegt oder schon gelöscht) ist nichts zu tun.</summary>
+    [Fact]
+    public async Task Stage09_InitDelete()
+    {
+        if (!File.Exists(fixture.ProfileConfigPath))
+        {
+            output.WriteLine($"Profil `{fixture.ImageName}` nicht vorhanden — nichts zu löschen.");
+            return;
+        }
+
+        var delete = await fixture.RunAsync(new InitDeleteOptions { Name = fixture.ImageName }, output.WriteLine);
+
+        CliLifecycleFixture.AssertSucceeded(delete);
+        Assert.False(File.Exists(fixture.ProfileConfigPath), $"Profilkonfiguration noch vorhanden: {fixture.ProfileConfigPath}");
     }
 }

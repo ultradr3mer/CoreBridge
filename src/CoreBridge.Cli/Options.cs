@@ -9,21 +9,21 @@ namespace CoreBridge.Cli;
 /// </summary>
 public interface ITimeoutOverride
 {
-    /// <summary>Zeitangabe wie <c>300s</c> oder <c>1000ms</c>; <c>null</c> = Config-Wert.</summary>
+    /// <summary>Zeitangabe wie <c>5m</c>, <c>300s</c> oder <c>1000ms</c>; <c>null</c> = Config-Wert.</summary>
     string? OverrideTimeout { get; }
 }
 
 /// <summary>Basis aller Verben, die Multipass aufrufen und daher auf Antworten warten.</summary>
 public abstract class MultipassOptions : IOptions, ITimeoutOverride
 {
-    [Option('t', "timeout", HelpText = "Timeout for this call, e.g. 300s or 1000ms (overrides DefaultTimeout / DefaultTimeoutVmCreation from the config).")]
+    [Option('t', "timeout", HelpText = "Timeout for this call, e.g. 5m, 300s or 1000ms (overrides DefaultTimeout / DefaultTimeoutVmCreation from the config).")]
     public string? OverrideTimeout { set; private get; }
 
     string? ITimeoutOverride.OverrideTimeout => this.OverrideTimeout; 
 }
 
-[Verb("multipass-status", HelpText = "Prüft, ob Multipass auffindbar ist, und gibt CLI- und Daemon-Version aus.")]
-public sealed class MultipassStatusOptions : IOptions
+[Verb("multipass-status", HelpText = "Prüft, ob Multipass auffindbar ist und der Daemon antwortet, und gibt CLI- und Daemon-Version aus (Exit 1, wenn nicht).")]
+public sealed class MultipassStatusOptions : MultipassOptions
 {
 }
 

@@ -441,8 +441,8 @@ public static class Program
     var cli = context.Vms.Cli;
     var report = await Task.Run(
         () => cli is IMultipassDouble multipassDouble
-            ? Doctor.Check(() => multipassDouble.BinaryLabel, cli)
-            : Doctor.Check(cli: cli),
+            ? Doctor.Check(() => multipassDouble.BinaryLabel, cli, context.DefaultTimeoutMs)
+            : Doctor.Check(cli: cli, timeoutMs: context.DefaultTimeoutMs),
         context.CancellationToken);
     if (!report.Found)
     {
@@ -460,12 +460,16 @@ public static class Program
     await events.Emit(events.Std($"Daemon:  {report.DaemonVersion ?? "keine Antwort"}"));
     if (report.Error is not null)
     {
-      await events.Emit(events.Std(string.Empty));
-      await events.Emit(events.Std($"Hinweis: {report.Error}"));
+      // Ein Daemon, der nicht antwortet, ist kein gesundes Multipass: Exit 1,
+      // damit Skripte und die Lifecycle-Stage00 nicht auf einem toten Daemon weiterbauen.
       foreach (var line in Lines(report.RawVersionOutput ?? string.Empty))
       {
         await events.Emit(events.Std(line));
       }
+
+      throw new ProgramExecutionException(
+          1,
+          $"{report.Error} — Dienst neu starten mit `cb multipass-restart`.");
     }
   }
 
@@ -512,22 +516,34 @@ public static class Program
   /// Startet dieselbe CLI per UAC (<c>runas</c>) mit <c>multipass-restart
   /// --pause-on-exit --timeout &lt;timeout&gt;</c> (der wirksame <c>DefaultTimeout</c>)
   /// und wartet auf ihr Ende. Läuft die CLI als DLL unter <c>dotnet</c>,
-  /// wird die DLL als erstes Argument mitgegeben.
+  /// wird die DLL als erstes Argument mitgegeben; läuft sie eingebettet in einem
+  /// fremden Host (Testhost), wird die CLI neben der Assembly gestartet.
   /// </summary>
   private static async Task<int> RunElevatedAsync(string timeout, CancellationToken cancellationToken)
   {
     var processPath = Environment.ProcessPath
         ?? throw new ProgramExecutionException(1, "Pfad der laufenden CLI unbekannt — erhöhter Neustart nicht möglich.");
+    var cliAssembly = typeof(Program).Assembly.Location;
+    var processName = Path.GetFileNameWithoutExtension(processPath);
+    var (fileName, passAssembly) = processName switch
+    {
+      _ when string.Equals(processName, "dotnet", StringComparison.OrdinalIgnoreCase) => (processPath, true),
+      _ when string.Equals(processName, Path.GetFileNameWithoutExtension(cliAssembly), StringComparison.OrdinalIgnoreCase) => (processPath, false),
+      // Eingebettet (z. B. Program.Run im Testhost): nicht den fremden Host
+      // neu starten, sondern die CLI neben der Assembly.
+      _ when File.Exists(Path.ChangeExtension(cliAssembly, ".exe")) => (Path.ChangeExtension(cliAssembly, ".exe"), false),
+      _ => ("dotnet", true)
+    };
     var startInfo = new System.Diagnostics.ProcessStartInfo
     {
-      FileName = processPath,
+      FileName = fileName,
       UseShellExecute = true,
       Verb = "runas",
       WorkingDirectory = Environment.CurrentDirectory
     };
-    if (string.Equals(Path.GetFileNameWithoutExtension(processPath), "dotnet", StringComparison.OrdinalIgnoreCase))
+    if (passAssembly)
     {
-      startInfo.ArgumentList.Add(typeof(Program).Assembly.Location);
+      startInfo.ArgumentList.Add(cliAssembly);
     }
 
     foreach (var argument in new[] { "multipass-restart", "--pause-on-exit" })

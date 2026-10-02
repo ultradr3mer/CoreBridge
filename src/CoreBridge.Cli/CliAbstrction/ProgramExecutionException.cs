@@ -1,4 +1,4 @@
-namespace CoreBridge.Cli;
+namespace CoreBridge.Cli.CliAbstrction;
 
 /// <summary>
 /// Einziger Fehlertyp, den <see cref="Program.Run"/> für erwartete Fehler wirft.
