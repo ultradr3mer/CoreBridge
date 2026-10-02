@@ -1,0 +1,11 @@
+{
+  "profiles": {
+    "CoreBridge.Cli": {
+      "commandName": "Project"
+    },
+    "CoreBridge.Cli vm-list": {
+      "commandName": "Project",
+      "commandLineArgs": "vm-list"
+    }
+  }
+}

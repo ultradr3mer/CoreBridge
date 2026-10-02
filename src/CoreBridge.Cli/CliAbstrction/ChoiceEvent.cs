@@ -1,6 +1,6 @@
 using System.Text;
 
-namespace CoreBridge.Cli;
+namespace CoreBridge.Cli.CliAbstrction;
 
 /// <summary>
 /// Ja/Nein-Rückfrage; die Standardantwort ist <c>No</c> — so antworten alle

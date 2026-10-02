@@ -1,3 +1,4 @@
+using CoreBridge.Cli.CliAbstrction;
 using CoreBridge.Core.Common;
 using CoreBridge.Core.Config;
 using CoreBridge.Core.Git;

@@ -1,4 +1,4 @@
-namespace CoreBridge.Cli;
+namespace CoreBridge.Cli.CliAbstrction;
 
 /// <summary>
 /// Tastenkürzel eines Auswahlpunkts, wie sie ein Terminal-UI erwarten würde.

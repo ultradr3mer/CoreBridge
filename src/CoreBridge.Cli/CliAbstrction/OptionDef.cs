@@ -1,4 +1,4 @@
-namespace CoreBridge.Cli;
+namespace CoreBridge.Cli.CliAbstrction;
 
 /// <summary>
 /// Beschreibt einen Auswahlpunkt eines <see cref="ChoiceEvent{T}"/>: die

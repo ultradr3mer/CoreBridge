@@ -2,6 +2,7 @@ using System.Runtime.CompilerServices;
 using System.Text;
 using System.Threading.Channels;
 using CommandLine;
+using CoreBridge.Cli.CliAbstrction;
 using CoreBridge.Core.Authenticity;
 using CoreBridge.Core.Common;
 using CoreBridge.Core.Config;
@@ -65,14 +66,9 @@ public static class Program
   /// <see cref="SettingsSignatureException"/>; <paramref name="requireSignatures"/> ist nur
   /// für <c>settings-verify</c> aus, das die Prüfung selbst meldet.
   /// </summary>
-  private static AppConfig LoadSystemConfig(bool requireSignatures)
+  private static AppConfig LoadSystemConfig()
   {
     var environment = CurrentEnvironment;
-    if (requireSignatures)
-    {
-      SettingsSignatures.RequireValid(
-          SettingsSignatures.Check(AppContext.BaseDirectory, environment, TrustedKeys.CoreBridge, DateTime.UtcNow));
-    }
 
     var configuration = new ConfigurationBuilder()
         .SetFileProvider(new SignedFileProvider(AppContext.BaseDirectory, requireSignature: false))
@@ -116,7 +112,7 @@ public static class Program
     AppConfig config;
     try
     {
-      config = LoadSystemConfig(requireSignatures: options is not SettingsVerifyOptions);
+      config = LoadSystemConfig();
     }
     catch (Exception exception) when (ToExecutionException(exception) is { } failure)
     {

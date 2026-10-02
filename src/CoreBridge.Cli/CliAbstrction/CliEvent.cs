@@ -1,6 +1,6 @@
 using CoreBridge.Core.Common;
 
-namespace CoreBridge.Cli;
+namespace CoreBridge.Cli.CliAbstrction;
 
 /// <summary>
 /// Basis jedes Ereignisses im Ausgabestrom eines Kommandos. Der Zeitstempel

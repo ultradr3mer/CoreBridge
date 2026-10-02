@@ -1,7 +1,7 @@
 using System.Runtime.InteropServices;
 using CoreBridge.Core.Common;
 
-namespace CoreBridge.Cli;
+namespace CoreBridge.Cli.CliAbstrction;
 
 /// <summary>
 /// Erkennt, ob der Prozess überhaupt eine Konsole bedienen kann.

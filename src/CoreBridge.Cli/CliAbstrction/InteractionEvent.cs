@@ -1,6 +1,6 @@
 using System.Runtime.CompilerServices;
 
-namespace CoreBridge.Cli;
+namespace CoreBridge.Cli.CliAbstrction;
 
 /// <summary>
 /// Ein Ereignis, das eine Antwort des Benutzers braucht. Das erzeugende

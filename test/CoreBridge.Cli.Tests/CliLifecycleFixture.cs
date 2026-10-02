@@ -1,5 +1,5 @@
 using System.Text.RegularExpressions;
-using CoreBridge.Cli;
+using CoreBridge.Cli.CliAbstrction;
 using CoreBridge.Core.Config;
 using CoreBridge.Core.Inits;
 using CoreBridge.Core.Multipass;
