@@ -18,7 +18,7 @@ public class DoctorTests
         Assert.Contains(report.Hints, hint => hint.Contains("https://"));
     }
 
-    [Fact]
+    [WindowsFact]
     public void GefundenAberAntwortKeinJsonLiefertFehler()
     {
         var hostnamePath = Path.Combine(

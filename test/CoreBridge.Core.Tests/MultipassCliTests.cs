@@ -9,7 +9,7 @@ public class MultipassCliTests
         Environment.GetFolderPath(Environment.SpecialFolder.System),
         "cmd.exe");
 
-    [Fact]
+    [WindowsFact]
     public void ExitCodeWirdDurchgereicht()
     {
         var cli = new MultipassCli(() => CmdPath);
@@ -17,7 +17,7 @@ public class MultipassCliTests
         Assert.Equal(42, result.ExitCode);
     }
 
-    [Fact]
+    [WindowsFact]
     public void StdOutUndStdErrWerdenGetrennt()
     {
         var cli = new MultipassCli(() => CmdPath);
@@ -27,7 +27,7 @@ public class MultipassCliTests
         Assert.DoesNotContain("corebridge-stdout-test", result.StdOut);
     }
 
-    [Fact]
+    [WindowsFact]
     public void DauerWirdGemessen()
     {
         var cli = new MultipassCli(() => CmdPath);
@@ -35,7 +35,7 @@ public class MultipassCliTests
         Assert.True(result.DurationMs >= 0);
     }
 
-    [Fact]
+    [WindowsFact]
     public void TimeoutKilltProzessbaumUndWirft()
     {
         var cli = new MultipassCli(() => CmdPath);
@@ -46,7 +46,7 @@ public class MultipassCliTests
         Assert.Contains("ping -n 30 127.0.0.1", exception.Command);
     }
 
-    [Fact]
+    [WindowsFact]
     public void RunWithExtensionsOhneWeiterWartenKilltUndWirft()
     {
         var cli = new MultipassCli(() => CmdPath);
@@ -65,7 +65,7 @@ public class MultipassCliTests
         Assert.Equal(500, exception.TimeoutMs);
     }
 
-    [Fact]
+    [WindowsFact]
     public void RunWithExtensionsWartetWeiterBisProzessFertig()
     {
         var cli = new MultipassCli(() => CmdPath);

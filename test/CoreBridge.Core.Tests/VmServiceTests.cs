@@ -137,7 +137,7 @@ public class VmServiceTests
         Assert.DoesNotContain("__corebridge_cwd__", output);
     }
 
-    [Fact]
+    [WindowsFact]
     public void PutTransferiertMitDefaultZielpfad()
     {
         var cli = new FakeMultipassCli(EmptyResult);

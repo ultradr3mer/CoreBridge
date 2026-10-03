@@ -511,8 +511,10 @@ public class MultipassService
         {
             // Eine einzelne Abfrage kann selbst dauern (multipass version, solange der
             // Daemon hochfährt). Währenddessen laufen die Ticks weiter, damit der
-            // Fortschritt sichtbar bleibt und der Konsument Tasten lesen kann.
-            var check = Task.Run(condition, cancellationToken);
+            // Fortschritt sichtbar bleibt und der Konsument Tasten lesen kann. Eigener Thread
+            // statt Pool: auf Maschinen mit wenig Kernen blockierte die Abfrage sonst den
+            // Pool-Thread, den die Ticks brauchen.
+            var check = Task.Factory.StartNew(condition, cancellationToken, TaskCreationOptions.LongRunning, TaskScheduler.Default);
             while (await Task.WhenAny(check, Task.Delay(_pollInterval, cancellationToken)) != check)
             {
                 CheckTimeout();

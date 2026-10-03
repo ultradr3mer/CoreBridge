@@ -69,7 +69,7 @@ public class MultipassStorageTests
         Assert.Throws<MultipassAccessDeniedException>(() => storage.Set(@"E:\Multipass"));
     }
 
-    [Theory]
+    [WindowsTheory]
     [InlineData(@"D:\Multipass", @"d:\multipass\", true)]
     [InlineData(@"D:\Multipass", @"D:\Multipass2", false)]
     public void SamePathIgnoriertSchreibweiseUndTrenner(string left, string right, bool expected)

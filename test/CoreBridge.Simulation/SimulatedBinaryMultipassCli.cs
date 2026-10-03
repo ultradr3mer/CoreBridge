@@ -33,7 +33,7 @@ public sealed class SimulatedBinaryMultipassCli : MultipassCli, IMultipassDouble
     public string BinaryLabel => "simulation://multipass-sim";
 
     /// <summary>
-    /// <c>multipass-sim.exe</c> aus <c>tools/CoreBridge.MultipassSim/bin/&lt;Konfiguration&gt;/&lt;TFM&gt;</c>,
+    /// <c>multipass-sim(.exe)</c> aus <c>tools/CoreBridge.MultipassSim/bin/&lt;Konfiguration&gt;/&lt;TFM&gt;</c>,
     /// Konfiguration und TFM wie die dieses Assemblys; <c>null</c>, wenn noch nicht gebaut.
     /// </summary>
     public static string? Locate()
@@ -44,8 +44,11 @@ public sealed class SimulatedBinaryMultipassCli : MultipassCli, IMultipassDouble
         var (configuration, framework) = bin >= 0 && bin + 2 < segments.Length
             ? (segments[bin + 1], segments[bin + 2])
             : ("Debug", "net10.0");
-        var exe = RepoPaths.Resolve(Path.Combine("tools", "CoreBridge.MultipassSim", "bin", configuration, framework, "multipass-sim.exe"));
-        return File.Exists(exe) ? exe : null;
+        // Unter Windows multipass-sim.exe, sonst das Apphost-Binary ohne Endung.
+        var folder = RepoPaths.Resolve(Path.Combine("tools", "CoreBridge.MultipassSim", "bin", configuration, framework));
+        return new[] { "multipass-sim.exe", "multipass-sim" }
+            .Select(name => Path.Combine(folder, name))
+            .FirstOrDefault(File.Exists);
     }
 
     // Das Binary steht fest: multipass-status reicht Doubles ihr BinaryLabel als exePath durch.

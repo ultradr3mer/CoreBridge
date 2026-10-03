@@ -159,7 +159,9 @@ public sealed record CommandLogConfig
 
     /// <summary>Der wirksame Ordner, <c>null</c> wenn das Protokoll aus ist.</summary>
     public string? ResolveDirectory() =>
-        this.Enabled
-            ? Common.RepoPaths.Resolve(string.IsNullOrWhiteSpace(this.Path) ? DefaultPath : this.Path)
-            : null;
+        !this.Enabled ? null
+        // Der Standard über den Systemordner statt %LOCALAPPDATA%: die Variable gibt es nur unter Windows.
+        : string.IsNullOrWhiteSpace(this.Path) || this.Path == DefaultPath
+            ? System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "CoreBridge", "logs")
+            : Common.RepoPaths.Resolve(this.Path);
 }
