@@ -126,8 +126,8 @@ public static partial class Program
       cancellation.Cancel();
     };
 
-    // Protokoll neben den übrigen Daten des Stores (Development: <Repo>/artifacts/logs).
-    using var log = CommandLog.Open(Path.Combine(RepoPaths.Resolve(config.Inits.StoreRoot), "logs"), args);
+    // Protokoll laut CommandLog-Config (Standard aus; Development: <Repo>/artifacts/logs).
+    using var log = CommandLog.Open(config.CommandLog.ResolveDirectory(), args);
     var exitCode = 0;
     try
     {

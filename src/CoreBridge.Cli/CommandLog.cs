@@ -28,9 +28,17 @@ public sealed class CommandLog : IDisposable
         this.mutex = path is null ? null : new Mutex(initiallyOwned: false, @"Local\CoreBridge.CommandLog");
     }
 
-    /// <summary>Öffnet (oder ergänzt) das Tagesprotokoll unter <paramref name="directory"/>.</summary>
-    public static CommandLog Open(string directory, IEnumerable<string> args)
+    /// <summary>
+    /// Öffnet (oder ergänzt) das Tagesprotokoll unter <paramref name="directory"/>; <c>null</c>
+    /// = Protokoll aus (<c>CommandLog:Enabled = false</c>), dann schreibt die Instanz nichts.
+    /// </summary>
+    public static CommandLog Open(string? directory, IEnumerable<string> args)
     {
+        if (directory is null)
+        {
+            return new CommandLog(null);
+        }
+
         CommandLog log;
         try
         {
