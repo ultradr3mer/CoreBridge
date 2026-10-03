@@ -384,6 +384,9 @@ public sealed class RepoSendOptions : MultipassOptions
 
     [Option('r', "repo", HelpText = "Pfad im Host-Repository (Standard: aktuelles Verzeichnis).")]
     public string? Repo { get; set; }
+
+    /// <summary>Aufruf aus <c>work</c>: der Hinweis zum Weiterarbeiten von Hand entfällt (keine CLI-Option).</summary>
+    internal bool FromWork { get; init; }
 }
 
 [Verb("repo-receive", HelpText = "Holt claude/<id> der VM als git bundle und spult main darauf vor (merge --ff-only) — nur nach Rückfrage oder mit --yes; hat main eigene Commits, bleibt alles unverändert. Ohne --id: listet die claude/*-Branches der VM.")]

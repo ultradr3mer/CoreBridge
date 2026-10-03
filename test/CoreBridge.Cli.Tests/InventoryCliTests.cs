@@ -54,7 +54,7 @@ public sealed class InventoryCliTests : IDisposable
         Assert.Equal(0, created.ExitCode);
 
         var a = Inventory.Vms["inv-a"];
-        Assert.Equal(("base", 2, "2G"), (a.Profile, a.Cpus, a.Memory));
+        Assert.Equal(("base", 2, "2.0GiB"), (a.Profile, a.Cpus, a.Memory));
         Assert.Equal(["git"], a.Components);
         Assert.Equal(["git"], a.Snapshots["base"].Components);
         var snapshots = await Run(new VmSnapshotsOptions { Name = "inv-a" });

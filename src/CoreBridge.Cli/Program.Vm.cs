@@ -25,6 +25,24 @@ public static partial class Program
     }
   }
 
+  /// <summary>CPU/Memory/Disk laut <c>multipass get</c>; was nicht lesbar ist, bleibt <c>null</c>.</summary>
+  private static VmResources ReadResources(CommandContext context, string name)
+  {
+    string? Get(string key)
+    {
+      try
+      {
+        return context.Vms.GetSetting(name, key, context.DefaultTimeoutMs) is { Length: > 0 } value ? value : null;
+      }
+      catch (MultipassException)
+      {
+        return null;
+      }
+    }
+
+    return new VmResources(int.TryParse(Get("cpus"), out var cpus) ? cpus : null, Get("memory"), Get("disk"));
+  }
+
   /// <summary>CPU/Memory/Disk-Angaben prüfen, bevor etwas an einer VM passiert.</summary>
   private static VmResources ParseResources(int? cpus, string? memory, string? disk)
   {
@@ -165,12 +183,14 @@ public static partial class Program
     }
 
     await events.Emit(events.Std(await Completed(vms, options.Name, $"create {options.Name}", result, cancellationToken)));
+    // Ressourcen so, wie Multipass sie meldet (5.0GiB statt 5G), auch die Standardwerte.
+    var actual = await Task.Run(() => ReadResources(context, options.Name), cancellationToken);
     UpdateInventory(inventory => inventory.Vms[options.Name] = new InventoryVm
     {
       Profile = profile?.Name,
-      Cpus = resources.Cpus ?? 1,
-      Memory = resources.Memory ?? "1G",
-      Disk = resources.Disk ?? "5G",
+      Cpus = actual.Cpus ?? resources.Cpus,
+      Memory = actual.Memory ?? resources.Memory,
+      Disk = actual.Disk ?? resources.Disk,
       Created = DateTime.UtcNow
     });
 

@@ -28,7 +28,7 @@ public static partial class Program
     await EnsureRunning(context, vm, ask: false);
     await EnsureComponents(context, vm, ["git", agent]);
 
-    await Dispatch(context, new RepoSendOptions { Name = vm, Repo = root });
+    await Dispatch(context, new RepoSendOptions { Name = vm, Repo = root, FromWork = true });
 
     var id = await StartTask(context, vm, repo);
     var work = SandboxRepo.WorkDir(repo);

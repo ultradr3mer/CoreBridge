@@ -259,7 +259,8 @@ public class MultipassServiceTests
     [Fact]
     public async Task DaemonNachTimeoutFragtWeiterWarten()
     {
-        var service = new FakeService { State = MultipassServiceState.Stopped, DaemonRespondsAfter = TimeSpan.FromMilliseconds(200) };
+        // Weit über dem Timeout (50 ms), damit auch ein ausgelasteter Testlauf erst fragt, bevor der Daemon antwortet.
+        var service = new FakeService { State = MultipassServiceState.Stopped, DaemonRespondsAfter = TimeSpan.FromSeconds(1) };
 
         await Drain(service);
 
