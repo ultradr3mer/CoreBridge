@@ -128,6 +128,7 @@ public static partial class Program
 
     // Protokoll laut CommandLog-Config (Standard aus; Development: <Repo>/artifacts/logs).
     using var log = CommandLog.Open(config.CommandLog.ResolveDirectory(), args);
+    log.Write("info", $"Umgebung {CurrentEnvironment}, appsettings aus {AppContext.BaseDirectory}");
     var exitCode = 0;
     try
     {
@@ -138,6 +139,7 @@ public static partial class Program
     catch (ProgramExecutionException exception)
     {
       log.Write("fehler", exception.Message);
+      log.WriteCause(exception);
       Console.Error.WriteLine(exception.Message);
       return exitCode = exception.ExitCode;
     }
@@ -300,6 +302,20 @@ public static partial class Program
     };
   }
 
+  /// <summary>Womit das Kommando arbeitet (Diagnose): Multipass-Client, Aufnahme, Profile, Timeouts.</summary>
+  private static async Task EmitSetup(EventFactory factory, AppConfig config, IMultipassCli cli)
+  {
+    var client = cli switch
+    {
+      IMultipassDouble multipassDouble => $"{cli.GetType().Name} ({multipassDouble.BinaryLabel}, kein echtes Multipass)",
+      LoggingMultipassCli logging => $"{logging.Inner.GetType().Name} ({MultipassBinaryLocator.LocateOrNull() ?? "Binary nicht gefunden"}), Aufnahme {logging.LogFile}",
+      _ => $"{cli.GetType().Name} ({MultipassBinaryLocator.LocateOrNull() ?? "Binary nicht gefunden"})"
+    };
+    await factory.Emit(factory.Diagnostic($"Multipass-Client: {client}"));
+    await factory.Emit(factory.Diagnostic(
+        $"Profile in {InitStore.ProfilesRoot}, Timeouts {config.DefaultTimeout} / VM-Erzeugung {config.DefaultTimeoutVmCreation}"));
+  }
+
   private static async Task Execute(
       AppConfig config,
       IOptions options,
@@ -310,7 +326,14 @@ public static partial class Program
     config = InitComponentStore.Merge(config, InitStore.UserSettingsFile);
     using var services = CoreBridgeContainer.Create(config);
     var cli = MultipassCliFactory.Create(services);
-    var context = new CommandContext(config, new VmService(cli), factory, cancellationToken, new GitCli());
+    await EmitSetup(factory, config, cli);
+    // Jeder Multipass- und git-Aufruf wird zum ToolCallEvent im Ereignisstrom.
+    var context = new CommandContext(
+        config,
+        new VmService(new TracingMultipassCli(cli, factory)),
+        factory,
+        cancellationToken,
+        new GitCli(factory));
     if (cli is IMultipassDouble && options is RepoSendOptions or RepoReceiveOptions)
     {
       // git auf dem Host erreicht keine simulierte VM.

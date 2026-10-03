@@ -152,6 +152,9 @@ public sealed class CliLifecycleFixture
                         break;
                     case ProgressEvent:
                         break;
+                    case DiagnosticEvent:
+                        // Innenleben: nur fürs Protokoll (commandLog.Tee), nicht für die Prüfungen.
+                        break;
                     case StdEvent std:
                         log(std.Printable);
                         lines.Add(std.Printable);
@@ -172,6 +175,7 @@ public sealed class CliLifecycleFixture
         catch (ProgramExecutionException exception)
         {
             commandLog.Write("fehler", exception.Message);
+            commandLog.WriteCause(exception);
             exitCode = exception.ExitCode;
             log($"Fehler (Exit {exception.ExitCode}): {exception.Message}");
             dialogErrors.AddRange(NotAsked(pending));

@@ -71,6 +71,9 @@ public class ConsoleAdapter
             case StdEvent std:
                 this.WriteOutput(std.Printable);
                 break;
+            case DiagnosticEvent:
+                // Innenleben fürs Protokoll (CommandLog), nicht für die Konsole.
+                break;
             default:
                 this.EndProgressLine();
                 Console.WriteLine(cliEvent.Printable);
