@@ -2,6 +2,7 @@ using CoreBridge.Interaction;
 using CoreBridge.Core.Common;
 using CoreBridge.Core.Inits;
 using CoreBridge.Core.Multipass;
+using CoreBridge.Core.Vm;
 
 namespace CoreBridge.Cli;
 
@@ -81,6 +82,11 @@ public static partial class Program
     }
 
     await events.Emit(events.Std($"install {string.Join(", ", components)} → {name}: OK ({stopwatch.Elapsed.TotalSeconds:F1} s)"));
+    UpdateInventory(inventory =>
+    {
+      var entry = inventory.Vm(name);
+      entry.Components = VmInventory.Merge(entry.Components, components);
+    });
     await OfferSnapshotAfterConfiguration(context, name, string.Join("-", components), options.Snapshot);
   }
 
@@ -148,7 +154,8 @@ public static partial class Program
     var result = await RunReported(
         context,
         label,
-        () => context.Vms.Snapshot(name, snapshot, $"after configuration ({suggestedName})", context.DefaultTimeoutMs, KeepWaiting(context, label)));
+        () => context.Vms.Snapshot(name, snapshot, SnapshotCommentFor(name, $"after configuration ({suggestedName})"), context.DefaultTimeoutMs, KeepWaiting(context, label)));
+    RecordSnapshot(name, snapshot, result);
     await events.Emit(events.Std(await Completed(context.Vms, name, label, result, context.CancellationToken)));
     await events.Emit(events.Std($"VM `{name}` stays stopped — start it with `cb vm-start -n {name}`."));
   }

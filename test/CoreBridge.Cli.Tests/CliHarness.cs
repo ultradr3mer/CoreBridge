@@ -11,8 +11,8 @@ internal sealed record HarnessResult(int ExitCode, IReadOnlyList<string> Lines, 
 
 /// <summary>
 /// Schlanker Konsument von <see cref="Program.Run"/> für Tests außerhalb des Lebenszyklus:
-/// sammelt Ausgabe, beantwortet Rückfragen der Reihe nach aus <c>dialog</c> und verwirft
-/// jede weitere (Standardantwort), statt zu hängen.
+/// sammelt Ausgabe, beantwortet Rückfragen der Reihe nach aus <c>dialog</c> und jede
+/// weitere mit ihrer Standardantwort, wie ohne Konsole — statt zu hängen.
 /// </summary>
 internal static class CliHarness
 {
@@ -43,7 +43,19 @@ internal static class CliHarness
                         }
                         else
                         {
-                            interaction.Cancel();
+                            // Wie ohne Konsole: die Standardantwort (Nein, leerer Text).
+                            switch (cliEvent)
+                            {
+                                case IChoiceInteraction choice:
+                                    choice.SetDefault();
+                                    break;
+                                case TextEvent text:
+                                    text.SetResult(null);
+                                    break;
+                                default:
+                                    interaction.Cancel();
+                                    break;
+                            }
                         }
 
                         break;

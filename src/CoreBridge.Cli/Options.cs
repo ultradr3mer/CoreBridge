@@ -330,6 +330,23 @@ public sealed class VmResizeOptions : MultipassOptions
     public string? Memory { get; set; }
 }
 
+[Verb("vm-inventory", HelpText = "Zeigt VMs und Snapshots mit Profil, Komponenten und Ressourcen aus dem Inventar (<StoreRoot>/inventory.json); --refresh gleicht mit Multipass und den .ready-Markern im Gast ab.")]
+public sealed class VmInventoryOptions : MultipassOptions
+{
+    [Option('n', "name", HelpText = "Nur diese VM.")]
+    public string? Name { get; set; }
+
+    [Option("refresh", HelpText = "Abgleichen: Ressourcen per multipass get, Komponenten laufender VMs aus ihren Markern, Snapshots aus ihren Kommentaren.")]
+    public bool Refresh { get; set; }
+}
+
+[Verb("repo-match", HelpText = "Erkennt, was ein Repository braucht (dotnet, node, python, rust, go, java, git; dazu Detect der Komponenten), ordnet VMs und Snapshots danach und nennt den nächsten Befehl oder den Migrationspfad.")]
+public sealed class RepoMatchOptions : MultipassOptions
+{
+    [Option('r', "repo", HelpText = "Pfad im Host-Repository (Standard: aktuelles Verzeichnis).")]
+    public string? Repo { get; set; }
+}
+
 [Verb("vm-install", HelpText = "Installiert Komponenten in eine vorhandene VM (dieselben Schritte wie cloud-init: Pakete, Snaps, Komponenten-Skript, Marker-Prüfung) und empfiehlt danach einen Snapshot.")]
 public sealed class VmInstallOptions : MultipassOptions
 {

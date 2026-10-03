@@ -1,6 +1,7 @@
 using CoreBridge.Interaction;
 using CoreBridge.Core.Common;
 using CoreBridge.Core.Multipass;
+using CoreBridge.Core.Vm;
 
 namespace CoreBridge.Cli;
 
@@ -51,6 +52,26 @@ public static partial class Program
     }
 
     var cloned = destination ?? ParseCloneName(result.StdOut);
+    if (cloned is not null)
+    {
+      // Der Klon bringt mit, was in der Quelle installiert ist — nicht ihre Snapshots.
+      UpdateInventory(inventory =>
+      {
+        var origin = inventory.Vms.GetValueOrDefault(source);
+        inventory.Vms[cloned] = new InventoryVm
+        {
+          Profile = origin?.Profile,
+          Components = [.. origin?.Components ?? []],
+          Known = origin?.Known ?? false,
+          Cpus = origin?.Cpus,
+          Memory = origin?.Memory,
+          Disk = origin?.Disk,
+          Created = DateTime.UtcNow,
+          Verified = origin?.Verified
+        };
+      });
+    }
+
     await context.Events.Emit(context.Events.Std(cloned is null
         ? $"{label}: OK ({result.DurationMs / 1000.0:F1} s)"
         : await Completed(context.Vms, cloned, destination is null ? $"{label} → {cloned}" : label, result, context.CancellationToken)));
@@ -92,7 +113,8 @@ public static partial class Program
     var result = await RunReported(
         context,
         label,
-        () => context.Vms.Snapshot(name, snapshot, options.Comment, context.DefaultTimeoutMs, KeepWaiting(context, label)));
+        () => context.Vms.Snapshot(name, snapshot, SnapshotCommentFor(name, options.Comment), context.DefaultTimeoutMs, KeepWaiting(context, label)));
+    RecordSnapshot(name, snapshot, result);
     await context.Events.Emit(context.Events.Std(await Completed(context.Vms, name, label, result, context.CancellationToken)));
   }
 
@@ -152,9 +174,10 @@ public static partial class Program
           backupLabel,
           () => context.Vms.Snapshot(
               name,
-              comment: $"Backup before restore to {snapshot}",
+              comment: SnapshotCommentFor(name, $"Backup before restore to {snapshot}"),
               timeoutMs: context.DefaultTimeoutMs,
               keepWaiting: KeepWaiting(context, backupLabel)));
+      RecordSnapshot(name, null, backup);
       await events.Emit(events.Std($"{backupLabel}: OK ({backup.DurationMs / 1000.0:F1} s)"));
     }
 
@@ -163,6 +186,24 @@ public static partial class Program
         context,
         label,
         () => context.Vms.Restore(name, snapshot, context.DefaultTimeoutMs, KeepWaiting(context, label)));
+    // Die VM hat jetzt den Stand des Snapshots — laut Inventar oder seinem Kommentar.
+    var restored = snapshots.First(s => string.Equals(s.Name, snapshot, StringComparison.OrdinalIgnoreCase));
+    UpdateInventory(inventory =>
+    {
+      var entry = inventory.Vm(name);
+      var recorded = entry.Snapshots.GetValueOrDefault(restored.Name);
+      var parsed = SnapshotComment.Parse(restored.Comment);
+      if (recorded is not null || parsed is not null)
+      {
+        entry.Components = [.. recorded?.Components ?? parsed!.Value.Components];
+        entry.Profile = recorded?.Profile ?? parsed?.Profile ?? entry.Profile;
+        entry.Known = true;
+      }
+      else
+      {
+        entry.Known = false;
+      }
+    });
     await events.Emit(events.Std(await Completed(context.Vms, name, label, result, context.CancellationToken)));
   }
 
@@ -243,6 +284,22 @@ public static partial class Program
           () => context.Vms.SetSetting(name, key, to, context.DefaultTimeoutMs, KeepWaiting(context, label)));
       var now = await Task.Run(() => Get(key), context.CancellationToken);
       await events.Emit(events.Std($"{label}: OK ({result.DurationMs / 1000.0:F1} s) — {key} now {now}"));
+      UpdateInventory(inventory =>
+      {
+        var entry = inventory.Vm(name);
+        switch (key)
+        {
+          case "cpus":
+            entry.Cpus = int.TryParse(now, out var cpus) ? cpus : entry.Cpus;
+            break;
+          case "memory":
+            entry.Memory = now;
+            break;
+          default:
+            entry.Disk = now;
+            break;
+        }
+      });
     }
 
     var diskChanged = changes.Any(change => change.Key == "disk");

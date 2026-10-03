@@ -165,6 +165,14 @@ public static partial class Program
     }
 
     await events.Emit(events.Std(await Completed(vms, options.Name, $"create {options.Name}", result, cancellationToken)));
+    UpdateInventory(inventory => inventory.Vms[options.Name] = new InventoryVm
+    {
+      Profile = profile?.Name,
+      Cpus = resources.Cpus ?? 1,
+      Memory = resources.Memory ?? "1G",
+      Disk = resources.Disk ?? "5G",
+      Created = DateTime.UtcNow
+    });
 
     if (cloudInit is not null)
     {
@@ -172,6 +180,11 @@ public static partial class Program
       // Snapshot — sonst hielte er eine halbe Installation fest, und weil
       // runcmd nur einmal je Instanz läuft, holt kein späterer Start sie nach.
       await VerifyProvisioning(context, options.Name, profile);
+      if (profile is not null)
+      {
+        UpdateInventory(inventory => inventory.Vm(options.Name).Components = VmInventory.Merge([], profile.Components));
+      }
+
       await OfferSnapshotAfterConfiguration(context, options.Name, profile?.Name ?? "provisioned", options.Snapshot);
     }
   }
@@ -369,6 +382,10 @@ public static partial class Program
         name,
         label,
         () => context.Vms.Delete(name, options.Purge, context.DefaultTimeoutMs, KeepWaiting(context, label)));
+    if (options.Purge)
+    {
+      UpdateInventory(inventory => inventory.Vms.Remove(name));
+    }
   }
 
   /// <summary>
@@ -403,6 +420,7 @@ public static partial class Program
         name,
         $"delete {name} --purge",
         () => context.Vms.Delete(name, purge: true, context.DefaultTimeoutMs, KeepWaiting(context, $"delete {name}")));
+    UpdateInventory(inventory => inventory.Vms.Remove(name));
   }
 
   /// <summary>
