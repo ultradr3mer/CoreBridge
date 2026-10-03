@@ -146,6 +146,109 @@ public sealed class SimulatedMultipassCli : IMultipassCli, IMultipassDouble
         return result with { DurationMs = (long)delay.TotalMilliseconds };
     }
 
+    /// <summary>
+    /// Spiegelt den Bestand eines echten Multipass in den simulierten Zustand: danach hat
+    /// der Simulator dieselben VMs (Name, Zustand, IPv4, Release, Disk) und Snapshots
+    /// (Name, Parent, Kommentar). Vom echten Multipass wird nur gelesen —
+    /// <c>list</c>, <c>list --snapshots</c>, <c>get local.&lt;vm&gt;.disk</c> und mit
+    /// <paramref name="probeMarkers"/> ein <c>ls /var/lib/corebridge</c> in laufenden VMs.
+    /// </summary>
+    /// <remarks>
+    /// Was <c>list</c> nicht verrät (Komponenten, Marker, Dateien im Gast), behält eine VM,
+    /// die der Simulator unter diesem Namen schon kennt; mit <paramref name="probeMarkers"/>
+    /// kommen Marker und Komponenten laufender VMs aus dem echten Gast. Simulierte VMs, die
+    /// es echt nicht gibt, verschwinden.
+    /// </remarks>
+    /// <returns>Zeilen für die Ausgabe: Zusammenfassung und je VM eine Zeile.</returns>
+    public IReadOnlyList<string> SyncFrom(IMultipassCli real, bool probeMarkers = false, int timeoutMs = 60_000)
+    {
+        var list = real.Run(["list", "--format", "json"], timeoutMs);
+        if (list.ExitCode != 0)
+        {
+            throw new MultipassException($"echtes multipass list scheitert (Exit {list.ExitCode}): {MultipassStdErr.Clean(list.StdErr)}");
+        }
+
+        var vms = new List<(string Name, string State, string? Ip, string Release)>();
+        using (var document = JsonDocument.Parse(list.StdOut))
+        {
+            if (document.RootElement.TryGetProperty("list", out var entries) && entries.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var entry in entries.EnumerateArray())
+                {
+                    string? Text(string property) =>
+                        entry.TryGetProperty(property, out var value) && value.ValueKind == JsonValueKind.String ? value.GetString() : null;
+
+                    var ip = entry.TryGetProperty("ipv4", out var ips) && ips.ValueKind == JsonValueKind.Array
+                        ? ips.EnumerateArray().Select(a => a.GetString()).FirstOrDefault(a => !string.IsNullOrEmpty(a))
+                        : null;
+                    if (Text("name") is { } name)
+                    {
+                        vms.Add((name, Text("state") ?? "Unknown", ip, Text("release") ?? "Ubuntu 26.10"));
+                    }
+                }
+            }
+        }
+
+        var snapshotsResult = real.Run(["list", "--snapshots", "--format", "json"], timeoutMs);
+        var snapshots = snapshotsResult.ExitCode == 0 ? MultipassSnapshotList.Parse(snapshotsResult.StdOut) : [];
+        var disks = vms.ToDictionary(
+            vm => vm.Name,
+            vm => real.Run(["get", $"local.{vm.Name}.disk"], timeoutMs) is { ExitCode: 0 } disk && disk.StdOut.Trim().Length > 0
+                ? disk.StdOut.Trim()
+                : DefaultDisk);
+        var markers = new Dictionary<string, List<string>>();
+        if (probeMarkers)
+        {
+            foreach (var vm in vms.Where(vm => vm.State == "Running"))
+            {
+                var ls = real.Run(["exec", vm.Name, "--", "/bin/sh", "-c", "ls /var/lib/corebridge 2>/dev/null || true"], timeoutMs);
+                markers[vm.Name] = ls.ExitCode == 0
+                    ? Regex.Matches(ls.StdOut, @"^([A-Za-z0-9_-]+)\.ready\s*$", RegexOptions.Multiline).Select(m => m.Groups[1].Value).ToList()
+                    : [];
+            }
+        }
+
+        var lines = new List<string>();
+        Locked(state =>
+        {
+            var known = state.Vms.ToDictionary(vm => vm.Name, StringComparer.OrdinalIgnoreCase);
+            state.Vms = vms.Select(vm =>
+            {
+                var previous = known.GetValueOrDefault(vm.Name);
+                var own = snapshots.Where(s => s.Instance == vm.Name).ToList();
+                var sim = new SimVm
+                {
+                    Name = vm.Name,
+                    State = vm.State,
+                    Release = vm.Release,
+                    Disk = disks[vm.Name],
+                    Ip = vm.Ip ?? previous?.Ip ?? NextIp(state),
+                    Components = markers.TryGetValue(vm.Name, out var probed) ? [.. probed] : [.. previous?.Components ?? []],
+                    Markers = markers.TryGetValue(vm.Name, out var probedMarkers) ? [.. probedMarkers] : [.. previous?.Markers ?? []],
+                    Files = previous?.Files ?? new Dictionary<string, string>(StringComparer.Ordinal),
+                    Directories = previous?.Directories ?? [],
+                    Snapshots = own.Select(s => new SimSnapshot
+                    {
+                        Name = s.Name,
+                        Parent = s.Parent ?? string.Empty,
+                        Comment = s.Comment ?? string.Empty
+                    }).ToList(),
+                    // Namenszähler so, dass die nächsten Standardnamen frei sind.
+                    SnapshotCount = Math.Max(own.Count, own.Select(s => Regex.Match(s.Name, @"^snapshot(\d+)$")).Where(m => m.Success).Select(m => int.Parse(m.Groups[1].Value)).DefaultIfEmpty(0).Max()),
+                    CloneCount = vms.Select(o => Regex.Match(o.Name, $@"^{Regex.Escape(vm.Name)}-clone(\d+)$")).Where(m => m.Success).Select(m => int.Parse(m.Groups[1].Value)).DefaultIfEmpty(0).Max(),
+                    // Parent des nächsten Snapshots: ein Blatt des Baums (welcher zuletzt genommen wurde, verrät list nicht).
+                    CurrentSnapshot = own.LastOrDefault(s => own.All(o => o.Parent != s.Name))?.Name
+                };
+                lines.Add($"  {sim.Name,-32} {sim.State,-10} {sim.Disk,-9} Snapshots: {sim.Snapshots.Count,-3} Marker: {(sim.Markers.Count == 0 ? "--" : string.Join(",", sim.Markers))}");
+                return sim;
+            }).ToList();
+            return Ok(string.Empty);
+        });
+
+        lines.Insert(0, $"Synchronisiert: {vms.Count} VM(s), {snapshots.Count} Snapshot(s) aus dem echten Multipass{(probeMarkers ? " (Marker aus laufenden Gästen)" : string.Empty)}.");
+        return lines;
+    }
+
     private MultipassRunResult Locked(Func<SimState, MultipassRunResult> action)
     {
         var key = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(StatePath.ToLowerInvariant())))[..16];

@@ -1,4 +1,5 @@
 using CoreBridge.Core.Common;
+using CoreBridge.Core.Multipass;
 
 namespace CoreBridge.Simulation;
 
@@ -89,6 +90,11 @@ public static class MultipassSimCommandLine
         }
 
         var simulator = SimulatedMultipassCli.At(statePath, delay);
+        if (args[0] == "sync")
+        {
+            return Sync(simulator, args, output, error);
+        }
+
         if (args[0] is "shell" or "sh")
         {
             return Shell(simulator, args.Skip(1).FirstOrDefault(a => !a.StartsWith('-')) ?? "primary", input, output, error, interactive);
@@ -165,6 +171,50 @@ public static class MultipassSimCommandLine
         }
 
         return 0;
+    }
+
+    /// <summary>
+    /// Verstecktes <c>sync [--markers] [--exe &lt;multipass.exe&gt;]</c> (nicht in der Hilfe, weil
+    /// multipass es nicht kennt): übernimmt VMs und Snapshots des echten Multipass in den
+    /// Zustand (<see cref="SimulatedMultipassCli.SyncFrom"/>), ruft dort nur Lesendes auf.
+    /// </summary>
+    private static int Sync(SimulatedMultipassCli simulator, IReadOnlyList<string> args, TextWriter output, TextWriter error)
+    {
+        var exeIndex = args.ToList().IndexOf("--exe");
+        var exe = exeIndex > 0 && exeIndex + 1 < args.Count ? args[exeIndex + 1] : LocateRealMultipass();
+        if (exe is null || !File.Exists(exe))
+        {
+            error.Write("sync failed: kein echtes multipass.exe gefunden (PATH, %ProgramFiles%\\Multipass) — mit --exe angeben.\n");
+            return 2;
+        }
+
+        try
+        {
+            foreach (var line in simulator.SyncFrom(new MultipassCli(() => exe), probeMarkers: args.Contains("--markers")))
+            {
+                output.Write(line + "\n");
+            }
+
+            output.Write($"Quelle: {exe}\nZustand: {simulator.StatePath}\n");
+            return 0;
+        }
+        catch (Exception exception) when (exception is MultipassException or System.Text.Json.JsonException)
+        {
+            error.Write($"sync failed: {exception.Message}\n");
+            return 2;
+        }
+    }
+
+    /// <summary>
+    /// Wie <see cref="MultipassBinaryLocator"/>, aber nie dieser Simulator selbst — zeigt
+    /// <c>CORE_BRIDGE_MULTIPASS_EXE</c> auf <c>multipass-sim.exe</c>, zählen nur PATH und Programme.
+    /// </summary>
+    private static string? LocateRealMultipass()
+    {
+        var configured = Environment.GetEnvironmentVariable(MultipassBinaryLocator.ExeEnvironmentVariable);
+        var isSimulator = configured is not null
+            && Path.GetFileNameWithoutExtension(configured).Equals("multipass-sim", StringComparison.OrdinalIgnoreCase);
+        return MultipassBinaryLocator.LocateOrNull(environmentValue: isSimulator ? string.Empty : null);
     }
 
     private static string Display(string? cwd) => cwd switch

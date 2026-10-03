@@ -250,6 +250,67 @@ public class SimulatedMultipassCliTests
         Assert.Equal("Running", new VmService(SimulatedMultipassCli.At(state, TimeSpan.Zero)).Find("demo")!.State);
     }
 
+    /// <summary>
+    /// sync übernimmt VMs und Snapshots des echten Multipass und ruft dort nur Lesendes auf:
+    /// der Stand-in für „echt“ kennt nur list, list --snapshots, get und das ls der Marker.
+    /// </summary>
+    [Fact]
+    public void SyncSpiegeltDasEchteMultipassNurLesend()
+    {
+        using var temp = new TempDirectory();
+        var simulator = Simulator(temp);
+        var service = new VmService(simulator);
+        service.Create("nur-simuliert", "daily:26.10");
+        var real = new ReadOnlyMultipass(new Dictionary<string, string>
+        {
+            ["list --format json"] = """
+                {"list":[
+                  {"ipv4":["172.17.117.178"],"name":"ai-ubuntu","release":"Ubuntu 26.10","state":"Running"},
+                  {"ipv4":[],"name":"ai-ubuntu-clone1","release":"Ubuntu 26.10","state":"Stopped"},
+                  {"ipv4":["N/A"],"name":"alt","release":"Ubuntu 24.04 LTS","state":"Deleted"}]}
+                """,
+            ["list --snapshots --format json"] = """
+                {"errors":[],"info":{"ai-ubuntu":{"base":{"comment":"frisch","parent":""},"snapshot2":{"comment":"","parent":"base"}}}}
+                """,
+            ["get local.ai-ubuntu.disk"] = "20.0GiB\n",
+            ["get local.ai-ubuntu-clone1.disk"] = "8.0GiB\n",
+            ["exec ai-ubuntu -- /bin/sh -c ls /var/lib/corebridge 2>/dev/null || true"] = "claude.ready\ndotnet.ready\n"
+        });
+
+        var report = simulator.SyncFrom(real, probeMarkers: true);
+
+        Assert.StartsWith("Synchronisiert: 3 VM(s), 2 Snapshot(s)", report[0]);
+        Assert.Equal(
+            new[] { ("ai-ubuntu", "Running"), ("ai-ubuntu-clone1", "Stopped"), ("alt", "Deleted") },
+            service.List().Select(vm => (vm.Name, vm.State!)));
+        Assert.Equal(new[] { "172.17.117.178" }, service.Find("ai-ubuntu")!.Ipv4);
+        Assert.Equal("20.0GiB\n", simulator.Run(["get", "local.ai-ubuntu.disk"]).StdOut);
+        Assert.Equal("base", service.ListSnapshots("ai-ubuntu").Single(s => s.Name == "snapshot2").Parent);
+        Assert.Equal("10.0.100\n", service.Exec("ai-ubuntu", "dotnet --version").StdOut);
+
+        // Weiterspielen wie mit den echten VMs: Standardnamen setzen die echte Zählung fort.
+        service.Stop("ai-ubuntu");
+        Assert.Contains("ai-ubuntu.snapshot3", service.Snapshot("ai-ubuntu").StdOut);
+        Assert.Contains("ai-ubuntu-clone2", service.Clone("ai-ubuntu").StdOut);
+    }
+
+    /// <summary>Beantwortet genau die vorgegebenen Aufrufe; alles andere ist ein Testfehler.</summary>
+    private sealed class ReadOnlyMultipass(Dictionary<string, string> answers) : IMultipassCli
+    {
+        public MultipassRunResult Run(IReadOnlyList<string> args, int timeoutMs = 30000, string? exePath = null) =>
+            answers.TryGetValue(string.Join(' ', args), out var stdOut)
+                ? new MultipassRunResult(0, stdOut, string.Empty, 0)
+                : args[0] == "get"
+                    ? new MultipassRunResult(2, string.Empty, "get failed: Cannot obtain instance settings\n", 0)
+                    : throw new InvalidOperationException($"unerwarteter Aufruf am echten Multipass: {string.Join(' ', args)}");
+
+        public MultipassRunResult RunWithExtensions(IReadOnlyList<string> args, TimeSpan slice, Func<bool> keepWaiting, string? exePath = null) =>
+            throw new InvalidOperationException("sync darf nicht warten");
+
+        public int Attach(IReadOnlyList<string> args, string? exePath = null) =>
+            throw new InvalidOperationException("sync darf nicht attachen");
+    }
+
     private static (int Code, string Out, string Err) CommandLine(string state, params string[] args) =>
         CommandLineWithInput(state, string.Empty, args);
 
