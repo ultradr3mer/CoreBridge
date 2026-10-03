@@ -18,7 +18,11 @@ public static class InitStore
         _root = RepoPaths.Resolve(storeRoot);
     }
 
-    private static string Root => _root ??= RepoPaths.Resolve(null);
+    /// <summary>Der Store selbst — zugleich der Benutzerordner für Einstellungen und Bundles.</summary>
+    public static string Root => _root ??= RepoPaths.Resolve(null);
+
+    /// <summary>Öffentliche Schlüssel, denen der Benutzer vertraut (<c>key-trust</c>).</summary>
+    public static string TrustedKeysFolder => Path.Combine(Root, Authenticity.TrustedKeyStore.FolderName);
 
     public static string ProfilesRoot => Path.Combine(Root, "profiles");
 

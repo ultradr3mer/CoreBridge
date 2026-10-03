@@ -7,6 +7,7 @@ using System.Text.RegularExpressions;
 using CoreBridge.Core.Authenticity;
 using CoreBridge.Core.Config;
 using CoreBridge.Core.Multipass;
+using Org.BouncyCastle.Bcpg.OpenPgp;
 using YamlDotNet.Core;
 using YamlDotNet.RepresentationModel;
 
@@ -53,10 +54,12 @@ public static class InitComponentStore
         AllowTrailingCommas = true
     };
 
-    private static readonly JsonSerializerOptions WriteOptions = new()
+    /// <summary>Lesbar geschrieben (Umlaute, Anführungszeichen im Skript), damit man prüft, was man signiert.</summary>
+    internal static readonly JsonSerializerOptions WriteOptions = new()
     {
         WriteIndented = true,
-        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
+        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
+        Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping
     };
 
     /// <summary>
@@ -65,9 +68,9 @@ public static class InitComponentStore
     /// noch andere Einstellungen ändern. Ein Name, den auch appsettings
     /// definiert, ist ein Fehler statt eines stillen Zusammenführens.
     /// </summary>
-    public static AppConfig Merge(AppConfig config, string userFile)
+    public static AppConfig Merge(AppConfig config, string userFile, PgpPublicKeyRingBundle? trusted = null)
     {
-        var user = ReadUser(userFile);
+        var user = ReadUser(userFile, trusted);
         if (user.Count == 0)
         {
             return config;
@@ -86,32 +89,16 @@ public static class InitComponentStore
         return config with { Inits = config.Inits with { Components = merged } };
     }
 
-    /// <summary>Komponenten der Benutzerdatei; fehlt die Datei, ist die Liste leer.</summary>
-    public static IReadOnlyDictionary<string, ComponentConfig> ReadUser(string userFile)
+    /// <summary>
+    /// Komponenten der Benutzerdatei; fehlt die Datei, ist die Liste leer. Eine ungültige
+    /// Signatur wirft (<see cref="SignaturePolicy.Optional"/>), geprüft gegen
+    /// <paramref name="trusted"/> (Standard: der CoreBridge-Schlüssel).
+    /// </summary>
+    public static IReadOnlyDictionary<string, ComponentConfig> ReadUser(string userFile, PgpPublicKeyRingBundle? trusted = null)
     {
-        var components = new Dictionary<string, ComponentConfig>(StringComparer.OrdinalIgnoreCase);
-        if (!File.Exists(userFile))
-        {
-            return components;
-        }
-
-        var node = ReadRoot(userFile)["Inits"]?["Components"];
-        if (node is null)
-        {
-            return components;
-        }
-
-        if (node is not JsonObject entries)
-        {
-            throw new MultipassException($"{userFile}: Inits:Components muss ein Objekt sein.");
-        }
-
-        foreach (var (name, value) in entries)
-        {
-            components[name] = Deserialize(value?.ToJsonString() ?? "null", $"{userFile} (Komponente '{name}')");
-        }
-
-        return components;
+        return File.Exists(userFile)
+            ? ComponentCatalog.ParseComponents(Unwrap(userFile, trusted), userFile)
+            : new Dictionary<string, ComponentConfig>(StringComparer.OrdinalIgnoreCase);
     }
 
     /// <summary>Alle wirksamen Komponenten mit Herkunft, alphabetisch.</summary>
@@ -217,6 +204,99 @@ public static class InitComponentStore
         Write(userFile, root);
     }
 
+    /// <summary>Signaturdateien, die neben einer Datei liegen können.</summary>
+    private static readonly string[] Companions = [SettingsSignatures.ClearsignedExtension, PgpFileVerifier.SignatureExtension];
+
+    /// <summary>
+    /// Kopiert ein Bundle <em>unverändert</em> als <c>&lt;name&gt;.component.json</c> in den
+    /// Benutzerordner — samt <c>.clearsigned.asc</c>/<c>.asc</c> daneben, damit die Signatur
+    /// gültig bleibt. Geprüft wird vorher: Form (genau eine Komponente, Name wie die Datei),
+    /// Definition (Probe-Rendern) und dass der Name in keiner anderen Quelle steht.
+    /// </summary>
+    /// <param name="catalog">Die geladenen Komponenten aller Quellen (für den Namenskonflikt).</param>
+    /// <returns>Name, Definition und Zieldatei.</returns>
+    public static (string Name, ComponentConfig Component, string File) AddBundle(
+        ComponentCatalog catalog, string userFolder, string bundleFile, bool replace)
+    {
+        if (!File.Exists(bundleFile))
+        {
+            throw new MultipassException($"Bundle nicht gefunden: {Path.GetFullPath(bundleFile)}");
+        }
+
+        if (!bundleFile.EndsWith(ComponentCatalog.BundleExtension, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new MultipassException($"{bundleFile}: ein Bundle heißt <name>{ComponentCatalog.BundleExtension} (erzeugen: cb component-bundle -n <name>).");
+        }
+
+        // Nur zum Lesen auspacken; kopiert wird die Datei, wie sie ist.
+        var read = SettingsSignatures.Read(bundleFile, File.ReadAllBytes(bundleFile), TrustedKeys.CoreBridge, DateTime.UtcNow);
+        var entries = ComponentCatalog.ParseComponents(read.Content, bundleFile);
+        ComponentCatalog.RequireBundleShape(bundleFile, entries);
+        var (name, component) = entries.Single();
+        RequireValidName(name);
+        if (!string.IsNullOrWhiteSpace(component.Script))
+        {
+            throw new MultipassException($"{bundleFile}: ein Bundle trägt sein Skript inline (ScriptContent), nicht als Pfad (Script).");
+        }
+
+        Validate(name, component);
+
+        var target = Path.Combine(userFolder, name + ComponentCatalog.BundleExtension);
+        if (catalog.OriginOf(name) is { } existing)
+        {
+            var sameFile = string.Equals(Path.GetFullPath(existing.File), Path.GetFullPath(target), StringComparison.OrdinalIgnoreCase);
+            if (!sameFile)
+            {
+                throw new MultipassException(
+                    $"Komponente '{name}' gibt es schon ({existing.File}) — {(existing.Source == ComponentSource.BuiltIn ? "mitgelieferte lassen sich nicht ersetzen" : "dort entfernen (cb component-remove -n " + name + ")")}.");
+            }
+
+            if (!replace)
+            {
+                throw new MultipassException($"Komponente '{name}' existiert bereits ({target}) — --force zum Ersetzen.");
+            }
+        }
+
+        Directory.CreateDirectory(userFolder);
+        File.Copy(bundleFile, target, overwrite: true);
+        foreach (var extension in Companions)
+        {
+            if (File.Exists(bundleFile + extension))
+            {
+                File.Copy(bundleFile + extension, target + extension, overwrite: true);
+            }
+            else if (File.Exists(target + extension))
+            {
+                // Eine alte Signatur gehört nicht zum neuen Inhalt.
+                File.Delete(target + extension);
+            }
+        }
+
+        return (name, component, target);
+    }
+
+    /// <summary>Entfernt ein Bundle aus dem Benutzerordner samt Signaturdateien.</summary>
+    public static void RemoveBundle(string bundleFile)
+    {
+        File.Delete(bundleFile);
+        foreach (var extension in Companions)
+        {
+            File.Delete(bundleFile + extension);
+        }
+    }
+
+    /// <summary>
+    /// Eine Komponente als Bundle: das Skript (aus <see cref="ComponentConfig.Script"/>)
+    /// wandert inline nach <see cref="ComponentConfig.ScriptContent"/>, der Pfad entfällt.
+    /// </summary>
+    public static string Bundle(string name, ComponentConfig component)
+    {
+        var inline = component.HasScript
+            ? component with { ScriptContent = InitInstall.ScriptText(component), Script = null }
+            : component;
+        return ComponentCatalog.BundleJson(name, inline);
+    }
+
     /// <summary>Eine Definition als eingerücktes JSON, wie sie in der Benutzerdatei steht.</summary>
     public static string ToJson(ComponentConfig component) => JsonSerializer.Serialize(component, WriteOptions);
 
@@ -258,7 +338,7 @@ public static class InitComponentStore
                 $"Komponente '{name}' ist leer — mindestens Snap, Script, Packages oder Users angeben.");
         }
 
-        if (!string.IsNullOrWhiteSpace(component.Script) && string.IsNullOrWhiteSpace(component.InstallPath))
+        if (component.HasScript && string.IsNullOrWhiteSpace(component.InstallPath))
         {
             throw new MultipassException(
                 $"Komponente '{name}': Script braucht einen InstallPath (absoluter Unix-Pfad im Gast, z. B. /usr/local/sbin/corebridge-install-{name}).");
@@ -271,7 +351,7 @@ public static class InitComponentStore
         CloudInitYamlValidator.Validate(InitCloudInit.Generate(name, probe, [name]));
     }
 
-    private static ComponentConfig Deserialize(string json, string source)
+    internal static ComponentConfig Deserialize(string json, string source)
     {
         try
         {
@@ -284,23 +364,11 @@ public static class InitComponentStore
         }
     }
 
-    private static JsonObject ReadRoot(string userFile)
-    {
-        var content = SettingsSignatures.Unwrap(
-            userFile, File.ReadAllBytes(userFile), SignaturePolicy.Optional, TrustedKeys.CoreBridge, DateTime.UtcNow);
-        try
-        {
-            return JsonNode.Parse(
-                    Encoding.UTF8.GetString(content).TrimStart('\uFEFF'),
-                    documentOptions: new JsonDocumentOptions { CommentHandling = JsonCommentHandling.Skip, AllowTrailingCommas = true })
-                as JsonObject
-                ?? throw new MultipassException($"{userFile}: erwartet ein JSON-Objekt.");
-        }
-        catch (JsonException exception)
-        {
-            throw new MultipassException($"{userFile}: kein gültiges JSON — {exception.Message}", exception);
-        }
-    }
+    private static JsonObject ReadRoot(string userFile) => ComponentCatalog.ParseRoot(Unwrap(userFile, null), userFile);
+
+    private static byte[] Unwrap(string userFile, PgpPublicKeyRingBundle? trusted) =>
+        SettingsSignatures.Unwrap(
+            userFile, File.ReadAllBytes(userFile), SignaturePolicy.Optional, trusted ?? TrustedKeys.CoreBridge, DateTime.UtcNow);
 
     /// <summary>Liefert <c>Inits:Components</c> und legt fehlende Ebenen an.</summary>
     private static JsonObject Section(JsonObject root, string userFile)

@@ -35,7 +35,7 @@ public static class InitCloudInit
         var packageUpdate = selected.Any(component => component.PackageUpdate) || packages.Length > 0;
         var packageUpgrade = selected.Any(component => component.PackageUpgrade);
         var scripts = selected
-            .Where(component => !string.IsNullOrWhiteSpace(component.Script))
+            .Where(component => component.HasScript)
             .ToArray();
 
         var yaml = new StringBuilder();
@@ -134,22 +134,10 @@ public static class InitCloudInit
         yaml.AppendLine("write_files:");
         foreach (var component in scripts)
         {
-            var scriptPath = component.Script!;
+            var scriptPath = component.Script ?? "(inline)";
             var installPath = component.InstallPath;
             ValidateInstallPath(installPath, scriptPath);
-            ValidateScriptPath(scriptPath);
-
-            var sourcePath = InitStore.ResolvePath(scriptPath);
-            if (!File.Exists(sourcePath))
-            {
-                throw new MultipassException($"Cloud-init-Skript fehlt: {sourcePath}");
-            }
-
-            var content = File.ReadAllText(sourcePath).Replace("\r\n", "\n");
-            if (!content.EndsWith('\n'))
-            {
-                content += '\n';
-            }
+            var content = InitInstall.ScriptText(component);
 
             yaml.AppendLine($"  - path: {YamlQuote(installPath!)}");
             yaml.AppendLine("    permissions: '0755'");
@@ -270,7 +258,7 @@ public static class InitCloudInit
         }
     }
 
-    private static void ValidateScriptPath(string scriptPath)
+    internal static void ValidateScriptPath(string scriptPath)
     {
         var expanded = Environment.ExpandEnvironmentVariables(scriptPath);
         var rooted = Path.IsPathRooted(expanded);

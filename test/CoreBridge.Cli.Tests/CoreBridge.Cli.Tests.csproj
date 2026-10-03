@@ -25,6 +25,13 @@
     <ProjectReference Include="..\CoreBridge.Simulation\CoreBridge.Simulation.csproj" />
     <!-- CliLifecycleSimulatedBinaryTests: nur bauen lassen, gestartet wird es aus tools/…/bin. -->
     <ProjectReference Include="..\..\tools\CoreBridge.MultipassSim\CoreBridge.MultipassSim.csproj" ReferenceOutputAssembly="false" />
+    <!-- Nur für Wegwerf-Testschlüssel (ComponentTrustCliTests); das Produkt signiert nicht. -->
+    <ProjectReference Include="..\..\tools\CoreBridge.Signer\CoreBridge.Signer.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Compile Include="..\CoreBridge.Core.Tests\TestKeys.cs" Link="TestKeys.cs" />
+    <Compile Include="..\CoreBridge.Core.Tests\TempDirectory.cs" Link="TempDirectory.cs" />
   </ItemGroup>
 
 </Project>

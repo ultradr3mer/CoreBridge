@@ -28,6 +28,7 @@ public static partial class Program
       RequireValidName(options.Snapshot);
     }
 
+    await ReportComponentTrust(context, components);
     var steps = InitInstall.Plan(context.Config.Inits, components);
     await EnsureRunning(context, name, ask: false);
 
@@ -46,7 +47,7 @@ public static partial class Program
         if (step.IsUpload)
         {
           upload = Path.Combine(Path.GetTempPath(), $"corebridge-{Guid.NewGuid():N}.sh");
-          await File.WriteAllTextAsync(upload, InitInstall.ReadScript(step.ScriptSource!), context.CancellationToken);
+          await File.WriteAllTextAsync(upload, step.ScriptContent!, context.CancellationToken);
           result = await RunStep(context, label, () => context.Vms.Put(upload, name, step.RemotePath, waitMs));
         }
         else

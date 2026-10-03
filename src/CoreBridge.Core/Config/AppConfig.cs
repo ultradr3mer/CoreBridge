@@ -103,6 +103,13 @@ public sealed record ComponentConfig
     /// <summary>Relatives oder absolutes Shell-Skript, dessen Inhalt in die Gast-cloud-init eingebettet wird.</summary>
     public string? Script { get; init; }
 
+    /// <summary>
+    /// Das Skript selbst statt eines Pfads — so steht es in einem Bundle
+    /// (<c>&lt;name&gt;.component.json</c>), und eine Signatur deckt Definition und Skript
+    /// zugleich. Hat Vorrang vor <see cref="Script"/>.
+    /// </summary>
+    public string? ScriptContent { get; init; }
+
     /// <summary>Absoluter Unix-Pfad des eingebetteten Skripts im Gast.</summary>
     public string? InstallPath { get; init; }
 
@@ -121,10 +128,14 @@ public sealed record ComponentConfig
     /// <summary>Benutzer, als der das Skript installiert bzw. seine Postconditions ausführt.</summary>
     public string InstallUser { get; init; } = "ubuntu";
 
+    /// <summary>Hat die Komponente ein Skript (inline oder als Pfad)?</summary>
+    [System.Text.Json.Serialization.JsonIgnore]
+    public bool HasScript => !string.IsNullOrWhiteSpace(ScriptContent) || !string.IsNullOrWhiteSpace(Script);
+
     [System.Text.Json.Serialization.JsonIgnore]
     public bool NeedsCloudInit =>
         !string.IsNullOrWhiteSpace(Snap) ||
-        !string.IsNullOrWhiteSpace(Script) ||
+        HasScript ||
         Packages.Length > 0 ||
         PackageUpdate ||
         PackageUpgrade ||

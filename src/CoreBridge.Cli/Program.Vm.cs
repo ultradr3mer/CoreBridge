@@ -94,6 +94,12 @@ public static partial class Program
       throw new ProgramExecutionException(1, $"cloud-init file not found: {cloudInit}");
     }
 
+    if (profile is not null)
+    {
+      // Die cloud-init ist beim init-configure gerendert; gezeigt wird, wie es heute um die Komponenten steht.
+      await ReportComponentTrust(context, profile.Components);
+    }
+
     await ReplaceExistingVm(context, options.Name);
 
     await events.Emit(events.Std($"Lege VM `{options.Name}` an ("

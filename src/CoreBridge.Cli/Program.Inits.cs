@@ -1,4 +1,5 @@
 using CoreBridge.Interaction;
+using CoreBridge.Core.Authenticity;
 using CoreBridge.Core.Inits;
 using CoreBridge.Core.Vm;
 
@@ -13,6 +14,7 @@ public static partial class Program
     var components = options.Components.Split(',', StringSplitOptions.RemoveEmptyEntries);
     var resources = ParseResources(options.Cpus, options.Memory, options.Disk);
     await events.Emit(events.Std($"Erzeuge Profil '{options.Name}' ({string.Join(", ", components)}) ..."));
+    await ReportComponentTrust(context, components);
     var inits = new InitService(config.Inits);
     var result = await Task.Run(
         () => inits.Configure(
@@ -68,12 +70,17 @@ public static partial class Program
   private static async Task RunComponentList(CommandContext context, ComponentListOptions options)
   {
     var events = context.Events;
-    var entries = InitComponentStore.List(context.Config.Inits, InitStore.UserSettingsFile);
+    var entries = context.Catalog.Entries();
     if (!string.IsNullOrWhiteSpace(options.Name))
     {
-      var entry = entries.FirstOrDefault(e => string.Equals(e.Name, options.Name, StringComparison.OrdinalIgnoreCase))
-          ?? throw new ProgramExecutionException(1, $"Unbekannte Komponente '{options.Name}'. Übersicht: `cb component-list`.");
+      var entry = entries.FirstOrDefault(e => string.Equals(e.Name, options.Name, StringComparison.OrdinalIgnoreCase));
+      if (entry.Name is null)
+      {
+        throw new ProgramExecutionException(1, $"Unbekannte Komponente '{options.Name}'. Übersicht: `cb component-list`.");
+      }
+
       await events.Emit(events.Std(InitComponentStore.ToJson(entry.Component)));
+      await events.Emit(events.Err($"Herkunft: {entry.Origin.File} — {entry.Origin.Signature.Describe()}"));
       return;
     }
 
@@ -83,29 +90,74 @@ public static partial class Program
       return;
     }
 
-    await events.Emit(events.Std($"{"Name",-16} {"Herkunft",-12} {"Snap",-18} {"Script",-6} Pakete"));
-    foreach (var entry in entries)
+    await events.Emit(events.Std($"{"Name",-16} {"Herkunft",-12} {"Signatur",-22} {"Snap",-18} {"Script",-7} Pakete"));
+    foreach (var (name, component, origin) in entries)
     {
-      var component = entry.Component;
+      var script = !string.IsNullOrWhiteSpace(component.ScriptContent) ? "inline" : string.IsNullOrWhiteSpace(component.Script) ? "-" : "ja";
       await events.Emit(events.Std(
-          $"{entry.Name,-16} {(entry.Source == ComponentSource.User ? "benutzer" : "mitgeliefert"),-12} "
-          + $"{component.Snap ?? "-",-18} {(string.IsNullOrWhiteSpace(component.Script) ? "-" : "ja"),-6} "
+          $"{name,-16} {(origin.Source == ComponentSource.User ? "benutzer" : "mitgeliefert"),-12} {origin.Signature.Label,-22} "
+          + $"{component.Snap ?? "-",-18} {script,-7} "
           + (component.Packages.Length == 0 ? "-" : string.Join(",", component.Packages))));
     }
 
     await events.Emit(events.Std(string.Empty));
-    await events.Emit(events.Std($"Benutzerkomponenten: {InitStore.UserSettingsFile}"));
+    await events.Emit(events.Std($"Benutzerkomponenten: {InitStore.UserSettingsFile} und Bundles {Path.Combine(InitStore.Root, "*" + ComponentCatalog.BundleExtension)}"));
+    var warn = entries.Where(entry => entry.Origin.Signature.Trust is not (ComponentTrust.CoreBridge or ComponentTrust.UserTrusted)).ToList();
+    if (warn.Count > 0)
+    {
+      await events.Emit(events.Std($"Nicht vertrauenswürdig signiert: {string.Join(", ", warn.Select(entry => entry.Name))} — Einzelheiten: cb settings-verify."));
+    }
+  }
+
+  /// <summary>Schreibt eine Komponente als Bundle (Definition plus Skript inline), bereit zum Signieren.</summary>
+  private static async Task RunComponentBundle(CommandContext context, ComponentBundleOptions options)
+  {
+    var entry = context.Catalog.Entries().FirstOrDefault(e => string.Equals(e.Name, options.Name, StringComparison.OrdinalIgnoreCase));
+    if (entry.Name is null)
+    {
+      throw new ProgramExecutionException(1, $"Unbekannte Komponente '{options.Name}'. Übersicht: `cb component-list`.");
+    }
+
+    var output = Path.GetFullPath(string.IsNullOrWhiteSpace(options.Output) ? entry.Name + ComponentCatalog.BundleExtension : options.Output);
+    if (!output.EndsWith(ComponentCatalog.BundleExtension, StringComparison.OrdinalIgnoreCase)
+        || !string.Equals(ComponentCatalog.BundleName(output), entry.Name, StringComparison.OrdinalIgnoreCase))
+    {
+      throw new ProgramExecutionException(1, $"Ein Bundle heißt {entry.Name}{ComponentCatalog.BundleExtension} — der Name gehört zur Signatur.");
+    }
+
+    Directory.CreateDirectory(Path.GetDirectoryName(output)!);
+    await File.WriteAllTextAsync(output, InitComponentStore.Bundle(entry.Name, entry.Component), context.CancellationToken);
+    await context.Events.Emit(context.Events.Std($"Bundle geschrieben: {output}"));
+    await context.Events.Emit(context.Events.Std($"Signieren: CoreBridge.Signer --key <secret.asc> --clearsign {output}"));
+    await context.Events.Emit(context.Events.Std($"Übernehmen: cb component-add --bundle {output}"));
   }
 
   private static async Task RunComponentAdd(CommandContext context, ComponentAddOptions options)
   {
     var events = context.Events;
+    if (options.Bundle is { } bundle)
+    {
+      await AddBundle(context, options, bundle);
+      return;
+    }
+
+    if (string.IsNullOrWhiteSpace(options.Name))
+    {
+      throw new ProgramExecutionException(1, "Name fehlt: -n <name> (bei --bundle steht er im Bundle).");
+    }
+
     var (value, format) = (options.Json, options.Yaml) switch
     {
       ({ } json, null) => (json, ComponentFormat.Json),
       (null, { } yaml) => (yaml, ComponentFormat.Yaml),
-      _ => throw new ProgramExecutionException(1, "Genau eine Definition angeben: --json oder --yaml (Dateipfad oder Text).")
+      _ => throw new ProgramExecutionException(1, "Genau eine Definition angeben: --json, --yaml (Dateipfad oder Text) oder --bundle.")
     };
+
+    if (context.Catalog.OriginOf(options.Name) is { } existing
+        && !string.Equals(Path.GetFullPath(existing.File), Path.GetFullPath(InitStore.UserSettingsFile), StringComparison.OrdinalIgnoreCase))
+    {
+      throw new ProgramExecutionException(1, $"Komponente '{options.Name}' gibt es schon ({existing.File}) — anderen Namen wählen.");
+    }
 
     var component = InitComponentStore.ParseArgument(value, format);
     var userFile = InitStore.UserSettingsFile;
@@ -131,8 +183,65 @@ public static partial class Program
     }
   }
 
+  /// <summary>Übernimmt ein Bundle unverändert (samt Signatur) in den Benutzerordner.</summary>
+  private static async Task AddBundle(CommandContext context, ComponentAddOptions options, string bundle)
+  {
+    var events = context.Events;
+    var name = ComponentCatalog.BundleName(bundle);
+    if (!string.IsNullOrWhiteSpace(options.Name) && !string.Equals(options.Name, name, StringComparison.OrdinalIgnoreCase))
+    {
+      throw new ProgramExecutionException(1, $"Das Bundle heißt '{name}', nicht '{options.Name}' — der Name gehört zur Signatur.");
+    }
+
+    var replace = options.Force;
+    var target = Path.Combine(InitStore.Root, name + ComponentCatalog.BundleExtension);
+    if (!replace && File.Exists(target))
+    {
+      if (!await context.ConfirmAsync($"Bundle '{name}' existiert bereits — ersetzen?"))
+      {
+        throw new ProgramExecutionException(1, $"Abgebrochen — Komponente '{name}' bleibt unverändert (--force ersetzt ohne Rückfrage).");
+      }
+
+      replace = true;
+    }
+
+    var (added, _, file) = InitComponentStore.AddBundle(context.Catalog, InitStore.Root, bundle, replace);
+    var signature = ComponentSignature.From(SettingsSignatures.VerifyFile(file, ComponentTrustBundle(), DateTime.UtcNow));
+    await events.Emit(events.Std($"Komponente '{added}' übernommen: {file}"));
+    await events.Emit(events.Std($"  Signatur: {signature.Describe()}"));
+    if (signature.Trust == ComponentTrust.Invalid)
+    {
+      InitComponentStore.RemoveBundle(file);
+      throw new ProgramExecutionException(3, $"Bundle '{added}' ist ungültig signiert ({signature.Reason}) — nicht übernommen.");
+    }
+
+    if (signature.NeedsWarning)
+    {
+      foreach (var line in WarningBlock([(added, new ComponentOrigin(file, ComponentSource.User, signature))]))
+      {
+        await events.Emit(events.Err(line));
+      }
+    }
+
+    await events.Emit(events.Std($"Verwenden: cb init-configure -n <profil> -c {added} oder cb vm-install -n <vm> -c {added}"));
+  }
+
   private static async Task RunComponentRemove(CommandContext context, ComponentRemoveOptions options)
   {
+    if (context.Catalog.OriginOf(options.Name) is { Source: ComponentSource.User } origin
+        && origin.File.EndsWith(ComponentCatalog.BundleExtension, StringComparison.OrdinalIgnoreCase))
+    {
+      InitComponentStore.RemoveBundle(origin.File);
+      await context.Events.Emit(context.Events.Std($"Komponente '{options.Name}' entfernt: {origin.File}"));
+      await context.Events.Emit(context.Events.Std("Bestehende Profile behalten ihre gerenderte cloud-init; neue init-configure/vm-install kennen die Komponente nicht mehr."));
+      return;
+    }
+
+    if (context.Catalog.OriginOf(options.Name) is { Source: ComponentSource.BuiltIn } shipped)
+    {
+      throw new ProgramExecutionException(1, $"Komponente '{options.Name}' ist mitgeliefert ({shipped.File}) und lässt sich nicht entfernen.");
+    }
+
     InitComponentStore.Remove(context.Config.Inits, InitStore.UserSettingsFile, options.Name);
     await context.Events.Emit(context.Events.Std($"Komponente '{options.Name}' entfernt: {InitStore.UserSettingsFile}"));
     await context.Events.Emit(context.Events.Std("Bestehende Profile behalten ihre gerenderte cloud-init; neue init-configure/vm-install kennen die Komponente nicht mehr."));

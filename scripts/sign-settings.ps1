@@ -23,7 +23,10 @@
 
 .PARAMETER Files
   Zu signierende Dateien. Ohne Angabe: src/CoreBridge.Cli/appsettings*.json
-  außer appsettings.local.json.
+  außer appsettings.local.json, dazu die mitgelieferten Komponenten: die Bundles
+  src/CoreBridge.Cli/components/*.component.json und die Skripte
+  scripts/components/*.sh (eine Komponente mit Skriptpfad gilt nur mit signiertem
+  Skript als signiert).
 
 .PARAMETER KeyId
   Fingerprint des Signierschlüssels. Default: $env:CORE_BRIDGE_SIGNING_KEY, sonst
@@ -63,9 +66,14 @@ if (-not $gpg) {
 }
 
 if (-not $Files) {
-    $Files = Get-ChildItem -LiteralPath (Join-Path $root 'src\CoreBridge.Cli') -Filter 'appsettings*.json' |
+    $Files = @(Get-ChildItem -LiteralPath (Join-Path $root 'src\CoreBridge.Cli') -Filter 'appsettings*.json' |
         Where-Object Name -ne 'appsettings.local.json' |
-        ForEach-Object FullName
+        ForEach-Object FullName)
+    $bundles = Join-Path $root 'src\CoreBridge.Cli\components'
+    if (Test-Path -LiteralPath $bundles) {
+        $Files += @(Get-ChildItem -LiteralPath $bundles -Filter '*.component.json' | ForEach-Object FullName)
+    }
+    $Files += @(Get-ChildItem -LiteralPath (Join-Path $root 'scripts\components') -Filter '*.sh' | ForEach-Object FullName)
 }
 
 $Files = $Files | ForEach-Object { (Resolve-Path -LiteralPath $_).Path }

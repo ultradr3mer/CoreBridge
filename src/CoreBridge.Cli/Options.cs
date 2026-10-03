@@ -145,11 +145,14 @@ public sealed class ComponentListOptions : IOptions
     public string? Name { get; set; }
 }
 
-[Verb("component-add", HelpText = "Legt eine benutzereigene Komponente an (<StoreRoot>/appsettings.user.json); mitgelieferte sind nicht änderbar.")]
+[Verb("component-add", HelpText = "Legt eine benutzereigene Komponente an (<StoreRoot>/appsettings.user.json) oder übernimmt ein Bundle unverändert samt Signatur (<StoreRoot>/<name>.component.json); mitgelieferte sind nicht änderbar.")]
 public sealed class ComponentAddOptions : IOptions
 {
-    [Option('n', "name", Required = true, HelpText = "Name der Komponente (Kleinbuchstaben, Ziffern, Bindestriche).")]
-    public string Name { get; set; } = string.Empty;
+    [Option('n', "name", HelpText = "Name der Komponente (Kleinbuchstaben, Ziffern, Bindestriche); bei --bundle steht er im Bundle.")]
+    public string? Name { get; set; }
+
+    [Option("bundle", SetName = "bundle", HelpText = "Bundle-Datei <name>.component.json (aus component-bundle); wird unverändert kopiert, eine Signatur daneben (.clearsigned.asc/.asc) mit.")]
+    public string? Bundle { get; set; }
 
     [Option("json", SetName = "json", HelpText = "Definition als JSON — Dateipfad oder direkt der Text, Schlüssel wie in appsettings.json (Snap, Classic, Script, InstallPath, Packages, …).")]
     public string? Json { get; set; }
@@ -166,6 +169,35 @@ public sealed class SettingsVerifyOptions : IOptions
 {
     [Option('f', "file", Separator = ',', HelpText = "Stattdessen diese Dateien prüfen (kommagetrennt); erwartet je <datei>.clearsigned.asc oder <datei>.asc daneben, oder die Datei ist selbst clearsigned.")]
     public IEnumerable<string> Files { get; set; } = [];
+}
+
+[Verb("component-bundle", HelpText = "Schreibt eine Komponente als Bundle: eine JSON-Datei mit Definition und Skript inline, bereit zum Signieren (CoreBridge.Signer --clearsign) und für component-add --bundle.")]
+public sealed class ComponentBundleOptions : IOptions
+{
+    [Option('n', "name", Required = true, HelpText = "Name der Komponente (aus component-list).")]
+    public string Name { get; set; } = string.Empty;
+
+    [Option('o', "output", HelpText = "Zieldatei (Standard: <name>.component.json im aktuellen Verzeichnis).")]
+    public string? Output { get; set; }
+}
+
+[Verb("key-trust", HelpText = "Vertraut einem öffentlichen OpenPGP-Schlüssel für Komponenten und Bundles (<StoreRoot>/trusted-keys); gilt nie für die mitgelieferten appsettings.")]
+public sealed class KeyTrustOptions : IOptions
+{
+    [Option('f', "file", Required = true, HelpText = "Öffentlicher Schlüssel, z. B. aus gpg --export --armor <fingerprint>.")]
+    public string File { get; set; } = string.Empty;
+}
+
+[Verb("key-list", HelpText = "Listet die Schlüssel, denen CoreBridge bei Komponenten vertraut: eingebettet (CoreBridge) und Benutzer-vertraut.")]
+public sealed class KeyListOptions : IOptions
+{
+}
+
+[Verb("key-untrust", HelpText = "Entzieht einem Benutzer-vertrauten Schlüssel das Vertrauen.")]
+public sealed class KeyUntrustOptions : IOptions
+{
+    [Option('k', "key", Required = true, HelpText = "Fingerprint (voll oder die letzten 16 Stellen; Übersicht: key-list).")]
+    public string Key { get; set; } = string.Empty;
 }
 
 [Verb("component-remove",HelpText = "Entfernt eine benutzereigene Komponente; mitgelieferte sind nicht entfernbar.")]
