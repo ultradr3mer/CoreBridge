@@ -111,9 +111,16 @@ public sealed class SimulatedMultipassCli : IMultipassCli, IMultipassDouble
     }
 
     /// <summary><c>shell</c> braucht ein TTY; simuliert wird nur, ob die VM läuft.</summary>
+    /// <summary>
+    /// Wie das echte <c>multipass exec</c>/<c>shell</c> mit geerbter Konsole: die Ausgabe
+    /// des Gasts erscheint direkt (<c>cb work</c> übergibt so an den Agenten).
+    /// </summary>
     public int Attach(IReadOnlyList<string> args, string? exePath = null)
     {
-        return Timed(args, Timeout.InfiniteTimeSpan, () => true).ExitCode;
+        var result = Timed(args, Timeout.InfiniteTimeSpan, () => true);
+        Console.Out.Write(result.StdOut);
+        Console.Error.Write(result.StdErr);
+        return result.ExitCode;
     }
 
     /// <summary>
@@ -276,6 +283,7 @@ public sealed class SimulatedMultipassCli : IMultipassCli, IMultipassDouble
         try
         {
             var state = Load();
+            state.DisksRoot = Path.Combine(Path.GetDirectoryName(StatePath)!, "disks");
             var result = action(state);
             Save(state);
             return result;
@@ -527,12 +535,15 @@ public sealed class SimulatedMultipassCli : IMultipassCli, IMultipassDouble
                     return Fail($"delete failed: The following errors occurred:\nNo such snapshot: {name}.{snapshot}");
                 }
 
+                DeleteDirectory(state.Disk(vm.Name, snapshot));
+
                 continue;
             }
 
             if (purge)
             {
                 state.Vms.Remove(vm);
+                DeleteDisks(state, vm);
             }
             else
             {
@@ -545,8 +556,55 @@ public sealed class SimulatedMultipassCli : IMultipassCli, IMultipassDouble
 
     private static MultipassRunResult Purge(SimState state)
     {
-        state.Vms.RemoveAll(vm => vm.State == "Deleted");
+        foreach (var vm in state.Vms.Where(vm => vm.State == "Deleted").ToList())
+        {
+            state.Vms.Remove(vm);
+            DeleteDisks(state, vm);
+        }
+
         return Ok(string.Empty);
+    }
+
+    /// <summary>Wo ein Gastpfad auf der Host-Disk der VM liegt.</summary>
+    private static string OnDisk(SimState state, string vm, string guestPath) =>
+        Path.Combine(state.Disk(vm), guestPath.TrimStart('/').Replace('/', Path.DirectorySeparatorChar));
+
+    private static void DeleteDisks(SimState state, SimVm vm)
+    {
+        DeleteDirectory(state.Disk(vm.Name));
+        foreach (var snapshot in vm.Snapshots)
+        {
+            DeleteDirectory(state.Disk(vm.Name, snapshot.Name));
+        }
+    }
+
+    private static void DeleteDirectory(string path)
+    {
+        if (Directory.Exists(path))
+        {
+            Directory.Delete(path, recursive: true);
+        }
+    }
+
+    /// <summary>Kopiert eine Disk (Klon, Snapshot, Restore); eine fehlende Quelle ergibt eine leere.</summary>
+    private static void CopyDisk(string from, string to)
+    {
+        DeleteDirectory(to);
+        if (!Directory.Exists(from))
+        {
+            return;
+        }
+
+        foreach (var directory in Directory.EnumerateDirectories(from, "*", SearchOption.AllDirectories))
+        {
+            Directory.CreateDirectory(Path.Combine(to, Path.GetRelativePath(from, directory)));
+        }
+
+        Directory.CreateDirectory(to);
+        foreach (var file in Directory.EnumerateFiles(from, "*", SearchOption.AllDirectories))
+        {
+            File.Copy(file, Path.Combine(to, Path.GetRelativePath(from, file)), overwrite: true);
+        }
     }
 
     private static MultipassRunResult Recover(SimState state, IReadOnlyList<string> args)
@@ -607,6 +665,7 @@ public sealed class SimulatedMultipassCli : IMultipassCli, IMultipassDouble
             Files = new Dictionary<string, string>(vm.Files),
             Directories = [.. vm.Directories]
         });
+        CopyDisk(state.Disk(vm.Name), state.Disk(name));
         return Ok($"Cloned from {vm.Name} to {name}.\n");
     }
 
@@ -646,6 +705,7 @@ public sealed class SimulatedMultipassCli : IMultipassCli, IMultipassDouble
             Directories = [.. vm.Directories]
         });
         vm.CurrentSnapshot = snapshot;
+        CopyDisk(state.Disk(vm.Name), state.Disk(vm.Name, snapshot));
         return Ok($"Snapshot taken: {vm.Name}.{snapshot}\n");
     }
 
@@ -674,6 +734,7 @@ public sealed class SimulatedMultipassCli : IMultipassCli, IMultipassDouble
         vm.Files = new Dictionary<string, string>(saved.Files);
         vm.Directories = [.. saved.Directories];
         vm.CurrentSnapshot = saved.Name;
+        CopyDisk(state.Disk(vm.Name, saved.Name), state.Disk(vm.Name));
         return Ok($"Snapshot restored: {vm.Name}.{saved.Name}\n");
     }
 
@@ -860,7 +921,13 @@ public sealed class SimulatedMultipassCli : IMultipassCli, IMultipassDouble
         // selbst mit — die simulierte Shell bekommt es also als neu zusammengesetzte Zeile.
         var separator = args.ToList().IndexOf("--");
         var command = separator < 0 ? [] : args.Skip(separator + 1).ToArray();
-        var (code, stdOut, stdErr) = new SimShell(vm!).Run(string.Join(' ', command.Select(CoreBridge.Core.Common.Shell.Quote)));
+        var script = string.Join(' ', command.Select(CoreBridge.Core.Common.Shell.Quote));
+        if (Value(args, "--working-directory", "-d") is { } directory)
+        {
+            script = $"cd {CoreBridge.Core.Common.Shell.Quote(directory)} && {script}";
+        }
+
+        var (code, stdOut, stdErr) = new SimShell(vm!, state.Disk(vm!.Name)).Run(script);
         return new MultipassRunResult(code, stdOut, stdErr, 0);
     }
 
@@ -883,7 +950,8 @@ public sealed class SimulatedMultipassCli : IMultipassCli, IMultipassDouble
                 return failure;
             }
 
-            if (!vm!.Files.TryGetValue(remote, out var content))
+            var onDisk = OnDisk(state, vm!.Name, remote);
+            if (!vm.Files.TryGetValue(remote, out var content) && !File.Exists(onDisk))
             {
                 return Fail($"transfer failed: remote \"{remote}\" does not exist");
             }
@@ -894,7 +962,15 @@ public sealed class SimulatedMultipassCli : IMultipassCli, IMultipassDouble
                 Directory.CreateDirectory(directory);
             }
 
-            File.WriteAllText(destination, content);
+            if (content is not null)
+            {
+                File.WriteAllText(destination, content);
+            }
+            else
+            {
+                File.Copy(onDisk, destination, overwrite: true);
+            }
+
             return Ok(string.Empty);
         }
 
@@ -913,7 +989,20 @@ public sealed class SimulatedMultipassCli : IMultipassCli, IMultipassDouble
                 return Fail($"transfer failed: source \"{source}\" does not exist");
             }
 
-            vm!.Files[remote] = File.ReadAllText(source);
+            // Text bleibt im Zustand (lesbar für die Schale), Binäres (git bundles) nur auf der Disk.
+            var bytes = File.ReadAllBytes(source);
+            var target = OnDisk(state, vm!.Name, remote);
+            Directory.CreateDirectory(Path.GetDirectoryName(target)!);
+            File.WriteAllBytes(target, bytes);
+            if (Array.IndexOf(bytes, (byte)0) < 0)
+            {
+                vm.Files[remote] = Encoding.UTF8.GetString(bytes);
+            }
+            else
+            {
+                vm.Files.Remove(remote);
+            }
+
             return Ok(string.Empty);
         }
 
@@ -1056,6 +1145,14 @@ public sealed class SimulatedMultipassCli : IMultipassCli, IMultipassDouble
 
     private sealed class SimState
     {
+        /// <summary>Host-Ordner der VM-Disks (neben state.json); nicht Teil des Zustands.</summary>
+        [System.Text.Json.Serialization.JsonIgnore]
+        public string DisksRoot { get; set; } = string.Empty;
+
+        /// <summary>Die Disk einer VM (bzw. eines Snapshots: <c>&lt;vm&gt;@&lt;snapshot&gt;</c>) auf dem Host.</summary>
+        public string Disk(string vm, string? snapshot = null) =>
+            Path.Combine(DisksRoot, snapshot is null ? vm : $"{vm}@{snapshot}");
+
         public List<SimVm> Vms { get; set; } = [];
 
         public int IpCount { get; set; }

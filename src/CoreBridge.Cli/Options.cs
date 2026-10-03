@@ -360,6 +360,22 @@ public sealed class VmInstallOptions : MultipassOptions
     public string? Snapshot { get; set; }
 }
 
+[Verb("work", HelpText = "Arbeiten wie mit einem lokalen Agenten: passende VM finden (sonst nach Rückfrage anlegen/ergänzen), starten, Code schicken, Task-Branch claude/<yyyyMMdd-HHmm> anlegen, den Agenten in der VM starten und danach die Commits zurückholen. `cb` ohne Argumente in einem Repo tut genau das.")]
+public sealed class WorkOptions : MultipassOptions
+{
+    [Option('r', "repo", HelpText = "Pfad im Host-Repository (Standard: aktuelles Verzeichnis).")]
+    public string? Repo { get; set; }
+
+    [Option("agent", HelpText = "claude oder opencode (Standard: aus dem Repo — CLAUDE.md → claude, AGENTS.md/opencode.json → opencode — sonst Work:DefaultAgent).")]
+    public string? Agent { get; set; }
+
+    [Option("vm", HelpText = "Diese VM verwenden (sonst die gemerkte bzw. die von repo-match).")]
+    public string? Vm { get; set; }
+
+    [Option('y', "yes", HelpText = "Migration und Vorspulen von main ohne Rückfrage.")]
+    public bool Yes { get; set; }
+}
+
 [Verb("repo-send", HelpText = "Schickt main eines Host-Repositorys in eine VM: Bare-Repo ~/repos/<repo>.git, main samt Historie als git bundle per transfer (danach nur Neues, nur Vorspulen), Arbeitskopie ~/work/<repo>. Wiederholbar; braucht die Komponente git (cb vm-install -n <vm> -c git).")]
 public sealed class RepoSendOptions : MultipassOptions
 {

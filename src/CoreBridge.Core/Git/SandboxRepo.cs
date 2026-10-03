@@ -108,6 +108,44 @@ public static partial class SandboxRepo
             + $" && git -C {work} config user.email {Shell.Quote($"claude@{vm}.corebridge.local")}";
     }
 
+    /// <summary>Task-Id aus der Startzeit: <c>yyyyMMdd-HHmm</c>.</summary>
+    public static string TaskId(DateTime start) => start.ToString("yyyyMMdd-HHmm", System.Globalization.CultureInfo.InvariantCulture);
+
+    /// <summary>Ausgabe leer genau dann, wenn die Arbeitskopie sauber ist.</summary>
+    public static string DirtyCommand(string repo) => $"git -C {Shell.Quote(WorkDir(repo))} status --porcelain";
+
+    /// <summary>Task-Start: frisches <c>main</c> holen und <c>claude/&lt;id&gt;</c> darauf auschecken.</summary>
+    public static string TaskStartCommand(string repo, string id)
+    {
+        var work = Shell.Quote(WorkDir(repo));
+        return $"git -C {work} fetch -q origin && git -C {work} checkout -q -B {TaskBranch(id)} origin/main";
+    }
+
+    /// <summary>Zahl der Commits auf <c>claude/&lt;id&gt;</c>, die <c>main</c> noch nicht hat.</summary>
+    public static string TaskCommitCountCommand(string repo, string id) =>
+        $"git -C {Shell.Quote(WorkDir(repo))} rev-list --count origin/main..{TaskBranch(id)}";
+
+    /// <summary>Legt <c>claude/&lt;id&gt;</c> aus der Arbeitskopie ins Bare-Repo, wo repo-receive es holt.</summary>
+    public static string PushTaskCommand(string repo, string id) =>
+        $"git -C {Shell.Quote(WorkDir(repo))} push -q origin {TaskBranch(id)}:{TaskRef(id)}";
+
+    /// <summary>Datei, die der <c>.bashrc</c>-Haken beim nächsten <c>multipass shell</c> einmal ausführt.</summary>
+    public const string AutostartFile = $"/home/{User}/.corebridge/autostart";
+
+    /// <summary>
+    /// Ausweg für <c>Work:AgentLaunch=shell</c>: schreibt die einmalige Autostart-Datei (cd +
+    /// Agent) und hängt — nur einmal — den Haken an <c>~/.bashrc</c>, der sie beim nächsten
+    /// interaktiven Login ausführt und dabei verbraucht.
+    /// </summary>
+    public static string AutostartCommand(string repo, string agent)
+    {
+        var bashrc = $"/home/{User}/.bashrc";
+        const string Hook = "if [ -f ~/.corebridge/autostart ]; then mv ~/.corebridge/autostart ~/.corebridge/autostart.run; . ~/.corebridge/autostart.run; rm -f ~/.corebridge/autostart.run; fi";
+        return $"mkdir -p /home/{User}/.corebridge"
+            + $"; printf '%s\\n' {Shell.Quote($"cd {WorkDir(repo)}")} {Shell.Quote(agent)} > {AutostartFile}"
+            + $"; grep -q corebridge-autostart {bashrc} || printf '%s\\n' '# corebridge-autostart' {Shell.Quote(Hook)} >> {bashrc}";
+    }
+
     /// <summary>Zeilen <c>&lt;sha&gt; &lt;ref&gt;</c> (aus <see cref="ListRefsCommand"/>) als Ref → Commit.</summary>
     public static IReadOnlyDictionary<string, string> ParseRefs(string output)
     {

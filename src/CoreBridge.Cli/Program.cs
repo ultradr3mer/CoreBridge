@@ -41,6 +41,7 @@ public static partial class Program
         typeof(VmResizeOptions),
         typeof(VmInventoryOptions),
         typeof(RepoMatchOptions),
+        typeof(WorkOptions),
         typeof(RepoSendOptions),
         typeof(RepoReceiveOptions),
         typeof(InitConfigureOptions),
@@ -108,6 +109,12 @@ public static partial class Program
   /// </summary>
   public static async Task<int> Main(string[] args)
   {
+    // `cb` ohne Argumente in einem Repository: arbeiten wie mit einem lokalen Agenten.
+    if (args.Length == 0 && InsideGitRepository(Environment.CurrentDirectory))
+    {
+      args = ["work"];
+    }
+
     if (!TryParseOptions(args, out var options, out var helpRequested))
     {
       return helpRequested ? 0 : 1;
@@ -167,6 +174,20 @@ public static partial class Program
     {
       log.Write("ende", $"Exit {exitCode}");
       ElevatedRelaunch.PauseIfRequested(options is IPauseOnExit { PauseOnExit: true });
+    }
+  }
+
+  /// <summary>Liegt <paramref name="directory"/> in einer git-Arbeitskopie? Ohne git: nein.</summary>
+  private static bool InsideGitRepository(string directory)
+  {
+    try
+    {
+      var result = new GitCli().Run(["rev-parse", "--is-inside-work-tree"], directory, 10_000);
+      return result.ExitCode == 0 && result.StdOut.Trim() == "true";
+    }
+    catch (GitException)
+    {
+      return false;
     }
   }
 
@@ -355,10 +376,10 @@ public static partial class Program
         new GitCli(factory),
         catalog,
         sources);
-    if (cli is IMultipassDouble && options is RepoSendOptions or RepoReceiveOptions)
+    if (cli is ReplayMultipassCli && options is RepoSendOptions or RepoReceiveOptions or WorkOptions)
     {
-      // git auf dem Host erreicht keine simulierte VM.
-      throw new ProgramExecutionException(1, "repo-send/repo-receive are not supported in simulation — git has to run inside a real VM.");
+      // Eine Aufnahme spielt keine git-Daten nach; der Simulator dagegen hat echtes git auf seiner Disk.
+      throw new ProgramExecutionException(1, "repo-send/repo-receive/work are not supported when replaying a recording — git has to run inside a VM (real or simulated).");
     }
 
     if (cli is IMultipassDouble && options is MultipassStoreOptions)
@@ -400,6 +421,7 @@ public static partial class Program
       VmResizeOptions o => RunVmResize(context, o),
       VmInventoryOptions o => RunVmInventory(context, o),
       RepoMatchOptions o => RunRepoMatch(context, o),
+      WorkOptions o => RunWork(context, o),
       RepoSendOptions o => RunRepoSend(context, o),
       RepoReceiveOptions o => RunRepoReceive(context, o),
       InitConfigureOptions o => RunInitConfigure(context, o),

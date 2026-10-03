@@ -49,6 +49,9 @@ public sealed record AppConfig
     /// <summary>Protokoll jedes CLI-Aufrufs (Ausgabe, Rückfragen samt Antwort, Exit-Code).</summary>
     public CommandLogConfig CommandLog { get; init; } = new();
 
+    /// <summary><c>cb work</c>: Agent und wie er in der VM gestartet wird.</summary>
+    public WorkConfig Work { get; init; } = new();
+
     /// <summary>
     /// Dauer, die der Multipass-Simulator (<c>CoreBridge.Simulation</c>, nur Debug/Tests) lang laufende Verben
     /// (launch, start, stop, restart, clone) vorgibt, z. B. <c>4s</c> oder <c>0ms</c>.
@@ -160,6 +163,21 @@ public sealed record CloudInitUserConfig
     public string[] Groups { get; init; } = [];
 
     public bool LockPassword { get; init; } = true;
+}
+
+/// <summary>Einstellungen von <c>cb work</c> (Abschnitt <c>Work</c>).</summary>
+public sealed record WorkConfig
+{
+    /// <summary>Agent, wenn weder <c>--agent</c> noch das Repo (CLAUDE.md, AGENTS.md, opencode.json) einen nennt.</summary>
+    public string DefaultAgent { get; init; } = "claude";
+
+    /// <summary>
+    /// <c>exec</c> (Standard): <c>multipass exec &lt;vm&gt; --working-directory … -- &lt;agent&gt;</c> mit
+    /// geerbter Konsole. <c>shell</c>: Ausweg, falls <c>exec</c> unter Windows keine Tastatur
+    /// durchreicht — <c>multipass shell</c> plus einmalige Autostart-Datei
+    /// <c>~/.corebridge/autostart</c>, die ein <c>.bashrc</c>-Haken ausführt.
+    /// </summary>
+    public string AgentLaunch { get; init; } = "exec";
 }
 
 /// <summary>

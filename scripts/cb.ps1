@@ -8,9 +8,16 @@ function cb {
     $cliArgs = @(foreach ($arg in $args) { if ($arg -is [array]) { $arg -join ',' } else { $arg } })
     # Checkout/Worktree, in dem man gerade steht: vom aktuellen Verzeichnis aufwärts
     # bis zur CoreBridge.slnx (wie RepoPaths.Root) — so klappt cb auch aus Unterordnern.
+    # Außerhalb eines Checkouts (cb work in einem anderen Repo) gilt der Checkout, der die
+    # Funktion zuletzt installiert hat (install-cb.ps1 setzt ihn beim Bauen ein).
     $root = (Get-Location).ProviderPath
     while ($root -and -not (Test-Path -LiteralPath (Join-Path $root 'CoreBridge.slnx'))) {
         $root = Split-Path -Parent $root
+    }
+
+    $installedRoot = '__COREBRIDGE_ROOT__'
+    if (-not $root -and (Test-Path -LiteralPath (Join-Path $installedRoot 'CoreBridge.slnx'))) {
+        $root = $installedRoot
     }
 
     if (-not $root) {
@@ -19,8 +26,14 @@ function cb {
     }
 
     if ($args.Count -eq 0) {
-        # Kein Argument angegeben -> TUI starten statt der reinen CLI-Hilfe.
-        dotnet run --project (Join-Path $root 'src\CoreBridge.Tui')
+        # Ohne Argument: in einem git-Repository arbeiten (cb work), sonst die TUI.
+        $inRepo = (git rev-parse --is-inside-work-tree 2>$null) -eq 'true'
+        if ($inRepo) {
+            dotnet run --project (Join-Path $root 'src\CoreBridge.Cli') -- work
+        }
+        else {
+            dotnet run --project (Join-Path $root 'src\CoreBridge.Tui')
+        }
     }
     else {
         dotnet run --project (Join-Path $root 'src\CoreBridge.Cli') -- @cliArgs
