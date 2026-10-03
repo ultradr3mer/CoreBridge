@@ -6,6 +6,8 @@ using CoreBridge.Core.Common;
 using CoreBridge.Core.Config;
 using CoreBridge.Core.Inits;
 using CoreBridge.Core.Multipass;
+using CoreBridge.Simulation;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace CoreBridge.Cli.Tests;
 
@@ -44,17 +46,33 @@ internal sealed record DialogPrompt(string Prompt)
 /// eigenen Testlauf den Zustand findet, den die vorherige Stufe hinterlassen hat. Aufgeräumt wird deshalb nicht beim Dispose, sondern von den
 /// letzten Stufen (vm-delete, init-delete). CLI-Kommandos laufen ausschließlich über den öffentlichen
 /// <see cref="Program.Run"/>-Dispatcher (kein CLI-Kindprozess). Nur vm-connect
-/// geht direkt über <see cref="Core.Vm.VmService.OpenConsole"/>, weil
-/// `multipass shell` ein TTY braucht.
+/// geht direkt über <see cref="Core.Vm.VmService.OpenConsole"/> (mit <see cref="Cli"/>),
+/// weil `multipass shell` ein TTY braucht.
 /// </summary>
-public sealed class CliLifecycleFixture
+public class CliLifecycleFixture : IDisposable
 {
     private readonly string storePath;
     private readonly AppConfig config;
+    private readonly Lazy<ServiceProvider> services;
 
+    /// <summary>Echtes Multipass (Bootstrap-Standard), jeder Aufruf protokolliert.</summary>
     public CliLifecycleFixture()
+        : this(simulator: null, "artifacts/cli-lifecycle/store")
     {
-        storePath = RepoPaths.Resolve("artifacts/cli-lifecycle/store");
+    }
+
+    /// <param name="simulator">
+    /// <c>null</c>: echtes Multipass. Sonst die Simulator-Implementierung von
+    /// <see cref="IMultipassCli"/> (<see cref="SimulatedMultipassCli"/> im Prozess oder
+    /// <see cref="SimulatedBinaryMultipassCli"/> über <c>multipass-sim.exe</c>) mit kurzer
+    /// simulierter Dauer der langen Verben — dieselben Stufen laufen in Sekunden.
+    /// </param>
+    /// <param name="store">Store je Variante (darin auch der Simulatorzustand), relativ zur Repo-Wurzel.</param>
+    protected CliLifecycleFixture(Type? simulator, string store)
+    {
+        var simulated = simulator is not null;
+        IsSimulation = simulated;
+        storePath = RepoPaths.Resolve(store);
         Directory.CreateDirectory(storePath);
         config = new AppConfig
         {
@@ -65,9 +83,14 @@ public sealed class CliLifecycleFixture
             DefaultTimeout = "30s",
             // Jeder echte Multipass-Aufruf wird protokolliert — außerhalb des
             // Temp-Stores, damit die Aufzeichnung den Lauf überlebt und per
-            // ReplayMultipassCli wiedergegeben werden kann. Bootstrap bleibt
-            // Standard: hier läuft garantiert das echte Multipass.
-            MultipassLogPath = "artifacts/mp-log/cli-lifecycle",
+            // ReplayMultipassCli wiedergegeben werden kann. Ohne Simulation bleibt
+            // Bootstrap Standard: dann läuft garantiert das echte Multipass.
+            // Den Simulator protokolliert die Fabrik ohnehin nicht.
+            MultipassLogPath = simulated ? null : "artifacts/mp-log/cli-lifecycle",
+            MultipassSimulationDelay = "100ms",
+            Bootstrap = simulated
+                ? new() { [typeof(IMultipassCli).FullName!] = simulator!.AssemblyQualifiedName! }
+                : new AppConfig().Bootstrap,
             // CLI-Protokoll wie bei `cb` in einem Checkout: Schalter und Pfad aus
             // appsettings.Development.json, damit Testläufe in derselben Datei landen.
             CommandLog = DevelopmentCommandLog(),
@@ -99,6 +122,26 @@ public sealed class CliLifecycleFixture
         var suffix = CheckoutSuffix();
         InitName = $"cbx-cli-init-{suffix}";
         VmName = $"cbx-cli-vm-{suffix}";
+        services = new Lazy<ServiceProvider>(() => CoreBridgeContainer.Create(config));
+    }
+
+    /// <summary>Läuft gegen <see cref="SimulatedMultipassCli"/> statt gegen echtes Multipass.</summary>
+    public bool IsSimulation { get; }
+
+    /// <summary>
+    /// Der Multipass-Client, den auch <see cref="Program.Run"/> mit dieser Config bekäme —
+    /// für das, was nicht über den Dispatcher geht (vm-connect).
+    /// </summary>
+    public IMultipassCli Cli => MultipassCliFactory.Create(services.Value);
+
+    public void Dispose()
+    {
+        if (services.IsValueCreated)
+        {
+            services.Value.Dispose();
+        }
+
+        GC.SuppressFinalize(this);
     }
 
     public string InitName { get; }
@@ -321,5 +364,26 @@ public sealed class CliLifecycleFixture
             "-").Trim('-');
         name = name.Length > 30 ? name[..30].TrimEnd('-') : name;
         return name.Length == 0 ? "default" : name;
+    }
+}
+
+/// <summary>Dieselben Stufen gegen <see cref="SimulatedMultipassCli"/> im Prozess (siehe <see cref="CliLifecycleSimulationTests"/>).</summary>
+public sealed class SimulatedCliLifecycleFixture : CliLifecycleFixture
+{
+    public SimulatedCliLifecycleFixture()
+        : base(typeof(SimulatedMultipassCli), "artifacts/cli-lifecycle-sim/store")
+    {
+    }
+}
+
+/// <summary>
+/// Dieselben Stufen über das echte <see cref="MultipassCli"/> gegen <c>multipass-sim.exe</c>
+/// (siehe <see cref="CliLifecycleSimulatedBinaryTests"/>).
+/// </summary>
+public sealed class SimulatedBinaryCliLifecycleFixture : CliLifecycleFixture
+{
+    public SimulatedBinaryCliLifecycleFixture()
+        : base(typeof(SimulatedBinaryMultipassCli), "artifacts/cli-lifecycle-simexe/store")
+    {
     }
 }

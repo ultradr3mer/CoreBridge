@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    multipass-sim.exe: der Multipass-Simulator als eigenständiges Programm mit der
+    Kommandozeile von multipass.exe — zum Ausprobieren von Hand und als Ersatz-Binary
+    für das echte MultipassCli (CORE_BRIDGE_MULTIPASS_EXE). Wird nicht ausgeliefert.
+  -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AssemblyName>multipass-sim</AssemblyName>
+    <RootNamespace>CoreBridge.MultipassSim</RootNamespace>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\test\CoreBridge.Simulation\CoreBridge.Simulation.csproj" />
+  </ItemGroup>
+
+</Project>

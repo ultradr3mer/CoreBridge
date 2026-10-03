@@ -14,12 +14,14 @@ namespace CoreBridge.Cli.Tests;
 /// sind je Checkout fest (<see cref="CliLifecycleFixture"/>) und überleben den Lauf.
 /// Aufgeräumt wird erst in Stage08/Stage09.
 /// </summary>
-[Collection(CliLifecycleCollection.Name)]
-[TestCaseOrderer(
-    "CoreBridge.Cli.Tests.LifecycleTestCaseOrderer",
-    "CoreBridge.Cli.Tests")]
-[Trait("Category", "Integration")]
-public sealed class CliLifecycleTests
+/// <remarks>
+/// Die Stufen laufen dreimal: gegen echtes Multipass (<see cref="CliLifecycleTests"/>),
+/// gegen den Simulator im Prozess (<see cref="CliLifecycleSimulationTests"/>) und über
+/// das echte <c>MultipassCli</c> gegen <c>multipass-sim.exe</c>
+/// (<see cref="CliLifecycleSimulatedBinaryTests"/>). So bleibt der Simulator an dem
+/// Ablauf gemessen, der auch in echt funktionieren muss.
+/// </remarks>
+public abstract class CliLifecycleStages
 {
     private static readonly TimeSpan SessionTimeout = TimeSpan.FromSeconds(60);
 
@@ -29,7 +31,7 @@ public sealed class CliLifecycleTests
     private readonly CliLifecycleFixture fixture;
     private readonly ITestOutputHelper output;
 
-    public CliLifecycleTests(CliLifecycleFixture fixture, ITestOutputHelper output)
+    protected CliLifecycleStages(CliLifecycleFixture fixture, ITestOutputHelper output)
     {
         this.fixture = fixture;
         this.output = output;
@@ -113,6 +115,14 @@ public sealed class CliLifecycleTests
     /// </summary>
     private async Task RestartDaemonAsync()
     {
+        if (fixture.IsSimulation)
+        {
+            // Der Simulator hat keinen Daemon, der Aufgaben gelöschter VMs halten könnte;
+            // multipass-restart bliebe ohnehin echt.
+            output.WriteLine("Simulation: kein Daemon-Neustart.");
+            return;
+        }
+
         var service = new MultipassService();
         var restart = service.IsElevated() || service.CanControlService()
             ? await fixture.RunAsync(new MultipassRestartOptions(), output.WriteLine)
@@ -251,7 +261,7 @@ public sealed class CliLifecycleTests
     [Fact]
     public async Task Stage06_VmConnect()
     {
-        using var session = new VmService().OpenConsole(fixture.VmName, output.WriteLine, (int)SessionTimeout.TotalMilliseconds);
+        using var session = new VmService(fixture.Cli).OpenConsole(fixture.VmName, output.WriteLine, (int)SessionTimeout.TotalMilliseconds);
 
         // Das Arbeitsverzeichnis wandert mit: cd wirkt auf den folgenden Befehl.
         session.SendLine("cd /tmp");
@@ -295,3 +305,34 @@ public sealed class CliLifecycleTests
         Assert.False(File.Exists(fixture.ProfileConfigPath), $"Profilkonfiguration noch vorhanden: {fixture.ProfileConfigPath}");
     }
 }
+
+/// <summary>Der Lifecycle gegen echtes Multipass; jeder Aufruf landet in <c>artifacts/mp-log/cli-lifecycle</c>.</summary>
+[Collection(CliLifecycleCollection.Name)]
+[TestCaseOrderer(
+    "CoreBridge.Cli.Tests.LifecycleTestCaseOrderer",
+    "CoreBridge.Cli.Tests")]
+[Trait("Category", "Integration")]
+public sealed class CliLifecycleTests(CliLifecycleFixture fixture, ITestOutputHelper output)
+    : CliLifecycleStages(fixture, output);
+
+/// <summary>
+/// Derselbe Lifecycle gegen <see cref="Simulation.SimulatedMultipassCli"/> — kein Multipass
+/// nötig, läuft in Sekunden und deshalb auch beim schnellen Lauf ohne Integration.
+/// </summary>
+[Collection(CliLifecycleCollection.Name)]
+[TestCaseOrderer(
+    "CoreBridge.Cli.Tests.LifecycleTestCaseOrderer",
+    "CoreBridge.Cli.Tests")]
+public sealed class CliLifecycleSimulationTests(SimulatedCliLifecycleFixture fixture, ITestOutputHelper output)
+    : CliLifecycleStages(fixture, output);
+
+/// <summary>
+/// Derselbe Lifecycle über das echte <see cref="Core.Multipass.MultipassCli"/> — Prozessstart,
+/// Argumente, Ausgabe — gegen <c>multipass-sim.exe</c> statt <c>multipass.exe</c>.
+/// </summary>
+[Collection(CliLifecycleCollection.Name)]
+[TestCaseOrderer(
+    "CoreBridge.Cli.Tests.LifecycleTestCaseOrderer",
+    "CoreBridge.Cli.Tests")]
+public sealed class CliLifecycleSimulatedBinaryTests(SimulatedBinaryCliLifecycleFixture fixture, ITestOutputHelper output)
+    : CliLifecycleStages(fixture, output);

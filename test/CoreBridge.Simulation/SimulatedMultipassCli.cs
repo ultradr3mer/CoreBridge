@@ -30,6 +30,11 @@ namespace CoreBridge.Simulation;
 /// (der Zustand ist dann schon geändert, wie beim echten Daemon) durchspielbar sind.
 /// </para>
 /// <para>
+/// <c>exec</c> läuft durch eine kleine simulierte <c>sh</c> (<see cref="SimShell"/>)
+/// mit virtuellem Dateisystem: Variablen, <c>$(…)</c>, <c>$((…))</c>, <c>cd</c>
+/// (auch über die Arbeitsverzeichnis-Weitergabe von vm-connect), Umleitungen.
+/// </para>
+/// <para>
 /// Cloud-init wird nicht ausgeführt, sondern als erfolgreich angenommen: die
 /// Komponenten einer Launch-cloud-init (<c>corebridge-install-&lt;name&gt;</c>)
 /// gelten als installiert und beantworten ihre Sonden (<c>--version</c>,
@@ -141,6 +146,109 @@ public sealed class SimulatedMultipassCli : IMultipassCli, IMultipassDouble
         return result with { DurationMs = (long)delay.TotalMilliseconds };
     }
 
+    /// <summary>
+    /// Spiegelt den Bestand eines echten Multipass in den simulierten Zustand: danach hat
+    /// der Simulator dieselben VMs (Name, Zustand, IPv4, Release, Disk) und Snapshots
+    /// (Name, Parent, Kommentar). Vom echten Multipass wird nur gelesen —
+    /// <c>list</c>, <c>list --snapshots</c>, <c>get local.&lt;vm&gt;.disk</c> und mit
+    /// <paramref name="probeMarkers"/> ein <c>ls /var/lib/corebridge</c> in laufenden VMs.
+    /// </summary>
+    /// <remarks>
+    /// Was <c>list</c> nicht verrät (Komponenten, Marker, Dateien im Gast), behält eine VM,
+    /// die der Simulator unter diesem Namen schon kennt; mit <paramref name="probeMarkers"/>
+    /// kommen Marker und Komponenten laufender VMs aus dem echten Gast. Simulierte VMs, die
+    /// es echt nicht gibt, verschwinden.
+    /// </remarks>
+    /// <returns>Zeilen für die Ausgabe: Zusammenfassung und je VM eine Zeile.</returns>
+    public IReadOnlyList<string> SyncFrom(IMultipassCli real, bool probeMarkers = false, int timeoutMs = 60_000)
+    {
+        var list = real.Run(["list", "--format", "json"], timeoutMs);
+        if (list.ExitCode != 0)
+        {
+            throw new MultipassException($"echtes multipass list scheitert (Exit {list.ExitCode}): {MultipassStdErr.Clean(list.StdErr)}");
+        }
+
+        var vms = new List<(string Name, string State, string? Ip, string Release)>();
+        using (var document = JsonDocument.Parse(list.StdOut))
+        {
+            if (document.RootElement.TryGetProperty("list", out var entries) && entries.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var entry in entries.EnumerateArray())
+                {
+                    string? Text(string property) =>
+                        entry.TryGetProperty(property, out var value) && value.ValueKind == JsonValueKind.String ? value.GetString() : null;
+
+                    var ip = entry.TryGetProperty("ipv4", out var ips) && ips.ValueKind == JsonValueKind.Array
+                        ? ips.EnumerateArray().Select(a => a.GetString()).FirstOrDefault(a => !string.IsNullOrEmpty(a))
+                        : null;
+                    if (Text("name") is { } name)
+                    {
+                        vms.Add((name, Text("state") ?? "Unknown", ip, Text("release") ?? "Ubuntu 26.10"));
+                    }
+                }
+            }
+        }
+
+        var snapshotsResult = real.Run(["list", "--snapshots", "--format", "json"], timeoutMs);
+        var snapshots = snapshotsResult.ExitCode == 0 ? MultipassSnapshotList.Parse(snapshotsResult.StdOut) : [];
+        var disks = vms.ToDictionary(
+            vm => vm.Name,
+            vm => real.Run(["get", $"local.{vm.Name}.disk"], timeoutMs) is { ExitCode: 0 } disk && disk.StdOut.Trim().Length > 0
+                ? disk.StdOut.Trim()
+                : DefaultDisk);
+        var markers = new Dictionary<string, List<string>>();
+        if (probeMarkers)
+        {
+            foreach (var vm in vms.Where(vm => vm.State == "Running"))
+            {
+                var ls = real.Run(["exec", vm.Name, "--", "/bin/sh", "-c", "ls /var/lib/corebridge 2>/dev/null || true"], timeoutMs);
+                markers[vm.Name] = ls.ExitCode == 0
+                    ? Regex.Matches(ls.StdOut, @"^([A-Za-z0-9_-]+)\.ready\s*$", RegexOptions.Multiline).Select(m => m.Groups[1].Value).ToList()
+                    : [];
+            }
+        }
+
+        var lines = new List<string>();
+        Locked(state =>
+        {
+            var known = state.Vms.ToDictionary(vm => vm.Name, StringComparer.OrdinalIgnoreCase);
+            state.Vms = vms.Select(vm =>
+            {
+                var previous = known.GetValueOrDefault(vm.Name);
+                var own = snapshots.Where(s => s.Instance == vm.Name).ToList();
+                var sim = new SimVm
+                {
+                    Name = vm.Name,
+                    State = vm.State,
+                    Release = vm.Release,
+                    Disk = disks[vm.Name],
+                    Ip = vm.Ip ?? previous?.Ip ?? NextIp(state),
+                    Components = markers.TryGetValue(vm.Name, out var probed) ? [.. probed] : [.. previous?.Components ?? []],
+                    Markers = markers.TryGetValue(vm.Name, out var probedMarkers) ? [.. probedMarkers] : [.. previous?.Markers ?? []],
+                    Files = previous?.Files ?? new Dictionary<string, string>(StringComparer.Ordinal),
+                    Directories = previous?.Directories ?? [],
+                    Snapshots = own.Select(s => new SimSnapshot
+                    {
+                        Name = s.Name,
+                        Parent = s.Parent ?? string.Empty,
+                        Comment = s.Comment ?? string.Empty
+                    }).ToList(),
+                    // Namenszähler so, dass die nächsten Standardnamen frei sind.
+                    SnapshotCount = Math.Max(own.Count, own.Select(s => Regex.Match(s.Name, @"^snapshot(\d+)$")).Where(m => m.Success).Select(m => int.Parse(m.Groups[1].Value)).DefaultIfEmpty(0).Max()),
+                    CloneCount = vms.Select(o => Regex.Match(o.Name, $@"^{Regex.Escape(vm.Name)}-clone(\d+)$")).Where(m => m.Success).Select(m => int.Parse(m.Groups[1].Value)).DefaultIfEmpty(0).Max(),
+                    // Parent des nächsten Snapshots: ein Blatt des Baums (welcher zuletzt genommen wurde, verrät list nicht).
+                    CurrentSnapshot = own.LastOrDefault(s => own.All(o => o.Parent != s.Name))?.Name
+                };
+                lines.Add($"  {sim.Name,-32} {sim.State,-10} {sim.Disk,-9} Snapshots: {sim.Snapshots.Count,-3} Marker: {(sim.Markers.Count == 0 ? "--" : string.Join(",", sim.Markers))}");
+                return sim;
+            }).ToList();
+            return Ok(string.Empty);
+        });
+
+        lines.Insert(0, $"Synchronisiert: {vms.Count} VM(s), {snapshots.Count} Snapshot(s) aus dem echten Multipass{(probeMarkers ? " (Marker aus laufenden Gästen)" : string.Empty)}.");
+        return lines;
+    }
+
     private MultipassRunResult Locked(Func<SimState, MultipassRunResult> action)
     {
         var key = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(StatePath.ToLowerInvariant())))[..16];
@@ -177,7 +285,7 @@ public sealed class SimulatedMultipassCli : IMultipassCli, IMultipassDouble
         return args[0] switch
         {
             "version" => Version_(args),
-            "list" or "ls" => args.Contains("--snapshots") ? ListSnapshots(state) : List(state),
+            "list" or "ls" => args.Contains("--snapshots") ? ListSnapshots(state, args) : List(state, args),
             "launch" => Launch(state, args),
             "start" => Start(state, args),
             "stop" => Stop(state, args),
@@ -211,35 +319,89 @@ public sealed class SimulatedMultipassCli : IMultipassCli, IMultipassDouble
             : Ok($"multipass   {Version}\nmultipassd  {Version}\n");
     }
 
-    private static MultipassRunResult List(SimState state)
+    /// <summary>Ohne <c>--format</c> eine Tabelle wie bei Multipass, sonst json oder csv.</summary>
+    private static MultipassRunResult List(SimState state, IReadOnlyList<string> args)
     {
         // Multipass 1.16 hat keine feste Reihenfolge (meist aktive vor dem Papierkorb,
         // aber nicht immer alphabetisch); der Simulator bleibt deterministisch:
         // aktive VMs alphabetisch, danach der Papierkorb.
-        var entries = state.Vms
+        var vms = state.Vms
             .OrderBy(vm => vm.State == "Deleted")
             .ThenBy(vm => vm.Name, StringComparer.Ordinal)
-            .Select(vm => new Dictionary<string, object?>
-            {
-                ["ipv4"] = vm.State == "Running" ? new[] { vm.Ip } : Array.Empty<string>(),
-                ["name"] = vm.Name,
-                ["release"] = vm.Release,
-                ["state"] = vm.State
-            });
-        return Ok(JsonSerializer.Serialize(new { list = entries }, JsonOptions) + "\n");
+            .ToList();
+        switch (Value(args, "--format") ?? "table")
+        {
+            case "json":
+                var entries = vms.Select(vm => new Dictionary<string, object?>
+                {
+                    ["ipv4"] = vm.State == "Running" ? new[] { vm.Ip } : Array.Empty<string>(),
+                    ["name"] = vm.Name,
+                    ["release"] = vm.Release,
+                    ["state"] = vm.State
+                });
+                return Ok(JsonSerializer.Serialize(new { list = entries }, JsonOptions) + "\n");
+            case "csv":
+                return Ok("Name,State,IPv4,IPv6,Release,AllIPv4\n" + string.Concat(vms.Select(vm =>
+                    $"{vm.Name},{vm.State},{IpOf(vm)},,{vm.Release},{IpOf(vm)}\n")));
+            case "table":
+                return vms.Count == 0
+                    ? Ok("No instances found.\n")
+                    : Ok(Table(
+                        ["Name", "State", "IPv4", "Image"],
+                        [24, 18, 17, 0],
+                        vms.Select(vm => new[] { vm.Name, vm.State, vm.State == "Running" ? vm.Ip : "--", vm.Release })));
+            default:
+                return Fail("Invalid format type given.");
+        }
     }
 
-    private static MultipassRunResult ListSnapshots(SimState state)
+    private static string IpOf(SimVm vm) => vm.State == "Running" ? vm.Ip : string.Empty;
+
+    private static MultipassRunResult ListSnapshots(SimState state, IReadOnlyList<string> args)
     {
-        var info = state.Vms
+        var vms = state.Vms
             .Where(vm => vm.Snapshots.Count > 0)
             .OrderBy(vm => vm.Name, StringComparer.Ordinal)
-            .ToDictionary(
-                vm => vm.Name,
-                vm => vm.Snapshots.ToDictionary(
-                    s => s.Name,
-                    s => new { comment = s.Comment, parent = s.Parent }));
-        return Ok(JsonSerializer.Serialize(new { errors = Array.Empty<string>(), info }, JsonOptions) + "\n");
+            .ToList();
+        switch (Value(args, "--format") ?? "table")
+        {
+            case "json":
+                var info = vms.ToDictionary(
+                    vm => vm.Name,
+                    vm => vm.Snapshots.ToDictionary(
+                        s => s.Name,
+                        s => new { comment = s.Comment, parent = s.Parent }));
+                return Ok(JsonSerializer.Serialize(new { errors = Array.Empty<string>(), info }, JsonOptions) + "\n");
+            case "csv":
+                return Ok("Instance,Snapshot,Parent,Comment\n" + string.Concat(vms.SelectMany(vm => vm.Snapshots.Select(s =>
+                    $"{vm.Name},{s.Name},{s.Parent},\"{s.Comment}\"\n"))));
+            case "table":
+                return vms.Count == 0
+                    ? Ok("No snapshots found.\n")
+                    : Ok(Table(
+                        ["Instance", "Snapshot", "Parent", "Comment"],
+                        [0, 0, 0, 0],
+                        vms.SelectMany(vm => vm.Snapshots.Select(s => new[]
+                        {
+                            vm.Name, s.Name, Dash(s.Parent), Dash(s.Comment)
+                        }))));
+            default:
+                return Fail("Invalid format type given.");
+        }
+    }
+
+    private static string Dash(string value) => string.IsNullOrEmpty(value) ? "--" : value;
+
+    /// <summary>
+    /// Spalten wie in Multipass' Tabellen: jede so breit wie ihr längster Eintrag plus
+    /// drei Leerzeichen, mindestens <paramref name="minimum"/>; die letzte ungepolstert.
+    /// </summary>
+    private static string Table(string[] headers, int[] minimum, IEnumerable<string[]> rows)
+    {
+        var all = rows.Prepend(headers).ToList();
+        var widths = headers.Select((_, c) => Math.Max(minimum[c], all.Max(r => r[c].Length) + 3)).ToArray();
+        return string.Concat(all.Select(r =>
+            string.Concat(r.Select((cell, c) => c == r.Length - 1 ? cell : cell.PadRight(widths[c]))).TrimEnd() + "\n"));
     }
 
     private static MultipassRunResult Launch(SimState state, IReadOnlyList<string> args)
@@ -427,7 +589,8 @@ public sealed class SimulatedMultipassCli : IMultipassCli, IMultipassDouble
             Disk = vm.Disk,
             Components = [.. vm.Components],
             Markers = [.. vm.Markers],
-            Files = new Dictionary<string, string>(vm.Files)
+            Files = new Dictionary<string, string>(vm.Files),
+            Directories = [.. vm.Directories]
         });
         return Ok($"Cloned from {vm.Name} to {name}.\n");
     }
@@ -464,7 +627,8 @@ public sealed class SimulatedMultipassCli : IMultipassCli, IMultipassDouble
             Comment = Value(args, "--comment", "-c", "-m") ?? string.Empty,
             Components = [.. vm.Components],
             Markers = [.. vm.Markers],
-            Files = new Dictionary<string, string>(vm.Files)
+            Files = new Dictionary<string, string>(vm.Files),
+            Directories = [.. vm.Directories]
         });
         vm.CurrentSnapshot = snapshot;
         return Ok($"Snapshot taken: {vm.Name}.{snapshot}\n");
@@ -493,6 +657,7 @@ public sealed class SimulatedMultipassCli : IMultipassCli, IMultipassDouble
         vm.Components = [.. saved.Components];
         vm.Markers = [.. saved.Markers];
         vm.Files = new Dictionary<string, string>(saved.Files);
+        vm.Directories = [.. saved.Directories];
         vm.CurrentSnapshot = saved.Name;
         return Ok($"Snapshot restored: {vm.Name}.{saved.Name}\n");
     }
@@ -503,17 +668,76 @@ public sealed class SimulatedMultipassCli : IMultipassCli, IMultipassDouble
         return RequireRunning(state, "shell", name, out _) ?? Ok(string.Empty);
     }
 
+    /// <summary>
+    /// <c>info &lt;vm&gt;… | &lt;vm&gt;.&lt;snapshot&gt;</c> als Tabelle oder json; CPU, Last und
+    /// Speicher sind feste Werte, der Rest folgt dem Zustand.
+    /// </summary>
     private static MultipassRunResult Info(SimState state, IReadOnlyList<string> args)
     {
-        foreach (var name in Positionals(args))
+        var targets = Positionals(args);
+        if (targets.Count == 0)
         {
-            if (Find(state, SplitSnapshot(name).Name) is null)
+            return Fail("info failed: instance name(s) required (simulation).");
+        }
+
+        var blocks = new List<string>();
+        var info = new Dictionary<string, object>();
+        foreach (var target in targets)
+        {
+            var (name, snapshotName) = SplitSnapshot(target);
+            var vm = Find(state, name);
+            if (vm is null)
             {
                 return NotFound("info", name);
             }
+
+            if (snapshotName is not null)
+            {
+                var snapshot = vm.Snapshots.FirstOrDefault(s => s.Name == snapshotName);
+                if (snapshot is null)
+                {
+                    return Fail($"info failed: The following errors occurred:\nNo such snapshot: {name}.{snapshotName}");
+                }
+
+                var children = string.Join(", ", vm.Snapshots.Where(s => s.Parent == snapshot.Name).Select(s => s.Name));
+                blocks.Add(string.Join('\n',
+                    $"Snapshot:       {snapshot.Name}",
+                    $"Instance:       {vm.Name}",
+                    $"Disk space:     {vm.Disk}",
+                    $"Parent:         {Dash(snapshot.Parent)}",
+                    $"Children:       {Dash(children)}",
+                    $"Comment:        {Dash(snapshot.Comment)}"));
+                info[target] = new { snapshot = snapshot.Name, instance = vm.Name, parent = snapshot.Parent, children, comment = snapshot.Comment };
+                continue;
+            }
+
+            var running = vm.State == "Running";
+            blocks.Add(string.Join('\n',
+                $"Name:           {vm.Name}",
+                $"State:          {vm.State}",
+                $"Snapshots:      {vm.Snapshots.Count}",
+                $"IPv4:           {(running ? vm.Ip : "--")}",
+                $"Release:        {(running ? vm.Release : "--")}",
+                "Image hash:     --",
+                $"CPU(s):         {(running ? "1" : "--")}",
+                $"Load:           {(running ? "0.00 0.00 0.00" : "--")}",
+                $"Disk usage:     {(running ? "2.1GiB out of " + vm.Disk : "--")}",
+                $"Memory usage:   {(running ? "312.4MiB out of 1.0GiB" : "--")}",
+                "Mounts:         --"));
+            info[vm.Name] = new Dictionary<string, object?>
+            {
+                ["cpu_count"] = running ? "1" : string.Empty,
+                ["disks"] = new { sda1 = new { total = vm.Disk } },
+                ["ipv4"] = running ? new[] { vm.Ip } : Array.Empty<string>(),
+                ["release"] = running ? vm.Release : string.Empty,
+                ["snapshot_count"] = vm.Snapshots.Count.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                ["state"] = vm.State
+            };
         }
 
-        return Ok(string.Empty);
+        return Value(args, "--format") == "json"
+            ? Ok(JsonSerializer.Serialize(new { errors = Array.Empty<string>(), info }, JsonOptions) + "\n")
+            : Ok(string.Join("\n\n", blocks) + "\n");
     }
 
     /// <summary>Nur <c>local.&lt;vm&gt;.disk</c>; Fehlertext wie Multipass 1.16.3.</summary>
@@ -588,10 +812,12 @@ public sealed class SimulatedMultipassCli : IMultipassCli, IMultipassDouble
             return failure;
         }
 
+        // Wie der echte Gast: das Kommando läuft ohne Shell, `sh -c` liefert der Aufrufer
+        // selbst mit — die simulierte Shell bekommt es also als neu zusammengesetzte Zeile.
         var separator = args.ToList().IndexOf("--");
         var command = separator < 0 ? [] : args.Skip(separator + 1).ToArray();
-        var line = command.Length >= 3 && command[1] == "-c" ? command[2] : string.Join(' ', command);
-        return Respond(vm!, line);
+        var (code, stdOut, stdErr) = new SimShell(vm!).Run(string.Join(' ', command.Select(CoreBridge.Core.Common.Shell.Quote)));
+        return new MultipassRunResult(code, stdOut, stdErr, 0);
     }
 
     private static MultipassRunResult Transfer(SimState state, IReadOnlyList<string> args)
@@ -606,6 +832,7 @@ public sealed class SimulatedMultipassCli : IMultipassCli, IMultipassDouble
         if (IsRemote(source))
         {
             var (vmName, remote) = SplitRemote(source);
+            remote = SimShell.Normalize(remote);
             var failure = RequireRunning(state, "transfer", vmName, out var vm);
             if (failure is not null)
             {
@@ -630,6 +857,7 @@ public sealed class SimulatedMultipassCli : IMultipassCli, IMultipassDouble
         if (IsRemote(destination))
         {
             var (vmName, remote) = SplitRemote(destination);
+            remote = SimShell.Normalize(remote);
             var failure = RequireRunning(state, "transfer", vmName, out var vm);
             if (failure is not null)
             {
@@ -646,163 +874,6 @@ public sealed class SimulatedMultipassCli : IMultipassCli, IMultipassDouble
         }
 
         return Fail("transfer failed: one of source or destination must be an instance");
-    }
-
-    /// <summary>
-    /// Beantwortet eine Shell-Zeile so, wie es ein provisionierter Gast täte;
-    /// Segmente (<c>;</c>, <c>&amp;&amp;</c>) werden einzeln ausgewertet.
-    /// </summary>
-    private static MultipassRunResult Respond(SimVm vm, string line)
-    {
-        var output = new StringBuilder();
-        var exitCode = 0;
-        foreach (var statement in line.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
-        {
-            foreach (var segment in statement.Split("&&", StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
-            {
-                var (code, text) = RespondOne(vm, segment);
-                output.Append(text);
-                exitCode = code;
-                if (code != 0)
-                {
-                    break;
-                }
-            }
-        }
-
-        return new MultipassRunResult(exitCode, output.ToString(), exitCode == 0 ? string.Empty : "simulated command failed\n", 0);
-    }
-
-    private static (int ExitCode, string Output) RespondOne(SimVm vm, string command)
-    {
-        const int NotFound = 127;
-
-        // `sudo` und vorangestellte Variablen (DEBIAN_FRONTEND=…) ändern an der Antwort nichts.
-        command = Regex.Replace(command, @"^(sudo\s+)?([A-Z_]+=\S+\s+)*", string.Empty);
-
-        // `bash -lc '…'` (Login-Shell): den inneren Befehl beantworten, statt ihn als
-        // unbekannt durchzuwinken — sonst wäre jede so verpackte Sonde grün.
-        var login = Regex.Match(command, @"^(?:ba)?sh\s+-l?c\s+'(.*)'$");
-        if (login.Success)
-        {
-            var inner = Respond(vm, login.Groups[1].Value);
-            return (inner.ExitCode, inner.StdOut);
-        }
-
-        // Ein installiertes Komponenten-Skript läuft durch (vm-install): Komponente
-        // gilt als installiert und setzt seinen Marker wie das echte Skript.
-        var install = Regex.Match(command, @"^'?/usr/local/sbin/corebridge-install-([A-Za-z0-9_-]+)'?(\s|$)");
-        if (install.Success)
-        {
-            var component = install.Groups[1].Value;
-            if (!vm.Components.Contains(component))
-            {
-                vm.Components.Add(component);
-            }
-
-            if (!vm.Markers.Contains(component))
-            {
-                vm.Markers.Add(component);
-            }
-
-            return (0, $"[simulation] {component} installiert\n");
-        }
-        if (command.StartsWith("echo ", StringComparison.Ordinal))
-        {
-            return (0, command[5..].Trim().Trim('"', '\'') + "\n");
-        }
-
-        if (command is "true" or ":" or "")
-        {
-            return (0, string.Empty);
-        }
-
-        if (command == "false")
-        {
-            return (1, string.Empty);
-        }
-
-        if (command == "hostname")
-        {
-            return (0, vm.Name + "\n");
-        }
-
-        if (command is "whoami" or "id -un")
-        {
-            return (0, "ubuntu\n");
-        }
-
-        if (command.StartsWith("uname", StringComparison.Ordinal))
-        {
-            return (0, $"Linux {vm.Name} 6.17.0-41-generic #41-Ubuntu SMP x86_64 GNU/Linux\n");
-        }
-
-        var version = vm.Release.Replace("Ubuntu ", string.Empty, StringComparison.Ordinal);
-        if (command.Contains("/etc/os-release", StringComparison.Ordinal))
-        {
-            var lines = new[]
-            {
-                $"PRETTY_NAME=\"{vm.Release}\"",
-                "NAME=\"Ubuntu\"",
-                $"VERSION_ID=\"{version}\"",
-                "ID=ubuntu"
-            };
-            var grep = Regex.Match(command, @"^grep\s+(\S+)");
-            var selected = grep.Success ? lines.Where(l => l.Contains(grep.Groups[1].Value, StringComparison.Ordinal)).ToArray() : lines;
-            return (selected.Length == 0 ? 1 : 0, string.Concat(selected.Select(l => l + "\n")));
-        }
-
-        // Komponenten-Sonden: <component> --version und die .ready-Marker.
-        var versions = new Dictionary<string, string>(StringComparer.Ordinal)
-        {
-            ["claude"] = "2.0.14 (Claude Code)",
-            ["dotnet"] = "10.0.100",
-            ["python3.14"] = "Python 3.14.0",
-            ["python3"] = "Python 3.14.0",
-            ["cline"] = "3.4.0"
-        };
-        // Auch mit Pfad (/snap/bin/dotnet, /usr/local/bin/python3.14): zählt der Programmname.
-        var probe = Regex.Match(command, @"^(?:command -v\s+)?(?:\S*/)?([A-Za-z0-9_.-]+)(?:\s+--version)?$");
-        if (probe.Success && versions.TryGetValue(probe.Groups[1].Value, out var reported))
-        {
-            var component = probe.Groups[1].Value.StartsWith("python", StringComparison.Ordinal) ? "python" : probe.Groups[1].Value;
-            // Ein Pfad zählt nur, wo das echte Skript hinlinkt (/snap/bin/dotnet gibt es nicht);
-            // ohne Pfad finden alle Shells die Komponenten, weil jedes Skript nach /usr/local/bin linkt.
-            var path = command.StartsWith("command -v", StringComparison.Ordinal) ? string.Empty : command.Split(' ')[0];
-            var reachable = !path.Contains('/') || !path.StartsWith("/snap/bin/", StringComparison.Ordinal);
-            return vm.Components.Contains(component) && reachable
-                ? (0, command.StartsWith("command -v", StringComparison.Ordinal) ? $"/usr/local/bin/{probe.Groups[1].Value}\n" : reported + "\n")
-                : (NotFound, string.Empty);
-        }
-
-        if (Regex.IsMatch(command, @"^ls(\s+-1)?\s+/var/lib/corebridge/?$"))
-        {
-            return (0, string.Concat(vm.Markers.Order(StringComparer.Ordinal).Select(c => $"{c}.ready\n")));
-        }
-
-        var marker = Regex.Match(command, @"/var/lib/corebridge/([A-Za-z0-9_-]+)\.ready");
-        if (marker.Success)
-        {
-            return vm.Markers.Contains(marker.Groups[1].Value) ? (0, string.Empty) : (1, string.Empty);
-        }
-
-        var cat = Regex.Match(command, @"^cat\s+(\S+)$");
-        if (cat.Success)
-        {
-            return vm.Files.TryGetValue(cat.Groups[1].Value, out var content)
-                ? (0, content)
-                : (1, string.Empty);
-        }
-
-        var test = Regex.Match(command, @"^test\s+-[ef]\s+(\S+)$");
-        if (test.Success)
-        {
-            return vm.Files.ContainsKey(test.Groups[1].Value) ? (0, string.Empty) : (1, string.Empty);
-        }
-
-        // Unbekanntes Kommando: als erfolgreich ohne Ausgabe behandeln, damit
-        // Durchspielen nicht an beliebigen Befehlen scheitert.
-        return (0, string.Empty);
     }
 
     private static MultipassRunResult? RequireRunning(SimState state, string verb, string name, out SimVm? vm)
@@ -946,7 +1017,7 @@ public sealed class SimulatedMultipassCli : IMultipassCli, IMultipassDouble
         public int IpCount { get; set; }
     }
 
-    private sealed class SimVm
+    internal sealed class SimVm
     {
         public string Name { get; set; } = string.Empty;
 
@@ -967,6 +1038,9 @@ public sealed class SimulatedMultipassCli : IMultipassCli, IMultipassDouble
         /// <summary>Per <c>transfer</c> in die VM kopierte Dateien (Pfad → Inhalt).</summary>
         public Dictionary<string, string> Files { get; set; } = new(StringComparer.Ordinal);
 
+        /// <summary>Per <c>mkdir</c> angelegte Verzeichnisse (absolut); Elternordner von Dateien gelten ohnehin.</summary>
+        public List<string> Directories { get; set; } = [];
+
         public List<SimSnapshot> Snapshots { get; set; } = [];
 
         public int SnapshotCount { get; set; }
@@ -976,7 +1050,7 @@ public sealed class SimulatedMultipassCli : IMultipassCli, IMultipassDouble
         public string? CurrentSnapshot { get; set; }
     }
 
-    private sealed class SimSnapshot
+    internal sealed class SimSnapshot
     {
         public string Name { get; set; } = string.Empty;
 
@@ -989,5 +1063,7 @@ public sealed class SimulatedMultipassCli : IMultipassCli, IMultipassDouble
         public List<string> Markers { get; set; } = [];
 
         public Dictionary<string, string> Files { get; set; } = new(StringComparer.Ordinal);
+
+        public List<string> Directories { get; set; } = [];
     }
 }

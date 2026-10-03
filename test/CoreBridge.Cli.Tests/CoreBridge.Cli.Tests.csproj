@@ -21,6 +21,10 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\CoreBridge.Cli\CoreBridge.Cli.csproj" />
+    <!-- CliLifecycleSimulationTests: dieselben Stufen gegen den Multipass-Simulator. -->
+    <ProjectReference Include="..\CoreBridge.Simulation\CoreBridge.Simulation.csproj" />
+    <!-- CliLifecycleSimulatedBinaryTests: nur bauen lassen, gestartet wird es aus tools/…/bin. -->
+    <ProjectReference Include="..\..\tools\CoreBridge.MultipassSim\CoreBridge.MultipassSim.csproj" ReferenceOutputAssembly="false" />
   </ItemGroup>
 
 </Project>

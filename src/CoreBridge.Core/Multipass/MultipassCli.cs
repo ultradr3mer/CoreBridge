@@ -63,6 +63,8 @@ public class MultipassCli : IMultipassCli
             startInfo.ArgumentList.Add(arg);
         }
 
+        PrepareProcess(startInfo);
+
         var stopwatch = Stopwatch.StartNew();
         Process? started;
         try
@@ -116,6 +118,8 @@ public class MultipassCli : IMultipassCli
             startInfo.ArgumentList.Add(arg);
         }
 
+        PrepareProcess(startInfo);
+
         Process? started;
         try
         {
@@ -130,6 +134,14 @@ public class MultipassCli : IMultipassCli
             ?? throw new MultipassException($"Prozess konnte nicht gestartet werden: {binary}");
         process.WaitForExit();
         return process.ExitCode;
+    }
+
+    /// <summary>
+    /// Letzter Eingriff vor dem Start des Binarys, etwa Umgebungsvariablen für ein
+    /// Ersatz-Binary (<c>multipass-sim.exe</c> in den Tests); Standard: nichts.
+    /// </summary>
+    protected virtual void PrepareProcess(ProcessStartInfo startInfo)
+    {
     }
 
     private static void TryKill(Process process)
