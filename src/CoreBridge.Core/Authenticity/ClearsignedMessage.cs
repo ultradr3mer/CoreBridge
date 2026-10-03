@@ -96,6 +96,21 @@ public sealed record ClearsignedMessage(byte[] Cleartext, byte[] CanonicalText, 
         return true;
     }
 
+    /// <summary>
+    /// Der kanonische Text einer unsignierten Datei, wie <c>gpg --clearsign</c>
+    /// ihn signiert (siehe <see cref="CanonicalText"/>): Leerzeichen/Tabs am
+    /// Zeilenende entfernt, CRLF zwischen den Zeilen, das letzte Zeilenende gehört
+    /// nicht dazu. So lässt sich eine Klartextsignatur
+    /// (<c>&lt;datei&gt;.clearsigned.asc</c>) gegen die Datei daneben prüfen,
+    /// egal ob der Checkout LF oder CRLF hat.
+    /// </summary>
+    public static byte[] Canonicalize(byte[] bytes)
+    {
+        ArgumentNullException.ThrowIfNull(bytes);
+        var lines = SplitLines(Utf8.GetString(bytes)).Select(line => line.Text.TrimEnd(' ', '\t'));
+        return Utf8.GetBytes(string.Join("\r\n", lines));
+    }
+
     private sealed record Line(string Text, string Ending);
 
     private static List<Line> SplitLines(string text)

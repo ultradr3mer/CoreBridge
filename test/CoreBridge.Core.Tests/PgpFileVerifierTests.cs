@@ -180,9 +180,16 @@ public class PgpFileVerifierTests
             Assert.Single(onlyMain);
             SettingsSignatures.RequireValid(onlyMain);
 
-            File.WriteAllText(Path.Combine(directory.FullName, "appsettings.Development.json"), "{}");
-            var withEnvironment = SettingsSignatures.Check(directory.FullName, "Development", key.Public, DateTime.UtcNow);
-            var failure = Assert.Throws<SettingsSignatureException>(() => SettingsSignatures.RequireValid(withEnvironment));
+            // Unsigniert ist nur eine Warnung, eine Änderung nach dem Signieren ein Fehler.
+            var environment = Path.Combine(directory.FullName, "appsettings.Development.json");
+            File.WriteAllText(environment, "{}");
+            var unsigned = SettingsSignatures.Check(directory.FullName, "Development", key.Public, DateTime.UtcNow);
+            Assert.True(unsigned[1].Unsigned);
+            SettingsSignatures.RequireValid(unsigned);
+
+            File.WriteAllBytes(environment + ".asc", Sign(key, "{ }"));
+            var tampered = SettingsSignatures.Check(directory.FullName, "Development", key.Public, DateTime.UtcNow);
+            var failure = Assert.Throws<SettingsSignatureException>(() => SettingsSignatures.RequireValid(tampered));
             Assert.Contains("appsettings.Development.json", failure.Message);
         }
         finally

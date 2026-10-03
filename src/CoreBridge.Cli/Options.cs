@@ -143,10 +143,10 @@ public sealed class ComponentAddOptions : IOptions
     public bool Force { get; set; }
 }
 
-[Verb("settings-verify", HelpText = "Prüft die OpenPGP-Signaturen (<datei>.asc) der mitgelieferten appsettings bzw. der angegebenen Dateien gegen den eingebetteten CoreBridge-Schlüssel; startet auch, wenn die Config ungültig signiert ist.")]
+[Verb("settings-verify", HelpText = "Prüft die OpenPGP-Signaturen (<datei>.clearsigned.asc oder <datei>.asc) der mitgelieferten appsettings bzw. der angegebenen Dateien gegen den eingebetteten CoreBridge-Schlüssel; unsigniert ist eine Warnung, ungültig Exit 3. Startet auch, wenn die Config ungültig signiert ist.")]
 public sealed class SettingsVerifyOptions : IOptions
 {
-    [Option('f', "file", Separator = ',', HelpText = "Stattdessen diese Dateien prüfen (kommagetrennt); erwartet je <datei>.asc daneben.")]
+    [Option('f', "file", Separator = ',', HelpText = "Stattdessen diese Dateien prüfen (kommagetrennt); erwartet je <datei>.clearsigned.asc oder <datei>.asc daneben, oder die Datei ist selbst clearsigned.")]
     public IEnumerable<string> Files { get; set; } = [];
 }
 
