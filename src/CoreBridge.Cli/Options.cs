@@ -4,7 +4,7 @@ namespace CoreBridge.Cli;
 
 /// <summary>
 /// Optionen, die für einen einzelnen Aufruf die Timeouts aus der Config
-/// (<c>DefaultTimeout</c>, <c>DefaultTimeoutVmCreation</c>) ersetzen; wird zentral
+/// (<c>DefaultTimeout</c>, <c>DefaultTimeoutVmCreation</c>, <c>DefaultTimeoutVmStart</c>) ersetzen; wird zentral
 /// in <c>Program.ApplyTimeoutOverride</c> angewendet.
 /// </summary>
 public interface ITimeoutOverride
@@ -16,7 +16,7 @@ public interface ITimeoutOverride
 /// <summary>Basis aller Verben, die Multipass aufrufen und daher auf Antworten warten.</summary>
 public abstract class MultipassOptions : IOptions, ITimeoutOverride
 {
-    [Option('t', "timeout", HelpText = "Timeout for this call, e.g. 5m, 300s or 1000ms (overrides DefaultTimeout / DefaultTimeoutVmCreation from the config).")]
+    [Option('t', "timeout", HelpText = "Timeout for this call, e.g. 5m, 300s or 1000ms (overrides DefaultTimeout / DefaultTimeoutVmCreation / DefaultTimeoutVmStart from the config).")]
     public string? OverrideTimeout { set; private get; }
 
     string? ITimeoutOverride.OverrideTimeout => this.OverrideTimeout; 
@@ -73,14 +73,17 @@ public sealed class VmListOptions : MultipassOptions
 {
 }
 
-[Verb("vm-create", HelpText = "Legt eine neue VM an (Standard-Image: Inits:DefaultRuntimeImage).")]
+[Verb("vm-create", HelpText = "Legt eine neue VM an — aus einem Profil (--profile) oder einem Katalog-Image (Standard: Inits:DefaultRuntimeImage).")]
 public sealed class VmCreateOptions : MultipassOptions
 {
     [Option('n', "name", Required = true, HelpText = "Name der neuen VM.")]
     public string Name { get; set; } = string.Empty;
 
-    [Option('i', "image", HelpText = "Katalog-Image (z. B. daily:26.10), URL/Pfad oder Name eines per init-configure erzeugten Profils. Ohne Angabe: Inits:DefaultRuntimeImage.")]
+    [Option('i', "image", HelpText = "Multipass-Katalog-Image (z. B. daily:26.10) oder URL/Pfad. Ohne Angabe: Inits:DefaultRuntimeImage bzw. das Image des Profils. Ein Profilname wird noch angenommen, gehört aber zu --profile.")]
     public string? Image { get; set; }
+
+    [Option('p', "profile", HelpText = "Profil aus init-configure (cloud-init, Image, Komponenten); Übersicht: init-list.")]
+    public string? Profile { get; set; }
 
     [Option('c', "cloud-init", HelpText = "Pfad zu einer cloud-init-YAML; überschreibt die cloud-init eines Profils (z. B. aus init-configure).")]
     public string? CloudInit { get; set; }

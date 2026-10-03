@@ -41,11 +41,31 @@ public static partial class Program
     var events = context.Events;
     var (config, vms, cancellationToken) = (context.Config, context.Vms, context.CancellationToken);
     var waitSlice = config.DefaultTimeoutVmCreation.ReadTime();
-    var requestedImage = string.IsNullOrWhiteSpace(options.Image)
-        ? config.Inits.DefaultRuntimeImage
-        : options.Image.Trim();
-    var profile = InitProfileResolver.Resolve(config.Inits, requestedImage, options.CloudInit);
-    var launchImage = profile?.RuntimeImage ?? requestedImage;
+    var image = string.IsNullOrWhiteSpace(options.Image) ? null : options.Image.Trim();
+    var profileName = string.IsNullOrWhiteSpace(options.Profile) ? null : options.Profile.Trim();
+    InitProfile? profile;
+    if (profileName is not null)
+    {
+      if (image is not null)
+      {
+        throw new ProgramExecutionException(
+            1,
+            $"Use either --profile or --image — profile `{profileName}` brings its own image (change it with `cb init-configure -n {profileName} --runtime-image <image> -f`).");
+      }
+
+      profile = InitProfileResolver.ResolveRequired(config.Inits, profileName, options.CloudInit);
+    }
+    else
+    {
+      // Früher war --image auch der Profilname; das geht weiter, mit Hinweis.
+      profile = image is null ? null : InitProfileResolver.Resolve(config.Inits, image, options.CloudInit);
+      if (profile is not null)
+      {
+        await events.Emit(events.Err($"Hinweis: `{image}` ist ein Profil — künftig `--profile {image}` statt `--image` verwenden."));
+      }
+    }
+
+    var launchImage = profile?.RuntimeImage ?? image ?? config.Inits.DefaultRuntimeImage;
     var cloudInit = options.CloudInit ?? profile?.CloudInitPath;
     if (!VmNamePattern.IsMatch(options.Name))
     {
@@ -61,8 +81,8 @@ public static partial class Program
 
     await ReplaceExistingVm(context, options.Name);
 
-    await events.Emit(events.Std($"Lege VM `{options.Name}` an (Image: {requestedImage}"
-        + (profile is null ? string.Empty : $" → Runtime: {launchImage}")
+    await events.Emit(events.Std($"Lege VM `{options.Name}` an ("
+        + (profile is null ? $"Image: {launchImage}" : $"Profil: {profile.Name} → Image: {launchImage}")
         + $"{(options.Disk is null ? string.Empty : $", Disk: {options.Disk}")}"
         + $"{(cloudInit is null ? string.Empty : ", cloud-init")}) ..."));
 
@@ -117,7 +137,7 @@ public static partial class Program
 
     if (profile is not null)
     {
-      await events.Emit(events.Std($"Profil: {profile.Name} (Runtime: {profile.RuntimeImage})"));
+      await events.Emit(events.Std($"Profil: {profile.Name} → Image: {profile.RuntimeImage}"));
       await events.Emit(events.Std("Gast-Provisionierung: cloud-init"));
     }
 
@@ -237,11 +257,7 @@ public static partial class Program
       return;
     }
 
-    await RunVmStateCommand(
-        context,
-        name,
-        $"start {name}",
-        () => context.Vms.Start(name, context.DefaultTimeoutMs, KeepWaiting(context, $"start {name}")));
+    await StartVm(context, name);
   }
 
   private static async Task RunVmStop(CommandContext context, VmStopOptions options)
@@ -266,6 +282,19 @@ public static partial class Program
     }
 
     await StopVm(context, vm);
+  }
+
+  /// <summary>
+  /// Startet die VM und wartet in Abschnitten von <c>DefaultTimeoutVmStart</c> — ein Start
+  /// dauert unter Hyper-V oft länger als <c>DefaultTimeout</c> (Issue #5).
+  /// </summary>
+  private static Task StartVm(CommandContext context, string name)
+  {
+    return RunVmStateCommand(
+        context,
+        name,
+        $"start {name}",
+        () => context.Vms.Start(name, context.VmStartTimeoutMs, KeepWaiting(context, $"start {name}")));
   }
 
   /// <summary>
@@ -386,11 +415,7 @@ public static partial class Program
       throw new ProgramExecutionException(1, $"Cancelled — VM `{name}` is {vm.State}; start it with `cb vm-start -n {name}`.");
     }
 
-    await RunVmStateCommand(
-        context,
-        name,
-        $"start {name}",
-        () => context.Vms.Start(name, context.DefaultTimeoutMs, KeepWaiting(context, $"start {name}")));
+    await StartVm(context, name);
   }
 
   /// <summary>VM laut vm-list; fehlt sie, gibt es eine fertige Meldung mit den vorhandenen Namen.</summary>

@@ -22,9 +22,17 @@ public sealed record AppConfig
     public string DefaultTimeoutVmCreation { get; init; } = "120s";
 
     /// <summary>
-    /// Standard-Timeout für Multipass-Start/Stop/Restart, z. B. 5m, 10s, 1000ms.
+    /// Standard-Timeout für Multipass-Stop/Delete/List/Exec/Transfer und den Dienst-Neustart,
+    /// z. B. 5m, 30s, 1000ms; danach fragt die CLI „weiter warten?“.
     /// </summary>
-    public string DefaultTimeout { get; init; } = "10s";
+    public string DefaultTimeout { get; init; } = "30s";
+
+    /// <summary>
+    /// Wartezeit auf den Start einer VM (vm-start, Start vor exec/put/get/install, Neustart
+    /// nach vm-resize), z. B. 3m. Eigener Wert, weil ein Start unter Hyper-V oft länger als
+    /// <see cref="DefaultTimeout"/> braucht (Issue #5); <c>-t</c> ersetzt auch ihn.
+    /// </summary>
+    public string DefaultTimeoutVmStart { get; init; } = "3m";
 
     /// <summary>
     /// Verzeichnis für das Multipass-Aufrufprotokoll (JSON Lines, eine Datei je
@@ -70,7 +78,7 @@ public sealed record InitsConfig
     public string DefaultRuntimeImage { get; init; } = "daily:26.10";
 
     /// <summary>
-    /// Wurzel für Modell-/Profil-/cloud-init-Dateien. Absoluter Pfad oder
+    /// Wurzel für Profil-/cloud-init-Dateien. Absoluter Pfad oder
     /// relativ zur Repo-Wurzel (Ordner, der CoreBridge.slnx enthält). Leer =
     /// Repo-Wurzel/artifacts.
     /// </summary>

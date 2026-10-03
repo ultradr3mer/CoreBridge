@@ -224,11 +224,7 @@ public static partial class Program
       return;
     }
 
-    await RunVmStateCommand(
-        context,
-        name,
-        $"start {name}",
-        () => context.Vms.Start(name, context.DefaultTimeoutMs, KeepWaiting(context, $"start {name}")));
+    await StartVm(context, name);
     await events.Emit(events.Std($"cloud-init grows the root partition while booting — check with `cb vm-exec -n {name} -c \"df -h /\"`."));
   }
 }

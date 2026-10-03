@@ -21,6 +21,43 @@ public sealed record InitProfile(
 /// </summary>
 public static class InitProfileResolver
 {
+    /// <summary>
+    /// Löst <paramref name="name"/> ausdrücklich als Profil auf (<c>vm-create --profile</c>):
+    /// fehlt es, gibt es eine Meldung mit den vorhandenen Profilen statt eines
+    /// Katalog-Lookups durch Multipass.
+    /// </summary>
+    public static InitProfile ResolveRequired(InitsConfig config, string name, string? explicitCloudInit = null)
+    {
+        var profile = IsProfileCandidate(name) ? Resolve(config, name, explicitCloudInit) : null;
+        if (profile is not null)
+        {
+            return profile;
+        }
+
+        var existing = ExistingProfiles();
+        throw new MultipassException(
+            $"Profil '{name}' existiert nicht. "
+            + (existing.Count == 0
+                ? "Es gibt noch keine Profile — anlegen mit `cb init-configure -n <profil> -c claude,dotnet`."
+                : $"Vorhandene Profile: {string.Join(", ", existing)}."));
+    }
+
+    /// <summary>Namen aller Profile im <see cref="InitStore"/>, alphabetisch.</summary>
+    public static IReadOnlyList<string> ExistingProfiles()
+    {
+        if (!Directory.Exists(InitStore.ProfilesRoot))
+        {
+            return [];
+        }
+
+        return Directory.EnumerateDirectories(InitStore.ProfilesRoot)
+            .Select(Path.GetFileName)
+            .OfType<string>()
+            .Where(name => File.Exists(InitStore.ConfigFile(name)))
+            .Order(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+    }
+
     public static InitProfile? Resolve(
         InitsConfig config,
         string requestedImage,

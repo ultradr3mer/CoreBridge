@@ -29,6 +29,9 @@ public sealed record CommandContext(
     /// <summary><c>DefaultTimeout</c> (ggf. per <c>--timeout</c> ersetzt) in Millisekunden.</summary>
     public int DefaultTimeoutMs => (int)Config.DefaultTimeout.ReadTime().TotalMilliseconds;
 
+    /// <summary><c>DefaultTimeoutVmStart</c> (ggf. per <c>--timeout</c> ersetzt) in Millisekunden.</summary>
+    public int VmStartTimeoutMs => (int)Config.DefaultTimeoutVmStart.ReadTime().TotalMilliseconds;
+
     /// <summary>
     /// Ja/Nein-Rückfrage, die <c>await</c>en kann — für Kommandos, die nicht
     /// in einem Core-Callback festhängen.

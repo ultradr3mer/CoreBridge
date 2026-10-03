@@ -28,7 +28,7 @@ public static partial class Program
         ? "  cloud-init: nicht nötig (keine Gast-Provisionierung)."
         : $"  cloud-init: {result.CloudInitPath}"));
     await events.Emit(events.Std(string.Empty));
-    await events.Emit(events.Std($"VM starten: cb vm-create --name <vm> --image {result.Name}"));
+    await events.Emit(events.Std($"VM anlegen: cb vm-create -n <vm> --profile {result.Name}"));
   }
 
   private static async Task RunInitList(CommandContext context)

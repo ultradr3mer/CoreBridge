@@ -275,7 +275,8 @@ public static partial class Program
         ? config with
         {
           DefaultTimeoutVmCreation = ovr.OverrideTimeout ?? config.DefaultTimeoutVmCreation,
-          DefaultTimeout = ovr.OverrideTimeout ?? config.DefaultTimeout
+          DefaultTimeout = ovr.OverrideTimeout ?? config.DefaultTimeout,
+          DefaultTimeoutVmStart = ovr.OverrideTimeout ?? config.DefaultTimeoutVmStart
         }
         : config;
   }
