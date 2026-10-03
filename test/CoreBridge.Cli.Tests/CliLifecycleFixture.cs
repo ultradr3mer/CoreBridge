@@ -1,4 +1,6 @@
+using System.Text.Json;
 using System.Text.RegularExpressions;
+using CommandLine;
 using CoreBridge.Interaction;
 using CoreBridge.Core.Common;
 using CoreBridge.Core.Config;
@@ -66,6 +68,9 @@ public sealed class CliLifecycleFixture
             // ReplayMultipassCli wiedergegeben werden kann. Bootstrap bleibt
             // Standard: hier läuft garantiert das echte Multipass.
             MultipassLogPath = "artifacts/mp-log/cli-lifecycle",
+            // CLI-Protokoll wie bei `cb` in einem Checkout: Schalter und Pfad aus
+            // appsettings.Development.json, damit Testläufe in derselben Datei landen.
+            CommandLog = DevelopmentCommandLog(),
             Inits = new InitsConfig
             {
                 StoreRoot = storePath,
@@ -123,12 +128,14 @@ public sealed class CliLifecycleFixture
         var lines = new List<string>();
         var dialogErrors = new List<string>();
         var pending = new Queue<DialogStep>(dialog);
+        using var commandLog = CommandLog.Open(config.CommandLog.ResolveDirectory(), CommandLineOf(options));
+        var exitCode = 0;
         try
         {
             // Der Test ist der Konsument des Ereignisstroms — dieselbe Rolle wie
             // die ConsoleAdapter in der echten CLI: Ausgabe sammeln und
             // Rückfragen beantworten.
-            await foreach (var cliEvent in Program.Run(config, options))
+            await foreach (var cliEvent in commandLog.Tee(Program.Run(config, options)))
             {
                 switch (cliEvent)
                 {
@@ -164,9 +171,63 @@ public sealed class CliLifecycleFixture
         }
         catch (ProgramExecutionException exception)
         {
+            commandLog.Write("fehler", exception.Message);
+            exitCode = exception.ExitCode;
             log($"Fehler (Exit {exception.ExitCode}): {exception.Message}");
             dialogErrors.AddRange(NotAsked(pending));
             return new CliRunResult(exception.ExitCode, lines, dialogErrors, exception.Message);
+        }
+        finally
+        {
+            commandLog.Write("ende", $"Exit {exitCode} (Test)");
+        }
+    }
+
+    /// <summary>
+    /// Der CommandLog-Abschnitt der mitgelieferten Development-Konfiguration — dieselbe Quelle
+    /// wie bei <c>cb</c>, damit Schalter und Pfad nur an einer Stelle stehen.
+    /// </summary>
+    private static CommandLogConfig DevelopmentCommandLog()
+    {
+        var file = RepoPaths.Resolve("src/CoreBridge.Cli/appsettings.Development.json");
+        using var document = JsonDocument.Parse(File.ReadAllText(file));
+        return document.RootElement.TryGetProperty("CommandLog", out var section)
+            ? section.Deserialize<CommandLogConfig>() ?? new CommandLogConfig()
+            : new CommandLogConfig();
+    }
+
+    /// <summary>
+    /// Die Optionen als Kommandozeile fürs Protokoll (Verb + gesetzte Optionen), wie sie
+    /// <c>cb</c> bekommen hätte. Nicht über <c>Parser.FormatCommandLineArgs</c>: der braucht
+    /// öffentliche Getter, <c>--timeout</c> hat aber einen privaten.
+    /// </summary>
+    private static IEnumerable<string> CommandLineOf(IOptions options)
+    {
+        var type = options.GetType();
+        yield return type.GetCustomAttributes(typeof(VerbAttribute), false).OfType<VerbAttribute>().FirstOrDefault()?.Name
+            ?? type.Name;
+        foreach (var property in type.GetProperties())
+        {
+            if (property.GetCustomAttributes(typeof(OptionAttribute), true).FirstOrDefault() is not OptionAttribute option)
+            {
+                continue;
+            }
+
+            // Privater Getter (--timeout, geerbt): nur über den deklarierenden Typ lesbar.
+            var getter = property.DeclaringType?.GetProperty(property.Name)?.GetGetMethod(nonPublic: true);
+            switch (getter?.Invoke(options, null))
+            {
+                case null or false:
+                case string text when text.Length == 0:
+                    break;
+                case true:
+                    yield return "--" + option.LongName;
+                    break;
+                case var value:
+                    yield return "--" + option.LongName;
+                    yield return value.ToString() ?? string.Empty;
+                    break;
+            }
         }
     }
 
