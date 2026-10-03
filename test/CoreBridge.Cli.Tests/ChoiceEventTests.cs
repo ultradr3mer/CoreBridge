@@ -92,6 +92,26 @@ public class ChoiceEventTests
         Assert.Equal(OkCancelOptions.Cancel, OptionDef.DefaultOf<OkCancelOptions>().Value);
     }
 
+    /// <summary>
+    /// Bestätigen per Tastendruck (UAC-Abfrage des Neustarts): Enter = Ok,
+    /// Strg+C = Cancel, andere Tasten antworten nicht.
+    /// </summary>
+    [Fact]
+    public void OkCancelPerTastendruck()
+    {
+        var ok = new ChoiceEvent<OkCancelOptions>(TimeSpan.Zero, "Weiter?") { KeyPress = true };
+        Assert.True(((IChoiceInteraction)ok).KeyPress);
+        Assert.False(ok.TryChooseKey(Keys.Y));
+        Assert.True(ok.TryChooseKey(Keys.Enter));
+        Assert.Equal(OkCancelOptions.Ok, ok.GetUserInputAsync().GetResult());
+
+        var cancel = new ChoiceEvent<OkCancelOptions>(TimeSpan.Zero, "Weiter?") { KeyPress = true };
+        Assert.True(cancel.TryChooseKey(Keys.Ctrl | Keys.C));
+        Assert.Equal(OkCancelOptions.Cancel, cancel.GetUserInputAsync().GetResult());
+
+        Assert.False(new ChoiceEvent<YesNoOptions>(TimeSpan.Zero, "Ja?").KeyPress);
+    }
+
     /// <summary>Angebote auf Ticks werden per Taste beantwortet — über die <c>Keys</c> der Optionen.</summary>
     [Fact]
     public void TasteBeantwortetUeberOptionDefKeys()
@@ -102,7 +122,8 @@ public class ChoiceEventTests
         Assert.False(offer.TryChooseKey(Keys.W));
         Assert.True(offer.IsOpen);
 
-        Assert.True(offer.TryChooseKey(Keys.K));
+        Assert.False(offer.TryChooseKey(Keys.K));
+        Assert.True(offer.TryChooseKey(Keys.Enter));
         Assert.Equal(HungStopOptions.Kill, ((ChoiceEvent<HungStopOptions>)offer).GetUserInputAsync().GetResult());
         Assert.False(offer.TryChooseKey(Keys.Esc));
     }

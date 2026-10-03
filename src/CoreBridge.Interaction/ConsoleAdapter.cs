@@ -104,7 +104,7 @@ public class ConsoleAdapter
     /// Ein Fortschritts-Tick: Spinner mit Wartezeit seit dem ersten Tick
     /// dieser Zeile (<c>| 12 s</c>), sonst ein Punkt. Trägt der Tick ein offenes
     /// <see cref="ProgressEvent.Offer"/>, stehen dessen Tasten daneben
-    /// (<c>— Stop hängt? k: jetzt beenden; Esc: Abbrechen</c>), und eine seit dem
+    /// (<c>— Stop hängt? Enter: jetzt beenden; Esc: Abbrechen</c>), und eine seit dem
     /// letzten Tick gedrückte Taste beantwortet es.
     /// </summary>
     private void WriteProgress(ProgressEvent progress)
@@ -155,7 +155,7 @@ public class ConsoleAdapter
         }
     }
 
-    /// <summary>Frage und die Antworten mit Taste: <c>Stop hängt? k: jetzt beenden; Esc: Abbrechen</c>.</summary>
+    /// <summary>Frage und die Antworten mit Taste: <c>Stop hängt? Enter: jetzt beenden; Esc: Abbrechen</c>.</summary>
     private static string OfferHint(IChoiceInteraction offer)
     {
         var keyed = offer.Options
@@ -267,6 +267,12 @@ public class ConsoleAdapter
             return;
         }
 
+        if (choice.KeyPress)
+        {
+            AskKey(choice);
+            return;
+        }
+
         while (true)
         {
             Write(Console.Out, ColorOut, PromptColor, $"{choice.Printable} {choice.PrintOptions(display: true, values: true).TrimEnd()} ");
@@ -285,6 +291,35 @@ public class ConsoleAdapter
 
             WriteColored(Console.Out, ColorOut, ConsoleColor.Red, "  Unbekannte Eingabe — bitte erneut.");
         }
+    }
+
+    /// <summary>
+    /// Wartet auf eine Taste einer Antwort (<c>Enter: Ok; Esc/Strg+C: Cancel</c>);
+    /// andere Tasten werden überhört. Strg+C kommt dabei als Taste an
+    /// (<see cref="Console.TreatControlCAsInput"/>), sonst bräche es den Prozess ab,
+    /// während <c>ReadKey</c> noch blockiert.
+    /// </summary>
+    private static void AskKey(IChoiceInteraction choice)
+    {
+        var keys = choice.Options
+            .Where(option => option.Keys.Count > 0)
+            .Select(option => $"{string.Join("/", option.Keys.Where(key => key != Keys.Backspace).Select(KeyLabel))}: {option.Display}");
+        Write(Console.Out, ColorOut, PromptColor, $"{choice.Printable} [{string.Join("; ", keys)}] ");
+
+        var previous = Console.TreatControlCAsInput;
+        Console.TreatControlCAsInput = true;
+        try
+        {
+            while (!choice.TryChooseKey(ToKeys(Console.ReadKey(intercept: true))))
+            {
+            }
+        }
+        finally
+        {
+            Console.TreatControlCAsInput = previous;
+        }
+
+        Console.WriteLine(choice.AnswerDisplay);
     }
 
     /// <summary>

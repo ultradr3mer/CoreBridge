@@ -69,7 +69,7 @@ static async Task Produce(EventFactory events, CancellationToken cancellationTok
     // 4. Angebot auf Ticks: die Arbeit läuft weiter, die Frage bleibt offen und wird per
     //    Taste beantwortet (OptionDef.Keys). Ohne Antwort schließt das Kommando sie mit
     //    dem Standard „weiter warten“ — so bleibt am Ende nichts offen.
-    await Heading(events, "4. Warten mit Angebot (10 s): k = überspringen, Esc = abbrechen");
+    await Heading(events, "4. Warten mit Angebot (10 s): Enter = überspringen, Esc = abbrechen");
     var offer = events.Choice<WaitOptions>("Lange Arbeit läuft:");
     try
     {
@@ -128,7 +128,7 @@ static async Task<WaitOptions> Ticks(EventFactory events, TimeSpan duration, Cho
 /// <summary>Angebot während einer langen Arbeit; der Standard ist „weiter warten“.</summary>
 internal enum WaitOptions
 {
-    [OptionDef("überspringen", "s,skip", [Keys.K])]
+    [OptionDef("überspringen", "s,skip", [Keys.Enter])]
     Skip,
 
     [OptionDef("abbrechen", "c,cancel", [Keys.Esc])]

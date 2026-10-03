@@ -150,7 +150,7 @@ public class MultipassServiceTests
     }
 
     /// <summary>
-    /// Drückt der Benutzer während des Wartens auf den Stop <c>k</c>, endet das Warten
+    /// Drückt der Benutzer während des Wartens auf den Stop Enter, endet das Warten
     /// sofort (lange vor dem Timeout) und der Daemon wird ohne Rückfrage beendet.
     /// </summary>
     [Fact]
@@ -166,7 +166,7 @@ public class MultipassServiceTests
             lines.Add(line);
             if (line == Progress.ProgressTick && offer is { IsOpen: true })
             {
-                Assert.True(offer.TryChooseKey(Keys.K));
+                Assert.True(offer.TryChooseKey(Keys.Enter));
             }
         }
 
@@ -201,7 +201,7 @@ public class MultipassServiceTests
         Assert.Equal(HungStopOptions.Cancel, answer);
     }
 
-    /// <summary>Mit <c>killNow</c> (erhöhtes Fenster nach <c>k</c>): gar nicht erst warten, kein Angebot.</summary>
+    /// <summary>Mit <c>killNow</c> (erhöhtes Fenster nach Enter im Angebot): gar nicht erst warten, kein Angebot.</summary>
     [Fact]
     public async Task KillNowWartetNichtUndBietetNichtsAn()
     {
@@ -305,6 +305,88 @@ public class MultipassServiceTests
         return lines;
     }
 
+    /// <summary>
+    /// Der Dienst meldet Stopped, der alte multipassd lebt aber weiter (hält den
+    /// Socket): erst abwarten, dann nach Rückfrage hart beenden, dann starten. Am
+    /// Ende läuft der Dienst unter neuer PID.
+    /// </summary>
+    [Fact]
+    public async Task AlterDaemonNachStopWirdBeendetBevorGestartetWird()
+    {
+        var service = new FakeService { State = MultipassServiceState.Running, OldProcessLingers = true };
+
+        var lines = await Drain(service);
+
+        Assert.Equal(["stop", "confirm", "kill 4711", "start"], service.Calls);
+        Assert.Contains(lines, line => line.Contains("(PID 4711) läuft nach"));
+        Assert.Equal("multipassd: PID 4711 → 4712", lines[^1]);
+    }
+
+    /// <summary>Lehnt der Benutzer das Beenden des alten Prozesses ab, wird nicht gestartet.</summary>
+    [Fact]
+    public async Task AlterDaemonOhneZustimmungBrichtAbOhneStart()
+    {
+        var service = new FakeService { State = MultipassServiceState.Running, OldProcessLingers = true, Answer = false };
+
+        var failure = await Assert.ThrowsAsync<MultipassException>(() => Drain(service));
+
+        Assert.Contains("hält den Daemon-Socket", failure.Message);
+        Assert.DoesNotContain("start", service.Calls);
+    }
+
+    /// <summary>
+    /// Nach Enter im Angebot: der Dienst läuft per Wiederherstellung schon unter neuer
+    /// PID, der alte Prozess lebt noch — er wird ohne weitere Rückfrage beendet.
+    /// </summary>
+    [Fact]
+    public async Task AlterDaemonNachKillWirdOhneRueckfrageBeendet()
+    {
+        var service = new FakeService
+        {
+            State = MultipassServiceState.Running,
+            StopHangs = true,
+            KillRestarts = true,
+            OldProcessLingers = true
+        };
+
+        var lines = new List<string>();
+        ChoiceEvent<HungStopOptions>? offer = null;
+        await foreach (var line in service.Restart(TimeSpan.FromMinutes(5), service.Confirm, message => offer = new(TimeSpan.Zero, message)))
+        {
+            lines.Add(line);
+            if (line == Progress.ProgressTick && offer is { IsOpen: true })
+            {
+                offer.TryChooseKey(Keys.Enter);
+            }
+        }
+
+        Assert.Equal(["stop", "kill 4711", "kill 4711"], service.Calls);
+        Assert.Equal("multipassd: PID 4711 → 4712", lines[^1]);
+    }
+
+    /// <summary>Lässt sich der alte Prozess nicht beenden, scheitert der Neustart mit Hinweis.</summary>
+    [Fact]
+    public async Task UnbeendbarerAlterDaemonScheitert()
+    {
+        var service = new FakeService { State = MultipassServiceState.Running, OldProcessLingers = true, StrayUnkillable = true };
+
+        var failure = await Assert.ThrowsAsync<MultipassException>(() => Drain(service));
+
+        Assert.Contains("auch nach dem harten Beenden", failure.Message);
+        Assert.DoesNotContain("start", service.Calls);
+    }
+
+    /// <summary>Läuft der Dienst danach unter derselben PID, war der Neustart unwirksam.</summary>
+    [Fact]
+    public async Task GleichePidNachNeustartScheitert()
+    {
+        var service = new FakeService { State = MultipassServiceState.Running, StartKeepsProcessId = true };
+
+        var failure = await Assert.ThrowsAsync<MultipassException>(() => Drain(service));
+
+        Assert.Contains("Neustart unwirksam", failure.Message);
+    }
+
     private sealed class FakeService() : MultipassService(TimeSpan.FromMilliseconds(1), Short)
     {
         public bool Elevated { get; init; } = true;
@@ -323,6 +405,18 @@ public class MultipassServiceTests
         public bool KillRestarts { get; init; }
 
         public int ProcessId { get; private set; } = 4711;
+
+        /// <summary>Der alte Prozess lebt nach Stop bzw. Kill weiter (wie ein multipassd, der den Socket hält).</summary>
+        public bool OldProcessLingers { get; init; }
+
+        /// <summary>Ein weiterlebender alter Prozess lässt sich auch hart nicht beenden.</summary>
+        public bool StrayUnkillable { get; init; }
+
+        /// <summary>Der Start bringt keinen neuen Prozess (gleiche PID wie vorher).</summary>
+        public bool StartKeepsProcessId { get; init; }
+
+        /// <summary>Weiterlebende alte multipassd-Prozesse.</summary>
+        public List<int> Strays { get; } = [];
 
         public bool Answer { get; init; } = true;
 
@@ -348,11 +442,20 @@ public class MultipassServiceTests
         {
             Calls.Add("stop");
             State = StopHangs ? MultipassServiceState.StopPending : MultipassServiceState.Stopped;
+            if (State == MultipassServiceState.Stopped && OldProcessLingers)
+            {
+                Strays.Add(ProcessId);
+            }
         }
 
         public override void RequestStart()
         {
             Calls.Add("start");
+            if (State == MultipassServiceState.Stopped && !StartKeepsProcessId)
+            {
+                ProcessId++;
+            }
+
             State = MultipassServiceState.Running;
             sinceStart.Restart();
         }
@@ -374,6 +477,21 @@ public class MultipassServiceTests
                 throw new MultipassAccessDeniedException("Zugriff verweigert (Test).");
             }
 
+            if (Strays.Contains(processId))
+            {
+                if (!StrayUnkillable)
+                {
+                    Strays.Remove(processId);
+                }
+
+                return;
+            }
+
+            if (OldProcessLingers && (KillRestarts || KillHelps))
+            {
+                Strays.Add(processId);
+            }
+
             if (KillRestarts)
             {
                 State = MultipassServiceState.Running;
@@ -384,6 +502,9 @@ public class MultipassServiceTests
                 State = MultipassServiceState.Stopped;
             }
         }
+
+        public override IReadOnlyList<int> FindDaemonProcesses() =>
+            State == MultipassServiceState.Stopped ? [.. Strays] : [.. Strays, ProcessId];
 
         public override bool IsDaemonResponding(bool acceptRejectedClient = false)
         {

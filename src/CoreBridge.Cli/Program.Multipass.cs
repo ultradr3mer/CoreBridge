@@ -59,7 +59,7 @@ public static partial class Program
     var service = new MultipassService(commandTimeout: timeout);
 
     // Ein hängender Stop antwortet erfahrungsgemäß nicht mehr: während des Wartens
-    // beendet `k` den Daemon sofort, statt den ganzen DefaultTimeout abzusitzen.
+    // beendet Enter den Daemon sofort, statt den ganzen DefaultTimeout abzusitzen.
     var offer = new StopOffer(events);
 
     // Erst ohne Erhöhung: ob der Benutzer den Dienst steuern darf, entscheidet
@@ -88,7 +88,7 @@ public static partial class Program
       await events.Emit(events.Std($"Warnung: Der Benutzer darf den Dienst {MultipassService.ServiceName} nicht stoppen und starten — der Neustart benötigt Administratorrechte."));
     }
 
-    if (!await context.ConfirmAsync("Mit Administratorrechten in einem neuen Fenster fortfahren?"))
+    if (!await context.AcknowledgeAsync("Mit Administratorrechten in einem neuen Fenster fortfahren?"))
     {
       throw new ProgramExecutionException(1, "Abgebrochen — ohne Administratorrechte kein Neustart.");
     }
@@ -393,7 +393,7 @@ public static partial class Program
   /// <summary>
   /// Das Angebot während des Wartens auf den Stop: <see cref="Open"/> ist die Fabrik für
   /// <see cref="MultipassService.Restart"/>, <see cref="Current"/> trägt das Angebot auf die
-  /// Ticks, und <see cref="KillChosen"/> sagt hinterher, ob <c>k</c> gedrückt wurde — dann
+  /// Ticks, und <see cref="KillChosen"/> sagt hinterher, ob Enter gedrückt wurde — dann
   /// bekommt ein erhöhtes Fenster <c>--kill-now</c>, statt erneut zu warten.
   /// </summary>
   private sealed class StopOffer(EventFactory events)

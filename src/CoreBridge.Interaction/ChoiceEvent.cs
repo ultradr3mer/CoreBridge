@@ -59,6 +59,12 @@ public interface IChoiceInteraction : IOpenInteraction
     /// </summary>
     bool TryChooseKey(Keys key);
 
+    /// <summary>
+    /// Mit einem einzelnen Tastendruck zu beantworten (<see cref="OptionDef.Keys"/>,
+    /// z. B. Enter = Ok, Strg+C = Abbrechen) statt mit einer Eingabezeile.
+    /// </summary>
+    bool KeyPress { get; }
+
     /// <summary>Schließt die Rückfrage mit <see cref="DefaultOption"/>.</summary>
     bool SetDefault();
 
@@ -97,6 +103,9 @@ public class ChoiceEvent<T> : InteractionEvent<T>, IChoiceInteraction where T : 
     OptionDef IChoiceInteraction.DefaultOption => this.DefaultOption;
 
     bool IChoiceInteraction.TryParseChoice(string input) => this.TryParseChoice(input, out _);
+
+    /// <inheritdoc/>
+    public bool KeyPress { get; init; }
 
     /// <inheritdoc/>
     public string? AnswerDisplay => this.TryGetAnswer(out var answer) ? OptionDef.FromAttribute(answer).Display : null;

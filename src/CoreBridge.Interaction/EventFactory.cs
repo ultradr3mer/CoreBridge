@@ -41,9 +41,10 @@ public sealed class EventFactory
     /// </summary>
     public ProgressEvent Tick(IChoiceInteraction offer) => new(this.Elapsed, offer);
 
-    public ChoiceEvent<T> Choice<T>(string message, TimeSpan? timeout = null) where T : struct, Enum
+    /// <param name="keyPress">Mit einem Tastendruck statt einer Eingabezeile zu beantworten (<see cref="IChoiceInteraction.KeyPress"/>).</param>
+    public ChoiceEvent<T> Choice<T>(string message, TimeSpan? timeout = null, bool keyPress = false) where T : struct, Enum
     {
-        return Track(new ChoiceEvent<T>(this.Elapsed, message, timeout));
+        return Track(new ChoiceEvent<T>(this.Elapsed, message, timeout) { KeyPress = keyPress });
     }
 
     public TextEvent Text(string message, TimeSpan? timeout = null)

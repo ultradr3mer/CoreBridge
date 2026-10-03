@@ -40,6 +40,16 @@ public sealed record CommandContext(
     }
 
     /// <summary>
+    /// Bestätigen per Tastendruck: Enter = weiter, Strg+C/Esc = abbrechen. Für
+    /// Schritte, bei denen es nichts abzuwägen gibt (z. B. die UAC-Abfrage starten).
+    /// </summary>
+    public async ValueTask<bool> AcknowledgeAsync(string question, TimeSpan? timeout = null)
+    {
+        return await this.Events.AskAsync(this.Events.Choice<OkCancelOptions>(question, timeout, keyPress: true))
+            == OkCancelOptions.Ok;
+    }
+
+    /// <summary>
     /// Freitext-Eingabe, die <c>await</c>en kann; <c>null</c> = keine Eingabe.
     /// </summary>
     public ValueTask<string?> PromptAsync(string question, TimeSpan? timeout = null)

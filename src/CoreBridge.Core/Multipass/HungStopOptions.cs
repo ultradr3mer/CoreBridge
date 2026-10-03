@@ -9,7 +9,7 @@ namespace CoreBridge.Core.Multipass;
 /// </summary>
 public enum HungStopOptions
 {
-    [OptionDef("multipassd jetzt hart beenden", "k,kill", [Keys.K])]
+    [OptionDef("multipassd jetzt hart beenden", "k,kill", [Keys.Enter])]
     Kill,
 
     [OptionDef("Abbrechen", "a,abbrechen", [Keys.Esc])]

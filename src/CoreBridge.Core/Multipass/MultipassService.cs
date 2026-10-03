@@ -63,6 +63,11 @@ public class MultipassService
     /// sobald ein Schritt Rechte braucht, die der Benutzer nicht hat — vorab, wenn
     /// er den Dienst gar nicht steuern darf (dann ohne jeden Eingriff), oder
     /// mitten im Ablauf, z. B. beim harten Beenden des als SYSTEM laufenden Daemons.
+    /// Ein Neustart gilt erst, wenn kein alter <c>multipassd</c> mehr läuft: der Dienst
+    /// kann Stopped (oder schon wieder Running) melden, während der alte Prozess noch
+    /// lebt und den Socket hält — dann hängt jedes <c>multipass list</c>. Solche
+    /// Prozesse werden abgewartet und, wenn sie bleiben, hart beendet; am Ende muss
+    /// der Dienst unter einer neuen PID laufen.
     /// </summary>
     /// <param name="confirm">Ja/Nein-Rückfrage an den Benutzer; <c>true</c> = Ja.</param>
     /// <param name="offerWhileStopping">
@@ -74,7 +79,7 @@ public class MultipassService
     /// <see cref="OperationCanceledException"/> ab. Endet das Warten unbeantwortet, schließt
     /// der Dienst es mit der Standardantwort.
     /// </param>
-    /// <param name="killNow">Gar nicht erst warten, sondern gleich beenden (erhöhtes Fenster nach <c>k</c>).</param>
+    /// <param name="killNow">Gar nicht erst warten, sondern gleich beenden (erhöhtes Fenster nach Enter im Angebot).</param>
     /// <param name="acceptRejectedClient">Siehe <see cref="IsDaemonResponding"/>.</param>
     public async IAsyncEnumerable<string> Restart(
         TimeSpan timeout,
@@ -92,6 +97,10 @@ public class MultipassService
 
         var state = QueryState();
         yield return $"Service {ServiceName}: {state}";
+
+        // PID vor dem Neustart: danach muss der Dienst unter einer anderen laufen.
+        var oldProcessId = state == MultipassServiceState.Stopped ? 0 : QueryProcessId();
+        var killChosen = killNow;
 
         // PID, unter der der Dienst nach dem harten Beenden schon wieder läuft
         // (Wiederherstellungsaktion des Dienststeuerungs-Managers); 0 = nicht neu gestartet.
@@ -127,6 +136,7 @@ public class MultipassService
                         }
 
                         kill = answer == HungStopOptions.Kill;
+                        killChosen |= kill;
                     }
 
                     if (kill)
@@ -222,6 +232,11 @@ public class MultipassService
                 : $"Service {ServiceName} wurde automatisch neu gestartet (PID {restartedProcessId}).";
         }
 
+        await foreach (var line in EndStrayDaemons(restartedProcessId, killChosen, confirm, cancellationToken))
+        {
+            yield return line;
+        }
+
         if (restartedProcessId == 0)
         {
             yield return "Starte Service ...";
@@ -248,6 +263,116 @@ public class MultipassService
             waited => confirm($"Der Daemon antwortet nach {waited.TotalSeconds:F0} s noch nicht auf `multipass version` — weiter warten?")))
         {
             yield return line;
+        }
+
+        var newProcessId = QueryProcessId();
+        if (oldProcessId != 0 && newProcessId == oldProcessId)
+        {
+            throw new MultipassException(
+                $"Neustart unwirksam: {DaemonProcessName} läuft weiter unter PID {oldProcessId}.");
+        }
+
+        var strays = StrayDaemons(newProcessId);
+        if (strays.Count > 0)
+        {
+            throw new MultipassException(
+                $"Neben dem Dienst (PID {newProcessId}) läuft noch {DaemonProcessName} (PID {string.Join(", ", strays)}) — Prozess beenden, dann erneut `cb multipass-restart`.");
+        }
+
+        yield return oldProcessId == 0
+            ? $"{DaemonProcessName}: PID {newProcessId}"
+            : $"{DaemonProcessName}: PID {oldProcessId} → {newProcessId}";
+    }
+
+    /// <summary>
+    /// Wartet, bis außer <paramref name="serviceProcessId"/> (0 = Dienst gestoppt) kein
+    /// <c>multipassd</c> mehr läuft. Bleibt einer länger als die Kill-Wartezeit, wird er
+    /// hart beendet — ohne Rückfrage, wenn der Benutzer das Beenden schon gewählt hat
+    /// (<paramref name="killWithoutAsking"/>), sonst nach <paramref name="confirm"/>.
+    /// </summary>
+    private async IAsyncEnumerable<string> EndStrayDaemons(
+        int serviceProcessId,
+        bool killWithoutAsking,
+        Func<string, bool> confirm,
+        [EnumeratorCancellation] CancellationToken cancellationToken)
+    {
+        if (StrayDaemons(serviceProcessId).Count == 0)
+        {
+            yield break;
+        }
+
+        // Der Dienst meldet den Stop oft, bevor der alte Prozess wirklich weg ist.
+        yield return $"Warte, bis der alte {DaemonProcessName} beendet ist ...";
+        await foreach (var line in WaitForNoStrays(serviceProcessId, cancellationToken))
+        {
+            yield return line;
+        }
+
+        var strays = StrayDaemons(serviceProcessId);
+        if (strays.Count == 0)
+        {
+            yield return "OK";
+            yield break;
+        }
+
+        var ids = string.Join(", ", strays);
+        yield return $"{DaemonProcessName} (PID {ids}) läuft nach {_killTimeout.TotalSeconds:F0} s noch.";
+        if (!killWithoutAsking && !confirm($"Alten Daemon-Prozess {DaemonProcessName} (PID {ids}) hart beenden?"))
+        {
+            throw new MultipassException(
+                $"Abgebrochen — {DaemonProcessName} (PID {ids}) läuft weiter und hält den Daemon-Socket; ein neuer Dienst antwortet so nicht.");
+        }
+
+        foreach (var processId in strays)
+        {
+            KillProcess(processId);
+            yield return $"Beendet: PID {processId}";
+        }
+
+        await foreach (var line in WaitForNoStrays(serviceProcessId, cancellationToken))
+        {
+            yield return line;
+        }
+
+        strays = StrayDaemons(serviceProcessId);
+        if (strays.Count > 0)
+        {
+            throw new MultipassException(
+                $"{DaemonProcessName} (PID {string.Join(", ", strays)}) läuft auch nach dem harten Beenden weiter. "
+                    + "Hängende Hyper-V-VMs mit `Stop-VM -TurnOff` ausschalten oder den Rechner neu starten.");
+        }
+    }
+
+    private async IAsyncEnumerable<string> WaitForNoStrays(
+        int serviceProcessId,
+        [EnumeratorCancellation] CancellationToken cancellationToken)
+    {
+        var watch = Stopwatch.StartNew();
+        while (StrayDaemons(serviceProcessId).Count > 0 && watch.Elapsed < _killTimeout)
+        {
+            await Task.Delay(_pollInterval, cancellationToken);
+            yield return Progress.ProgressTick;
+        }
+    }
+
+    /// <summary>Alle <c>multipassd</c> außer dem des Dienstes.</summary>
+    private List<int> StrayDaemons(int serviceProcessId) =>
+        FindDaemonProcesses().Where(processId => processId != serviceProcessId).ToList();
+
+    /// <summary>PIDs aller laufenden <c>multipassd</c> (Prozessliste, ohne Handle — geht auch für SYSTEM-Prozesse ohne Adminrechte).</summary>
+    public virtual IReadOnlyList<int> FindDaemonProcesses()
+    {
+        var processes = Process.GetProcessesByName(DaemonProcessName);
+        try
+        {
+            return processes.Select(process => process.Id).ToList();
+        }
+        finally
+        {
+            foreach (var process in processes)
+            {
+                process.Dispose();
+            }
         }
     }
 

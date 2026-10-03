@@ -48,4 +48,19 @@ public class MultipassVmListTests
         Assert.Single(vms);
         Assert.Equal("10.0.0.5", Assert.Single(vms[0].Ipv4));
     }
+
+    [Theory]
+    [InlineData("Running", "N/A", true)]
+    [InlineData("Running", "", true)]
+    [InlineData("Running", "10.0.0.5", false)]
+    [InlineData("Starting", "N/A", true)]
+    [InlineData("Unknown", "", true)]
+    [InlineData("Stopped", "N/A", false)]
+    public void NeedsForceStop_UebergangOderLaufendOhneIpv4(string state, string ipv4, bool expected)
+    {
+        var vm = new VmInfo("x", state, ipv4.Length == 0 ? [] : [ipv4]);
+
+        Assert.Equal(expected, vm.NeedsForceStop);
+        Assert.Equal(state == "Running" && expected, vm.IsUnreachable);
+    }
 }

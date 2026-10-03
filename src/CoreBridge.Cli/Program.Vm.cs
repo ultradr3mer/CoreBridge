@@ -259,8 +259,8 @@ public static partial class Program
       return;
     }
 
-    if (vm.IsTransitional
-        && !await context.ConfirmAsync($"VM `{name}` is {vm.State} — Multipass can only power it off (--force). Power it off?"))
+    if (vm.NeedsForceStop
+        && !await context.ConfirmAsync($"VM `{name}` is {Describe(vm)} — Multipass can only power it off (--force). Power it off?"))
     {
       throw new ProgramExecutionException(1, $"Cancelled — VM `{name}` was not stopped (State: {vm.State}).");
     }
@@ -269,13 +269,13 @@ public static partial class Program
   }
 
   /// <summary>
-  /// Stoppt die VM; in Übergangszuständen (<see cref="VmInfo.IsTransitional"/>)
-  /// mit <c>--force</c>, weil Multipass den normalen Stop dort ablehnt. Die
-  /// Rückfrage dazu stellt der Aufrufer.
+  /// Stoppt die VM; in Übergangszuständen und ohne IPv4
+  /// (<see cref="VmInfo.NeedsForceStop"/>) mit <c>--force</c>, weil Multipass den
+  /// normalen Stop dort ablehnt oder hängt. Die Rückfrage dazu stellt der Aufrufer.
   /// </summary>
   private static Task StopVm(CommandContext context, VmInfo vm)
   {
-    var force = vm.IsTransitional;
+    var force = vm.NeedsForceStop;
     var label = force ? $"stop --force {vm.Name}" : $"stop {vm.Name}";
     return RunVmStateCommand(
         context,
@@ -283,6 +283,10 @@ public static partial class Program
         label,
         () => context.Vms.Stop(vm.Name, context.DefaultTimeoutMs, KeepWaiting(context, label), force));
   }
+
+  /// <summary>Zustand für Rückfragen; eine laufende VM ohne IPv4 heißt unerreichbar.</summary>
+  private static string Describe(VmInfo vm) =>
+      vm.IsUnreachable ? $"{vm.State} but unreachable (no IPv4)" : vm.State ?? "Unknown";
 
   /// <summary>
   /// Löscht die VM (in den Papierkorb oder mit <c>--purge</c> endgültig). Vor dem

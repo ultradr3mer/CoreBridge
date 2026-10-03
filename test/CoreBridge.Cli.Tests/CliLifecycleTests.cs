@@ -39,15 +39,16 @@ public sealed class CliLifecycleTests
     /// Ebnet das Feld für die folgenden Stufen, je nach vorgefundenem Zustand:
     /// <list type="bullet">
     /// <item>Antwortet der Daemon nicht (vm-list scheitert), wird er neu gestartet.</item>
-    /// <item>Steht die Test-VM in einem Übergangszustand (<c>Unknown</c>, <c>Starting</c> …),
-    /// hängt der Daemon meist an ihr — dann antwortet schon das nächste vm-list nicht
-    /// mehr. Deshalb zuerst neu starten und den Zustand neu einlesen.</item>
-    /// <item>Steht die Test-VM noch da (früherer, abgebrochener Lauf), wird sie gestoppt,
-    /// endgültig gelöscht und der Daemon danach neu gestartet — sonst kann er Aufgaben
-    /// zur gelöschten VM halten (z. B. das „Waiting for SSH“ seines Starts) und mit ihnen
-    /// die neue VM gleichen Namens treffen (beobachtet: <c>Save-VM</c> mitten im Launch,
-    /// obwohl die alte VM beim Löschen Stopped war). Ob der Daemon so eine Aufgabe hält,
-    /// verrät der Zustand der VM nicht.</item>
+    /// <item>Steht die Test-VM noch da (früherer, abgebrochener Lauf), gleich in welchem
+    /// Zustand: Daemon neu starten, VM endgültig löschen, Daemon neu starten.
+    /// Der erste Neustart löst den Daemon von der VM — in einem Übergangszustand
+    /// (<c>Unknown</c>, <c>Starting</c> …) oder <c>Running</c> ohne IPv4 hängt er meist an
+    /// ihr. vm-delete stoppt eine laufende VM selbst, ohne IPv4 hart (<c>--force</c>).
+    /// Der zweite Neustart verwirft Aufgaben, die der Daemon zur gelöschten VM noch hält
+    /// (z. B. das „Waiting for SSH“ ihres Starts) und sonst die neue VM gleichen Namens
+    /// träfen (beobachtet: <c>Save-VM</c> mitten im Launch, obwohl die alte VM beim
+    /// Löschen Stopped war). Ob der Daemon so eine Aufgabe hält, verrät der Zustand der
+    /// VM nicht.</item>
     /// </list>
     /// Zum Schluss muss <c>multipass-status</c> einen gesunden Daemon melden.
     /// </summary>
@@ -62,29 +63,21 @@ public sealed class CliLifecycleTests
         }
 
         var state = CliLifecycleFixture.FindVmState(list, fixture.VmName);
-        if (IsTransitional(state))
-        {
-            output.WriteLine($"Ausgangslage: VM `{fixture.VmName}` ist {state} — der Daemon hängt vermutlich an ihr, zuerst neu starten.");
-            list = await RestartAndListAsync();
-            state = CliLifecycleFixture.FindVmState(list, fixture.VmName);
-        }
-
         if (state is not null)
         {
-            output.WriteLine($"Ausgangslage: VM `{fixture.VmName}` ist noch da ({state}) — stoppen, löschen, Daemon neu starten.");
-            if (state is not ("Stopped" or "Deleted"))
+            output.WriteLine($"Ausgangslage: VM `{fixture.VmName}` ist noch da ({state}) — Daemon neu starten, löschen, Daemon neu starten.");
+            list = await RestartAndListAsync();
+            state = CliLifecycleFixture.FindVmState(list, fixture.VmName);
+            if (state is not null)
             {
-                var stop = IsTransitional(state)
-                    ? await fixture.RunAsync(
-                        new VmStopOptions { Name = fixture.VmName },
+                var delete = state is "Stopped" or "Deleted"
+                    ? await fixture.RunAsync(new VmDeleteOptions { Name = fixture.VmName, Purge = true }, output.WriteLine)
+                    : await fixture.RunAsync(
+                        new VmDeleteOptions { Name = fixture.VmName, Purge = true },
                         output.WriteLine,
-                        Cli.Asks("Multipass can only power it off (--force). Power it off?").TestInputs("y"))
-                    : await fixture.RunAsync(new VmStopOptions { Name = fixture.VmName }, output.WriteLine);
-                CliLifecycleFixture.AssertCompleted(stop, $"stop{(IsTransitional(state) ? " --force" : string.Empty)} {fixture.VmName}", "Stopped");
+                        Cli.Asks("stop and delete it?").TestInputs("y"));
+                CliLifecycleFixture.AssertCompleted(delete, $"delete {fixture.VmName} --purge", "nicht vorhanden");
             }
-
-            var delete = await fixture.RunAsync(new VmDeleteOptions { Name = fixture.VmName, Purge = true }, output.WriteLine);
-            CliLifecycleFixture.AssertCompleted(delete, $"delete {fixture.VmName} --purge", "nicht vorhanden");
 
             await RestartDaemonAsync();
         }
@@ -92,10 +85,6 @@ public sealed class CliLifecycleTests
         var status = await fixture.RunAsync(new MultipassStatusOptions(), output.WriteLine);
         CliLifecycleFixture.AssertSucceeded(status);
     }
-
-    /// <summary>Weder Running noch Stopped noch im Papierkorb — Multipass stoppt so eine VM nur mit <c>--force</c>.</summary>
-    private static bool IsTransitional(string? state) =>
-        state is not (null or "Running" or "Stopped" or "Deleted");
 
     private async Task<CliRunResult> RestartAndListAsync()
     {
@@ -119,7 +108,7 @@ public sealed class CliLifecycleTests
             : await fixture.RunAsync(
                 new MultipassRestartOptions(),
                 output.WriteLine,
-                Cli.Asks("Mit Administratorrechten in einem neuen Fenster fortfahren?").TestInputs("y"));
+                Cli.Asks("Mit Administratorrechten in einem neuen Fenster fortfahren?").TestInputs("ok"));
         CliLifecycleFixture.AssertSucceeded(restart);
     }
 

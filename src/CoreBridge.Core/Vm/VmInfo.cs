@@ -16,5 +16,18 @@ public sealed record VmInfo(string Name, string? State, IReadOnlyList<string> Ip
     /// </summary>
     public bool IsTransitional => !IsRunning && !IsStopped && !IsDeleted;
 
+    /// <summary>Mindestens eine echte IPv4 (Multipass meldet sonst <c>N/A</c> oder nichts).</summary>
+    public bool HasAddress => Ipv4.Any(ip => !string.IsNullOrWhiteSpace(ip) && !string.Equals(ip, "N/A", StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>
+    /// Läuft laut Multipass, ist aber ohne IPv4 nicht erreichbar: der normale
+    /// <c>multipass stop</c> fährt über SSH herunter und hängt dann (beobachtet:
+    /// VM nach dem Launch dauerhaft <c>Running</c>/<c>N/A</c>).
+    /// </summary>
+    public bool IsUnreachable => IsRunning && !HasAddress;
+
+    /// <summary>Nur <c>stop --force</c> (hart ausschalten) bringt diese VM sicher herunter.</summary>
+    public bool NeedsForceStop => IsTransitional || IsUnreachable;
+
     private bool Is(string state) => string.Equals(State, state, StringComparison.OrdinalIgnoreCase);
 }
