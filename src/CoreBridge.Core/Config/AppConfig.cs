@@ -128,6 +128,12 @@ public sealed record ComponentConfig
     /// <summary>Benutzer, als der das Skript installiert bzw. seine Postconditions ausführt.</summary>
     public string InstallUser { get; init; } = "ubuntu";
 
+    /// <summary>
+    /// Dateimuster, an denen <c>repo-match</c> erkennt, dass ein Repository diese Komponente
+    /// braucht, z. B. <c>*.csproj</c> oder <c>package.json</c> (Dateiname, irgendwo im Repo).
+    /// </summary>
+    public string[] Detect { get; init; } = [];
+
     /// <summary>Hat die Komponente ein Skript (inline oder als Pfad)?</summary>
     [System.Text.Json.Serialization.JsonIgnore]
     public bool HasScript => !string.IsNullOrWhiteSpace(ScriptContent) || !string.IsNullOrWhiteSpace(Script);

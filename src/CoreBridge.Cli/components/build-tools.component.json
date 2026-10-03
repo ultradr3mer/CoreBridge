@@ -1,0 +1,22 @@
+{
+  "Inits": {
+    "Components": {
+      "build-tools": {
+        "ScriptContent": "#!/bin/bash\nset -Eeuo pipefail\n\n# Prüft die Build-Werkzeuge, die cloud-init als Pakete installiert hat\n# (build-essential, cmake, pkg-config).\n\ninstall_user=\"${1:-ubuntu}\"\nif ! getent passwd \"$install_user\" >/dev/null; then\n    echo \"Benutzer '$install_user' fehlt.\" >&2\n    exit 1\nfi\n\nsudo -u \"$install_user\" -H bash -c 'gcc --version && make --version && cmake --version && pkg-config --version' >/dev/null\n\ninstall -d /var/lib/corebridge\ntouch /var/lib/corebridge/build-tools.ready\n",
+        "InstallPath": "/usr/local/sbin/corebridge-install-build-tools",
+        "Packages": [
+          "build-essential",
+          "cmake",
+          "pkg-config"
+        ],
+        "PackageUpdate": true,
+        "InstallUser": "ubuntu",
+        "Detect": [
+          "CMakeLists.txt",
+          "Makefile",
+          "meson.build"
+        ]
+      }
+    }
+  }
+}

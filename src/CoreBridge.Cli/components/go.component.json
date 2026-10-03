@@ -1,0 +1,22 @@
+{
+  "Inits": {
+    "Components": {
+      "go": {
+        "ScriptContent": "#!/bin/bash\nset -Eeuo pipefail\n\n# Installiert die aktuelle Go-Version von go.dev nach /usr/local/go und\n# verlinkt go/gofmt nach /usr/local/bin.\n\ninstall_user=\"${1:-ubuntu}\"\nif ! getent passwd \"$install_user\" >/dev/null; then\n    echo \"Benutzer '$install_user' fehlt.\" >&2\n    exit 1\nfi\n\ncase \"$(dpkg --print-architecture)\" in\n    amd64) arch=amd64 ;;\n    arm64) arch=arm64 ;;\n    *) echo \"Architektur $(dpkg --print-architecture) wird nicht unterstützt.\" >&2; exit 1 ;;\nesac\n\nversion=\"$(curl -fsSL 'https://go.dev/VERSION?m=text' | head -n 1)\"\nif [[ ! \"$version\" =~ ^go[0-9]+\\.[0-9]+ ]]; then\n    echo \"Unerwartete Antwort von go.dev: '$version'.\" >&2\n    exit 1\nfi\n\nif [[ \"$(/usr/local/go/bin/go env GOVERSION 2>/dev/null || true)\" != \"$version\" ]]; then\n    archive=\"$(mktemp)\"\n    curl -fsSL \"https://go.dev/dl/${version}.linux-${arch}.tar.gz\" -o \"$archive\"\n    rm -rf /usr/local/go\n    tar -C /usr/local -xzf \"$archive\"\n    rm -f \"$archive\"\nfi\n\nln -sfn /usr/local/go/bin/go /usr/local/bin/go\nln -sfn /usr/local/go/bin/gofmt /usr/local/bin/gofmt\n\nsudo -u \"$install_user\" -H bash -c 'go version'\n\ninstall -d /var/lib/corebridge\ntouch /var/lib/corebridge/go.ready\n",
+        "InstallPath": "/usr/local/sbin/corebridge-install-go",
+        "Packages": [
+          "bash",
+          "ca-certificates",
+          "curl",
+          "sudo",
+          "tar"
+        ],
+        "PackageUpdate": true,
+        "InstallUser": "ubuntu",
+        "Detect": [
+          "go.mod"
+        ]
+      }
+    }
+  }
+}

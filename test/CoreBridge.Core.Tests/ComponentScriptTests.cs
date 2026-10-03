@@ -72,6 +72,73 @@ public class ComponentScriptTests
         Assert.DoesNotContain("authorized_keys", yaml);
     }
 
+    public static TheoryData<string> ShippedBundles()
+    {
+        var data = new TheoryData<string>();
+        foreach (var file in ComponentCatalog.Bundles(InitStore.ResolvePath("src/CoreBridge.Cli/components")))
+        {
+            data.Add(ComponentCatalog.BundleName(file));
+        }
+
+        return data;
+    }
+
+    /// <summary>
+    /// Jedes mitgelieferte Bundle: genau seine Komponente, Skript inline mit
+    /// <c>set -Eeuo pipefail</c>, Installationsbenutzer als <c>$1</c>, eigener Marker,
+    /// gültige cloud-init — und der Simulator erkennt den Marker nach dem Launch.
+    /// </summary>
+    [Theory]
+    [MemberData(nameof(ShippedBundles))]
+    public void BundleRendertUndSetztSeinenMarker(string name)
+    {
+        var config = WithBundles(LoadShippedInitsConfig());
+        var component = config.Components[name];
+
+        Assert.Null(component.Script);
+        Assert.StartsWith("#!/bin/bash\nset -Eeuo pipefail\n", component.ScriptContent);
+        Assert.Contains("install_user=\"${1:-ubuntu}\"", component.ScriptContent);
+        Assert.Equal($"/usr/local/sbin/corebridge-install-{name}", component.InstallPath);
+
+        var yaml = InitCloudInit.Generate("agent", config, [name]);
+        Assert.Contains($"- ['{component.InstallPath}', 'ubuntu']", yaml);
+        Assert.Contains($"touch /var/lib/corebridge/{name}.ready", yaml);
+        Assert.Equal([(name, $"/var/lib/corebridge/{name}.ready")], InitInstall.Markers(config, [name]));
+
+        using var temp = new TempDirectory();
+        var cloudInit = Path.Combine(temp.Path, "cloud-init.yaml");
+        File.WriteAllText(cloudInit, yaml);
+        var vms = new CoreBridge.Core.Vm.VmService(CoreBridge.Simulation.SimulatedMultipassCli.At(Path.Combine(temp.Path, "sim", "state.json"), TimeSpan.Zero));
+        vms.Create("sim-a", "daily:26.10", cloudInitPath: cloudInit);
+        Assert.Equal(0, vms.Exec("sim-a", InitInstall.MarkerProbe($"/var/lib/corebridge/{name}.ready")).ExitCode);
+    }
+
+    [Fact]
+    public void AlleKomponentenMitBundlesSindKombinierbar()
+    {
+        var config = WithBundles(LoadShippedInitsConfig());
+
+        var yaml = InitCloudInit.Generate("all", config, config.Components.Keys);
+
+        Assert.True(config.Components.Count >= 16, $"nur {config.Components.Count} Komponenten");
+    }
+
+    private static InitsConfig WithBundles(InitsConfig config)
+    {
+        var components = new Dictionary<string, ComponentConfig>(config.Components, StringComparer.OrdinalIgnoreCase);
+        foreach (var file in ComponentCatalog.Bundles(InitStore.ResolvePath("src/CoreBridge.Cli/components")))
+        {
+            var entries = ComponentCatalog.ParseComponents(File.ReadAllBytes(file), file);
+            ComponentCatalog.RequireBundleShape(file, entries);
+            foreach (var (name, component) in entries)
+            {
+                components.Add(name, component);
+            }
+        }
+
+        return config with { Components = components };
+    }
+
     private static InitsConfig LoadShippedInitsConfig()
     {
         var path = InitStore.ResolvePath("src/CoreBridge.Cli/appsettings.json");

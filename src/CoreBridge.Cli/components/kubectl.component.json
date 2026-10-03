@@ -1,0 +1,17 @@
+{
+  "Inits": {
+    "Components": {
+      "kubectl": {
+        "Snap": "kubectl",
+        "Classic": true,
+        "ScriptContent": "#!/bin/bash\nset -Eeuo pipefail\n\n# kubectl kommt als Snap (classic); hier nur die Postcondition und der Marker.\n\ninstall_user=\"${1:-ubuntu}\"\nif ! getent passwd \"$install_user\" >/dev/null; then\n    echo \"Benutzer '$install_user' fehlt.\" >&2\n    exit 1\nfi\n\nln -sfn /snap/bin/kubectl /usr/local/bin/kubectl\nsudo -u \"$install_user\" -H bash -c 'kubectl version --client'\n\ninstall -d /var/lib/corebridge\ntouch /var/lib/corebridge/kubectl.ready\n",
+        "InstallPath": "/usr/local/sbin/corebridge-install-kubectl",
+        "InstallUser": "ubuntu",
+        "Detect": [
+          "kustomization.yaml",
+          "Chart.yaml"
+        ]
+      }
+    }
+  }
+}
