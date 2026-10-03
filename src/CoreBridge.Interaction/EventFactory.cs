@@ -14,6 +14,7 @@ public sealed class EventFactory
     private readonly ChannelWriter<CliEvent> writer;
     private readonly Stopwatch clock = Stopwatch.StartNew();
     private readonly HashSet<IOpenInteraction> open = [];
+    private readonly List<string> secrets = [];
 
     /// <param name="writer">Kanal zum Konsumenten; der Erzeuger (CLI, TUI) legt ihn je Kommando an.</param>
     public EventFactory(ChannelWriter<CliEvent> writer)
@@ -32,6 +33,49 @@ public sealed class EventFactory
     public ErrEvent Err(string data) => new(this.Elapsed, data);
 
     public ProgressEvent Tick() => new(this.Elapsed);
+
+    /// <summary>Eine Diagnosezeile (Einstellung, Systemeingriff, Entscheidung); siehe <see cref="DiagnosticEvent"/>.</summary>
+    public DiagnosticEvent Diagnostic(string data) => new(this.Elapsed, this.Redact(data));
+
+    /// <summary>
+    /// Ein beendeter Werkzeugaufruf; Argumente und Ausgabe ohne die Geheimnisse aus
+    /// <see cref="AddSecret"/>.
+    /// </summary>
+    public ToolCallEvent ToolCall(
+        string tool,
+        IEnumerable<string> args,
+        int? exitCode,
+        TimeSpan duration,
+        string? stdOut,
+        string? stdErr,
+        string? note = null) =>
+        new(
+            this.Elapsed,
+            tool,
+            args.Select(this.Redact).ToArray(),
+            exitCode,
+            duration,
+            this.Redact(stdOut ?? string.Empty),
+            this.Redact(stdErr ?? string.Empty),
+            note is null ? null : this.Redact(note));
+
+    /// <summary>
+    /// Ersetzt <paramref name="secret"/> ab jetzt in jedem Diagnose-Ereignis durch <c>***</c>
+    /// (die Passphrase von <c>multipass-store</c>) — bevor es den Kanal erreicht, damit kein
+    /// Konsument es zu sehen bekommt.
+    /// </summary>
+    public void AddSecret(string secret)
+    {
+        if (string.IsNullOrEmpty(secret))
+        {
+            return;
+        }
+
+        lock (this.secrets)
+        {
+            this.secrets.Add(secret);
+        }
+    }
 
     /// <summary>
     /// Fortschrittspunkt, der eine offene Auswahl trägt (siehe <see cref="ProgressEvent.Offer"/>).
@@ -99,6 +143,16 @@ public sealed class EventFactory
     }
 
     /// <summary>
+    /// Wie <see cref="Emit"/>, aber synchron — für Code aus CoreBridge.Core, der auf einem
+    /// Threadpool-Thread läuft und nicht <c>await</c>en kann (Werkzeugaufrufe). Der Kanal ist
+    /// unbeschränkt; nach dem Ende des Kommandos geht das Ereignis verloren.
+    /// </summary>
+    public void Post(CliEvent cliEvent)
+    {
+        this.writer.TryWrite(cliEvent);
+    }
+
+    /// <summary>
     /// Bricht alle noch offenen Rückfragen ab (z. B. bei Strg+C), damit keine
     /// wartende Seite hängen bleibt.
     /// </summary>
@@ -125,6 +179,14 @@ public sealed class EventFactory
         throw new InvalidOperationException(
             $"{this.open.Count} Rückfrage(n) wurden nie beantwortet: "
             + string.Join("; ", this.open.Select(interaction => interaction.ToString())));
+    }
+
+    private string Redact(string text)
+    {
+        lock (this.secrets)
+        {
+            return this.secrets.Aggregate(text, (redacted, secret) => redacted.Replace(secret, "***", StringComparison.Ordinal));
+        }
     }
 
     private TEvent Track<TEvent>(TEvent interaction) where TEvent : IOpenInteraction

@@ -6,7 +6,9 @@ namespace CoreBridge.Cli;
 /// <summary>
 /// Protokoll jedes CLI-Aufrufs in <c>&lt;StoreRoot&gt;/logs/cli-&lt;Datum&gt;.log</c> (in
 /// Development also <c>&lt;Repo&gt;/artifacts/logs</c>): Argumente, jede Ausgabezeile, jede
-/// Rückfrage samt Antwort, Fehler und Exit-Code. Ein erhöhtes Fenster schreibt in dieselbe
+/// Rückfrage samt Antwort, Fehler und Exit-Code, dazu das Innenleben aus den
+/// <see cref="DiagnosticEvent"/>s — jeder Werkzeugaufruf (<see cref="ToolCallEvent"/>) mit
+/// Kommandozeile, Ergebnis, stdout und stderr. Ein erhöhtes Fenster schreibt in dieselbe
 /// Datei; die PID in jeder Zeile hält die Fenster auseinander. Fortschritts-Ticks fehlen
 /// (nur Rauschen), Freitext-Antworten stehen nur mit ihrer Länge darin. Das Protokoll darf
 /// die CLI nie stören: lässt sich die Datei nicht öffnen oder schreiben, entfällt es still.
@@ -21,6 +23,11 @@ public sealed class CommandLog : IDisposable
     private readonly string? path;
     private readonly Mutex? mutex;
     private readonly int processId = Environment.ProcessId;
+    private string? lastToolCall;
+    private int toolCallRepeats;
+
+    /// <summary>Höchstens so viele Zeichen je Ausgabestrom eines Werkzeugaufrufs; der Rest wird nur gezählt.</summary>
+    public const int MaxStreamLength = 16_000;
 
     private CommandLog(string? path)
     {
@@ -63,9 +70,16 @@ public sealed class CommandLog : IDisposable
     {
         await foreach (var cliEvent in events.WithCancellation(cancellationToken))
         {
-            if (cliEvent is not ProgressEvent)
+            switch (cliEvent)
             {
-                this.Write(Kind(cliEvent), cliEvent.Printable);
+                case ProgressEvent:
+                    break;
+                case ToolCallEvent call:
+                    this.WriteToolCall(call);
+                    break;
+                default:
+                    this.Write(Kind(cliEvent), cliEvent.Printable);
+                    break;
             }
 
             yield return cliEvent;
@@ -82,9 +96,64 @@ public sealed class CommandLog : IDisposable
                     break;
             }
         }
+
+        this.FlushRepeats();
     }
 
+    /// <summary>
+    /// Kommandozeile, Ergebnis, stdout, stderr. Derselbe Aufruf mit derselben Antwort direkt
+    /// hintereinander (Polling: <c>sc queryex</c> alle 500 ms) steht nur einmal da, plus eine Zählzeile.
+    /// </summary>
+    private void WriteToolCall(ToolCallEvent call)
+    {
+        // Dauer gehört nicht zur Gleichheit: dieselbe Abfrage mit derselben Antwort ist auch nach 12 statt 15 ms dieselbe.
+        var key = string.Join("\n", call.CommandLine, call.ExitCode, call.Note, call.StdOut, call.StdErr);
+        if (key == this.lastToolCall)
+        {
+            this.toolCallRepeats++;
+            return;
+        }
+
+        this.FlushRepeats();
+        this.lastToolCall = key;
+        this.Append("aufruf", call.CommandLine);
+        this.Append("ergebn", call.Result);
+        this.WriteStream("  out", call.StdOut);
+        this.WriteStream("  err", call.StdErr);
+    }
+
+    private void WriteStream(string kind, string text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return;
+        }
+
+        var trimmed = text.TrimEnd();
+        this.Append(kind, trimmed.Length > MaxStreamLength
+            ? trimmed[..MaxStreamLength] + $"\n… ({trimmed.Length - MaxStreamLength} weitere Zeichen ausgelassen)"
+            : trimmed);
+    }
+
+    private void FlushRepeats()
+    {
+        if (this.toolCallRepeats > 0)
+        {
+            this.Append("ergebn", $"(derselbe Aufruf mit derselben Antwort noch {this.toolCallRepeats}× wiederholt)");
+            this.toolCallRepeats = 0;
+        }
+
+        this.lastToolCall = null;
+    }
+
+    /// <summary>Eine Zeile (mehrzeiliger Text: je Zeile ein Eintrag); vorher die Zählzeile offener Wiederholungen.</summary>
     public void Write(string kind, string text)
+    {
+        this.FlushRepeats();
+        this.Append(kind, text);
+    }
+
+    private void Append(string kind, string text)
     {
         if (this.path is null || this.mutex is null)
         {
@@ -116,6 +185,18 @@ public sealed class CommandLog : IDisposable
         }
     }
 
+    /// <summary>
+    /// Die Ursache hinter einer fertigen Fehlermeldung (<see cref="Exception.InnerException"/>,
+    /// samt Stacktrace): die Meldung für den Benutzer verschweigt sie oft.
+    /// </summary>
+    public void WriteCause(Exception exception)
+    {
+        if (exception.InnerException is { } cause)
+        {
+            this.Write("ursache", cause.ToString());
+        }
+    }
+
     public void Dispose()
     {
         this.mutex?.Dispose();
@@ -126,6 +207,7 @@ public sealed class CommandLog : IDisposable
         IChoiceInteraction => "frage",
         TextEvent => "eingabe",
         ErrEvent => "stderr",
+        DiagnosticEvent => "info",
         _ => "stdout"
     };
 

@@ -85,3 +85,74 @@ public class ProgressEvent : CliEvent
     /// <summary>Die während des Wartens offene Auswahl, <c>null</c> = reiner Fortschritt.</summary>
     public IChoiceInteraction? Offer { get; }
 }
+
+/// <summary>
+/// Innenleben eines Kommandos (Diagnose-Ausgabe neben stdout und stderr): Einstellungen,
+/// Eingriffe ins System, Entscheidungen. Die Konsole zeigt es nicht; das CLI-Protokoll
+/// schreibt es mit, und jeder andere Konsument entscheidet selbst.
+/// </summary>
+public class DiagnosticEvent : CliEvent
+{
+    public DiagnosticEvent(TimeSpan emissionTime, string printable)
+        : base(emissionTime, printable)
+    {
+    }
+}
+
+/// <summary>
+/// Ein beendeter Aufruf eines externen Werkzeugs (multipass, sc, git, UAC-Neustart) mit
+/// Argumenten, Ergebnis und vollständiger Ausgabe. Entsteht, wenn der Aufruf endet;
+/// <see cref="CliEvent.EmissionTime"/> minus <see cref="Duration"/> ist sein Start.
+/// </summary>
+public sealed class ToolCallEvent : DiagnosticEvent
+{
+    public ToolCallEvent(
+        TimeSpan emissionTime,
+        string tool,
+        IReadOnlyList<string> args,
+        int? exitCode,
+        TimeSpan duration,
+        string stdOut,
+        string stdErr,
+        string? note)
+        : base(emissionTime, $"{FormatCommandLine(tool, args)} → {FormatResult(exitCode, duration, note)}")
+    {
+        this.Tool = tool;
+        this.Args = args;
+        this.ExitCode = exitCode;
+        this.Duration = duration;
+        this.StdOut = stdOut;
+        this.StdErr = stdErr;
+        this.Note = note;
+    }
+
+    /// <summary>Das gestartete Programm (Pfad oder Name).</summary>
+    public string Tool { get; }
+
+    public IReadOnlyList<string> Args { get; }
+
+    /// <summary><c>null</c>: kein Exit-Code (Start gescheitert, Timeout, Prozess beendet).</summary>
+    public int? ExitCode { get; }
+
+    public TimeSpan Duration { get; }
+
+    public string StdOut { get; }
+
+    public string StdErr { get; }
+
+    /// <summary>Ergänzung zum Ergebnis, z. B. „Timeout, Prozess beendet“.</summary>
+    public string? Note { get; }
+
+    /// <summary>Die Kommandozeile, Argumente mit Leerzeichen in Anführungszeichen.</summary>
+    public string CommandLine => FormatCommandLine(this.Tool, this.Args);
+
+    /// <summary>Exit-Code, Dauer und Notiz in einer Zeile.</summary>
+    public string Result => FormatResult(this.ExitCode, this.Duration, this.Note);
+
+    private static string FormatCommandLine(string tool, IEnumerable<string> args) =>
+        string.Join(' ', args.Prepend(tool).Select(arg => arg.Length == 0 || arg.Any(char.IsWhiteSpace) ? $"\"{arg}\"" : arg));
+
+    private static string FormatResult(int? exitCode, TimeSpan duration, string? note) =>
+        (exitCode is { } code ? $"Exit {code}" : "kein Exit-Code") + $" nach {duration.TotalMilliseconds:F0} ms"
+        + (note is null ? string.Empty : $" — {note}");
+}
