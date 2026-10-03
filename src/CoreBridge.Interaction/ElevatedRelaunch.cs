@@ -22,8 +22,13 @@ public static class ElevatedRelaunch
     /// sie eingebettet in einem fremden Host (Testhost), wird die CLI neben der
     /// Assembly gestartet.
     /// </summary>
+    /// <param name="events">Optional: erhält den Start und das Ende des erhöhten Fensters als <see cref="ToolCallEvent"/>.</param>
     /// <exception cref="ProgramExecutionException">UAC abgelehnt oder Start fehlgeschlagen.</exception>
-    public static async Task<int> RunAsync(string cliAssemblyPath, IReadOnlyList<string> arguments, CancellationToken cancellationToken)
+    public static async Task<int> RunAsync(
+        string cliAssemblyPath,
+        IReadOnlyList<string> arguments,
+        CancellationToken cancellationToken,
+        EventFactory? events = null)
     {
         var processPath = Environment.ProcessPath
             ?? throw new ProgramExecutionException(1, "Pfad der laufenden CLI unbekannt — erhöhter Neustart nicht möglich.");
@@ -54,6 +59,8 @@ public static class ElevatedRelaunch
             startInfo.ArgumentList.Add(argument);
         }
 
+        var tool = $"{fileName} (UAC runas)";
+        var stopwatch = Stopwatch.StartNew();
         Process? process;
         try
         {
@@ -61,12 +68,16 @@ public static class ElevatedRelaunch
         }
         catch (Win32Exception exception) when (exception.NativeErrorCode == 1223)
         {
+            events?.Post(events.ToolCall(tool, startInfo.ArgumentList, null, stopwatch.Elapsed, null, null, "UAC-Abfrage abgelehnt"));
             throw new ProgramExecutionException(1, "Abgebrochen — Administratorrechte in der UAC-Abfrage abgelehnt.");
         }
 
         using var elevated = process
             ?? throw new ProgramExecutionException(1, "Erhöhter Prozess konnte nicht gestartet werden.");
+        events?.Post(events.Diagnostic($"Erhöhtes Fenster läuft (PID {elevated.Id}): {tool} {string.Join(' ', startInfo.ArgumentList)}"));
         await elevated.WaitForExitAsync(cancellationToken);
+        events?.Post(events.ToolCall(tool, startInfo.ArgumentList, elevated.ExitCode, stopwatch.Elapsed, null, null,
+            $"PID {elevated.Id}, Ausgabe im eigenen Fenster"));
         return elevated.ExitCode;
     }
 

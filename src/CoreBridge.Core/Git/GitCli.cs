@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using CoreBridge.Interaction;
 
 namespace CoreBridge.Core.Git;
 
@@ -12,7 +13,8 @@ public sealed class GitException(string message, Exception? inner = null) : Exce
 /// Führt git auf dem Host aus; <c>GIT_TERMINAL_PROMPT=0</c> verhindert hängende
 /// Passwortfragen. Für Tests überschreibbar (<c>virtual</c>).
 /// </summary>
-public class GitCli
+/// <param name="events">Optional: erhält jeden Aufruf als <see cref="ToolCallEvent"/>.</param>
+public class GitCli(EventFactory? events = null)
 {
     public virtual GitRunResult Run(IReadOnlyList<string> args, string workingDirectory, int timeoutMs = 120_000)
     {
@@ -24,7 +26,7 @@ public class GitCli
             new Dictionary<string, string> { ["GIT_TERMINAL_PROMPT"] = "0" });
     }
 
-    private static GitRunResult Start(
+    private GitRunResult Start(
         string fileName,
         IReadOnlyList<string> args,
         string? workingDirectory,
@@ -62,6 +64,7 @@ public class GitCli
         }
         catch (System.ComponentModel.Win32Exception exception)
         {
+            events?.Post(events.ToolCall(fileName, args, null, stopwatch.Elapsed, null, null, $"Start fehlgeschlagen: {exception.Message}"));
             throw new GitException($"`{fileName}` konnte nicht gestartet werden (installiert und im PATH?).", exception);
         }
 
@@ -79,9 +82,15 @@ public class GitCli
                 // Schon beendet.
             }
 
+            events?.Post(events.ToolCall(fileName, args, null, stopwatch.Elapsed, null, null,
+                $"Timeout nach {timeoutMs / 1000} s in {workingDirectory}, Prozess beendet"));
+
             throw new GitException($"`{Path.GetFileNameWithoutExtension(fileName)} {string.Join(' ', args)}` hat nach {timeoutMs / 1000} s nicht geantwortet (Timeout).");
         }
 
-        return new GitRunResult(process.ExitCode, stdOut.GetAwaiter().GetResult(), stdErr.GetAwaiter().GetResult(), stopwatch.ElapsedMilliseconds);
+        var result = new GitRunResult(process.ExitCode, stdOut.GetAwaiter().GetResult(), stdErr.GetAwaiter().GetResult(), stopwatch.ElapsedMilliseconds);
+        events?.Post(events.ToolCall(fileName, args, result.ExitCode, stopwatch.Elapsed, result.StdOut, result.StdErr,
+            workingDirectory is null ? null : $"in {workingDirectory}"));
+        return result;
     }
 }

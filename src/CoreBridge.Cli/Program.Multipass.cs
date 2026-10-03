@@ -16,7 +16,7 @@ public static partial class Program
     // Pseudo-Pfad melden, damit der Erfolgspfad (Parsing der Version) durchläuft.
     var cli = context.Vms.Cli;
     var report = await Task.Run(
-        () => cli is IMultipassDouble multipassDouble
+        () => cli.AsDouble() is { } multipassDouble
             ? Doctor.Check(() => multipassDouble.BinaryLabel, cli, context.DefaultTimeoutMs)
             : Doctor.Check(cli: cli, timeoutMs: context.DefaultTimeoutMs),
         context.CancellationToken);
@@ -56,7 +56,7 @@ public static partial class Program
     var cancellationToken = context.CancellationToken;
     var timeout = context.Config.DefaultTimeout.ReadTime();
     var stopwatch = System.Diagnostics.Stopwatch.StartNew();
-    var service = new MultipassService(commandTimeout: timeout);
+    var service = new MultipassService(commandTimeout: timeout, events: events);
 
     // Ein hängender Stop antwortet erfahrungsgemäß nicht mehr: während des Wartens
     // beendet `k` den Daemon sofort, statt den ganzen DefaultTimeout abzusitzen.
@@ -97,7 +97,8 @@ public static partial class Program
     var exitCode = await ElevatedRelaunch.RunAsync(
         typeof(Program).Assembly.Location,
         ["multipass-restart", "--pause-on-exit", "--timeout", context.Config.DefaultTimeout, .. (offer.KillChosen || options.KillNow ? new[] { "--kill-now" } : [])],
-        cancellationToken);
+        cancellationToken,
+        events);
     if (exitCode == ElevatedRelaunch.ControlCExit)
     {
       // Fenster geschlossen oder Strg+C statt einer Taste: über das Ergebnis
@@ -126,7 +127,7 @@ public static partial class Program
   private static async Task RunMultipassStore(CommandContext context, MultipassStoreOptions options)
   {
     var events = context.Events;
-    var storage = new MultipassStorage();
+    var storage = new MultipassStorage(events);
     var current = storage.Current();
     await events.Emit(events.Std($"Speicherort: {current.Path} ({DescribeSource(current.Source)})"));
     if (options.Path is null && !options.Reset)
@@ -155,7 +156,7 @@ public static partial class Program
       return;
     }
 
-    var service = new MultipassService(commandTimeout: context.Config.DefaultTimeout.ReadTime());
+    var service = new MultipassService(commandTimeout: context.Config.DefaultTimeout.ReadTime(), events: events);
     var elevated = service.IsElevated();
     if (!options.Yes
         && !await context.ConfirmAsync(
@@ -186,7 +187,8 @@ public static partial class Program
       var exitCode = await ElevatedRelaunch.RunAsync(
           typeof(Program).Assembly.Location,
           ["multipass-store", .. (target is null ? new[] { "--reset" } : ["--path", target]), "--yes", "--pause-on-exit", "--timeout", context.Config.DefaultTimeout],
-          context.CancellationToken);
+          context.CancellationToken,
+          events);
       if (exitCode == ElevatedRelaunch.ControlCExit)
       {
         throw new ProgramExecutionException(
@@ -221,10 +223,12 @@ public static partial class Program
   {
     var events = context.Events;
     var passphrase = MultipassAuthentication.NewPassphrase();
+    // Ab jetzt steht sie in keinem Diagnose-Ereignis mehr im Klartext (auch nicht bei authenticate).
+    events.AddSecret(passphrase);
     MultipassRunResult result;
     try
     {
-      result = await Task.Run(() => new MultipassAuthentication().SetPassphrase(passphrase, context.DefaultTimeoutMs), context.CancellationToken);
+      result = await Task.Run(() => new MultipassAuthentication(new TracingMultipassCli(new MultipassCli(), events)).SetPassphrase(passphrase, context.DefaultTimeoutMs), context.CancellationToken);
     }
     catch (MultipassException exception)
     {
@@ -333,7 +337,7 @@ public static partial class Program
       MultipassRunResult result;
       try
       {
-        result = await Task.Run(() => new MultipassAuthentication().Authenticate(passphrase, context.DefaultTimeoutMs), context.CancellationToken);
+        result = await Task.Run(() => new MultipassAuthentication(new TracingMultipassCli(new MultipassCli(), context.Events)).Authenticate(passphrase, context.DefaultTimeoutMs), context.CancellationToken);
       }
       catch (MultipassException exception)
       {
