@@ -60,6 +60,7 @@ internal static class CliHarness
 
                         break;
                     case ProgressEvent:
+                    case DiagnosticEvent: // wie ConsoleAdapter: Innenleben ist keine Ausgabe
                         break;
                     case ErrEvent err:
                         errors.Add(err.Printable);
