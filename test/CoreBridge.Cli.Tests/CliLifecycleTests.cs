@@ -37,12 +37,19 @@ public sealed class CliLifecycleTests
 
     /// <summary>
     /// Ebnet das Feld für die folgenden Stufen, je nach vorgefundenem Zustand:
-    /// antwortet der Daemon nicht, wird er neu gestartet; steht die Test-VM noch
-    /// da (früherer, abgebrochener Lauf), wird sie gestoppt und endgültig
-    /// gelöscht und der Daemon danach neu gestartet — sonst hält er Aufgaben zur
-    /// gelöschten VM (z. B. das „Waiting for SSH“ seines Starts) und trifft mit
-    /// ihnen die neue VM gleichen Namens (beobachtet: <c>Save-VM</c> mitten im
-    /// Launch). Zum Schluss muss <c>multipass-status</c> einen gesunden Daemon melden.
+    /// <list type="bullet">
+    /// <item>Antwortet der Daemon nicht (vm-list scheitert), wird er neu gestartet.</item>
+    /// <item>Steht die Test-VM in einem Übergangszustand (<c>Unknown</c>, <c>Starting</c> …),
+    /// hängt der Daemon meist an ihr — dann antwortet schon das nächste vm-list nicht
+    /// mehr. Deshalb zuerst neu starten und den Zustand neu einlesen.</item>
+    /// <item>Steht die Test-VM noch da (früherer, abgebrochener Lauf), wird sie gestoppt,
+    /// endgültig gelöscht und der Daemon danach neu gestartet — sonst kann er Aufgaben
+    /// zur gelöschten VM halten (z. B. das „Waiting for SSH“ seines Starts) und mit ihnen
+    /// die neue VM gleichen Namens treffen (beobachtet: <c>Save-VM</c> mitten im Launch,
+    /// obwohl die alte VM beim Löschen Stopped war). Ob der Daemon so eine Aufgabe hält,
+    /// verrät der Zustand der VM nicht.</item>
+    /// </list>
+    /// Zum Schluss muss <c>multipass-status</c> einen gesunden Daemon melden.
     /// </summary>
     [Fact]
     public async Task Stage00_LevelTheField()
@@ -51,24 +58,29 @@ public sealed class CliLifecycleTests
         if (list.ExitCode != 0)
         {
             output.WriteLine($"Ausgangslage: vm-list scheitert ({list.Error}) — Daemon wird neu gestartet.");
-            await RestartDaemonAsync();
-            list = await fixture.RunAsync(new VmListOptions(), output.WriteLine);
-            CliLifecycleFixture.AssertSucceeded(list);
+            list = await RestartAndListAsync();
         }
 
         var state = CliLifecycleFixture.FindVmState(list, fixture.VmName);
+        if (IsTransitional(state))
+        {
+            output.WriteLine($"Ausgangslage: VM `{fixture.VmName}` ist {state} — der Daemon hängt vermutlich an ihr, zuerst neu starten.");
+            list = await RestartAndListAsync();
+            state = CliLifecycleFixture.FindVmState(list, fixture.VmName);
+        }
+
         if (state is not null)
         {
             output.WriteLine($"Ausgangslage: VM `{fixture.VmName}` ist noch da ({state}) — stoppen, löschen, Daemon neu starten.");
             if (state is not ("Stopped" or "Deleted"))
             {
-                var stop = state == "Running"
-                    ? await fixture.RunAsync(new VmStopOptions { Name = fixture.VmName }, output.WriteLine)
-                    : await fixture.RunAsync(
+                var stop = IsTransitional(state)
+                    ? await fixture.RunAsync(
                         new VmStopOptions { Name = fixture.VmName },
                         output.WriteLine,
-                        Cli.Asks("Multipass can only power it off (--force). Power it off?").TestInputs("y"));
-                CliLifecycleFixture.AssertCompleted(stop, $"stop{(state == "Running" ? string.Empty : " --force")} {fixture.VmName}", "Stopped");
+                        Cli.Asks("Multipass can only power it off (--force). Power it off?").TestInputs("y"))
+                    : await fixture.RunAsync(new VmStopOptions { Name = fixture.VmName }, output.WriteLine);
+                CliLifecycleFixture.AssertCompleted(stop, $"stop{(IsTransitional(state) ? " --force" : string.Empty)} {fixture.VmName}", "Stopped");
             }
 
             var delete = await fixture.RunAsync(new VmDeleteOptions { Name = fixture.VmName, Purge = true }, output.WriteLine);
@@ -81,14 +93,28 @@ public sealed class CliLifecycleTests
         CliLifecycleFixture.AssertSucceeded(status);
     }
 
+    /// <summary>Weder Running noch Stopped noch im Papierkorb — Multipass stoppt so eine VM nur mit <c>--force</c>.</summary>
+    private static bool IsTransitional(string? state) =>
+        state is not (null or "Running" or "Stopped" or "Deleted");
+
+    private async Task<CliRunResult> RestartAndListAsync()
+    {
+        await RestartDaemonAsync();
+        var list = await fixture.RunAsync(new VmListOptions(), output.WriteLine);
+        CliLifecycleFixture.AssertSucceeded(list);
+        return list;
+    }
+
     /// <summary>
-    /// <c>multipass-restart</c>: ohne Administratorrechte fragt die CLI nach dem
-    /// erhöhten Neustart (UAC); Ausgabe und Rückfragen folgen dann im
+    /// <c>multipass-restart</c>: darf der Benutzer den Dienst steuern (erhöht oder
+    /// per Dienst-ACL), läuft er ohne Rückfrage hier; sonst fragt die CLI nach dem
+    /// erhöhten Neustart (UAC), und Ausgabe und Rückfragen folgen im
     /// Administratorfenster, das am Ende auf eine Taste wartet.
     /// </summary>
     private async Task RestartDaemonAsync()
     {
-        var restart = new MultipassService().IsElevated()
+        var service = new MultipassService();
+        var restart = service.IsElevated() || service.CanControlService()
             ? await fixture.RunAsync(new MultipassRestartOptions(), output.WriteLine)
             : await fixture.RunAsync(
                 new MultipassRestartOptions(),
@@ -102,7 +128,7 @@ public sealed class CliLifecycleTests
     {
         var result = await fixture.RunAsync(new InitConfigureOptions
         {
-            Name = fixture.ImageName,
+            Name = fixture.InitName,
             Components = "claude,dotnet",
             OverrideTimeout = "300s",
             Force = true
@@ -123,7 +149,7 @@ public sealed class CliLifecycleTests
         var result = await fixture.RunAsync(new VmCreateOptions
         {
             Name = fixture.VmName,
-            Image = fixture.ImageName,
+            Image = fixture.InitName,
             Snapshot = ConfiguredSnapshot
         }, output.WriteLine);
 
@@ -163,7 +189,7 @@ public sealed class CliLifecycleTests
     [Fact]
     public async Task Stage04_VmStart()
     {
-        var result = await fixture.RunAsync(new VmStartOptions { Name = fixture.VmName }, output.WriteLine);
+        var result = await fixture.RunAsync(new VmStartOptions { Name = fixture.VmName, OverrideTimeout = "1m" }, output.WriteLine);
 
         CliLifecycleFixture.AssertCompleted(result, $"start {fixture.VmName}", "Running");
     }
@@ -185,19 +211,33 @@ public sealed class CliLifecycleTests
             Command = ". /etc/os-release && test \"$VERSION_ID\" = \"26.10\""
         }, output.WriteLine);
         CliLifecycleFixture.AssertSucceeded(release);
-
-        await AssertProvisionedAsync();
     }
 
     /// <summary>
     /// Prüft, dass die per cloud-init bestellten Komponenten im Gast wirklich
-    /// laufen — nicht nur, dass die VM startet. Beides wird mehrmals versucht,
-    /// weil die Paket-/Snap-Installation nach dem Boot noch läuft.
+    /// laufen — nicht nur, dass die VM startet. Ein Durchgang genügt: vm-create
+    /// meldet erst Erfolg (und legt den Snapshot an), wenn cloud-init fertig ist und
+    /// alle Marker stehen, danach installiert nichts mehr nach. Ein Wiederholen
+    /// würde nur einen echten Fehler verdecken.
     /// </summary>
     [Fact]
     public async Task Stage05b_ProvisionierungIstVollstaendig()
     {
-        await AssertProvisionedAsync();
+        var failed = new List<string>();
+        foreach (var (component, probe) in ProvisioningProbes)
+        {
+            var result = await fixture.RunAsync(new VmExecOptions { Name = fixture.VmName, Command = probe }, output.WriteLine);
+            if (result.ExitCode == 0 && result.DialogErrors.Count == 0)
+            {
+                output.WriteLine($"Provisionierung {component}: OK ({string.Join(" | ", result.Lines)})");
+            }
+            else
+            {
+                failed.Add($"{component} (Exit {result.ExitCode}{(result.DialogErrors.Count > 0 ? ", " + string.Join(" | ", result.DialogErrors) : string.Empty)})");
+            }
+        }
+
+        Assert.True(failed.Count == 0, "Provisionierung unvollständig: " + string.Join("; ", failed));
     }
 
     private static readonly (string Component, string Probe)[] ProvisioningProbes =
@@ -207,39 +247,6 @@ public sealed class CliLifecycleTests
         ("claude-marker", "test -f /var/lib/corebridge/claude.ready"),
         ("dotnet-marker", "test -f /var/lib/corebridge/dotnet.ready")
     ];
-
-    private async Task AssertProvisionedAsync()
-    {
-        var missing = ProvisioningProbes.Select(p => p.Component).ToList();
-        var seen = new Dictionary<string, string>(StringComparer.Ordinal);
-
-        for (var attempt = 1; attempt <= 12 && missing.Count > 0; attempt++)
-        {
-            foreach (var (component, probe) in ProvisioningProbes.Where(p => missing.Contains(p.Component)).ToArray())
-            {
-                var probe1 = await fixture.RunAsync(
-                    new VmExecOptions { Name = fixture.VmName, Command = probe },
-                    output.WriteLine);
-                if (probe1.ExitCode == 0)
-                {
-                    missing.Remove(component);
-                    seen[component] = string.Join(" | ", probe1.Lines);
-                    output.WriteLine($"Provisionierung {component}: OK ({seen[component]})");
-                }
-            }
-
-            if (missing.Count > 0)
-            {
-                output.WriteLine($"Provisionierung Versuch {attempt}: fehlt noch {string.Join(", ", missing)}.");
-                await Task.Delay(TimeSpan.FromSeconds(15));
-            }
-        }
-
-        Assert.True(
-            missing.Count == 0,
-            "Nach 12 Versuchen fehlen weiterhin: " + string.Join(", ", missing)
-            + ". Vorhanden: " + string.Join("; ", seen.Select(e => $"{e.Key}={e.Value}")));
-    }
 
     [Fact]
     public async Task Stage06_VmConnect()
@@ -278,11 +285,11 @@ public sealed class CliLifecycleTests
     {
         if (!File.Exists(fixture.ProfileConfigPath))
         {
-            output.WriteLine($"Profil `{fixture.ImageName}` nicht vorhanden — nichts zu löschen.");
+            output.WriteLine($"Profil `{fixture.InitName}` nicht vorhanden — nichts zu löschen.");
             return;
         }
 
-        var delete = await fixture.RunAsync(new InitDeleteOptions { Name = fixture.ImageName }, output.WriteLine);
+        var delete = await fixture.RunAsync(new InitDeleteOptions { Name = fixture.InitName }, output.WriteLine);
 
         CliLifecycleFixture.AssertSucceeded(delete);
         Assert.False(File.Exists(fixture.ProfileConfigPath), $"Profilkonfiguration noch vorhanden: {fixture.ProfileConfigPath}");

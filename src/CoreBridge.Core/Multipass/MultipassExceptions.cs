@@ -35,6 +35,24 @@ public sealed class MultipassServiceTimeoutException : MultipassException
     }
 }
 
+/// <summary>
+/// Dem Benutzer fehlt ein Recht am Dienst oder am Daemon-Prozess (Windows-Fehler 5).
+/// Getrennt, damit die CLI erst dann nach einem erhöhten Neustart fragt, wenn es
+/// ohne Administratorrechte wirklich nicht geht.
+/// </summary>
+public sealed class MultipassAccessDeniedException : MultipassException
+{
+    public MultipassAccessDeniedException(string message)
+        : base(message)
+    {
+    }
+
+    public MultipassAccessDeniedException(string message, Exception innerException)
+        : base(message, innerException)
+    {
+    }
+}
+
 public sealed class MultipassTimeoutException : MultipassException
 {
     public string Command { get; }

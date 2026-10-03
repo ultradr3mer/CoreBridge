@@ -52,7 +52,7 @@ public static class InitInstall
     /// ihren eigenen, als letzten Schritt nach ihren Prüfungen. Reine Snap-Komponenten
     /// haben kein Skript und damit keinen Marker.
     /// </summary>
-    public static IReadOnlyList<(string Component, string Marker)> Markers(ImagesConfig config, IEnumerable<string> components)
+    public static IReadOnlyList<(string Component, string Marker)> Markers(InitsConfig config, IEnumerable<string> components)
     {
         var names = components.Select(c => c.Trim()).Where(c => c.Length > 0).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
         var resolved = InitComponents.Resolve(config, names);
@@ -63,7 +63,7 @@ public static class InitInstall
             .ToList();
     }
 
-    public static IReadOnlyList<InstallStep> Plan(ImagesConfig config, IEnumerable<string> components)
+    public static IReadOnlyList<InstallStep> Plan(InitsConfig config, IEnumerable<string> components)
     {
         var names = components.Select(c => c.Trim()).Where(c => c.Length > 0).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
         var resolved = InitComponents.Resolve(config, names);

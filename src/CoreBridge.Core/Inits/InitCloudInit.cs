@@ -15,12 +15,12 @@ public static class InitCloudInit
 {
     private static readonly Regex SafeUserName = new("^[a-z_][a-z0-9_-]*$", RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
-    public static bool NeedsCloudInit(ImagesConfig config, IEnumerable<string> components)
+    public static bool NeedsCloudInit(InitsConfig config, IEnumerable<string> components)
     {
         return InitComponents.Resolve(config, components).Any(component => component.NeedsCloudInit);
     }
 
-    public static string Generate(string name, ImagesConfig config, IEnumerable<string> components)
+    public static string Generate(string name, InitsConfig config, IEnumerable<string> components)
     {
         var selected = InitComponents.Resolve(config, components);
         var packages = selected

@@ -15,7 +15,8 @@ public sealed class EventFactory
     private readonly Stopwatch clock = Stopwatch.StartNew();
     private readonly HashSet<IOpenInteraction> open = [];
 
-    internal EventFactory(ChannelWriter<CliEvent> writer)
+    /// <param name="writer">Kanal zum Konsumenten; der Erzeuger (CLI, TUI) legt ihn je Kommando an.</param>
+    public EventFactory(ChannelWriter<CliEvent> writer)
     {
         this.writer = writer;
     }
@@ -31,6 +32,14 @@ public sealed class EventFactory
     public ErrEvent Err(string data) => new(this.Elapsed, data);
 
     public ProgressEvent Tick() => new(this.Elapsed);
+
+    /// <summary>
+    /// Fortschrittspunkt, der eine offene Auswahl trägt (siehe <see cref="ProgressEvent.Offer"/>).
+    /// Das Angebot selbst entsteht mit <see cref="Choice{T}"/> und wird damit wie jede
+    /// Rückfrage verfolgt; emittiert wird es nur über solche Ticks, und der Erzeuger
+    /// schließt es am Ende des Wartens (<see cref="IChoiceInteraction.SetDefault"/>).
+    /// </summary>
+    public ProgressEvent Tick(IChoiceInteraction offer) => new(this.Elapsed, offer);
 
     public ChoiceEvent<T> Choice<T>(string message, TimeSpan? timeout = null) where T : struct, Enum
     {

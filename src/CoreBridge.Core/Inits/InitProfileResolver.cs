@@ -22,7 +22,7 @@ public sealed record InitProfile(
 public static class InitProfileResolver
 {
     public static InitProfile? Resolve(
-        ImagesConfig config,
+        InitsConfig config,
         string requestedImage,
         string? explicitCloudInit = null)
     {

@@ -7,7 +7,7 @@ namespace CoreBridge.Core.Tests;
 
 public class InitComponentStoreTests
 {
-    private static ImagesConfig BuiltIns() => new()
+    private static InitsConfig BuiltIns() => new()
     {
         Components = new Dictionary<string, ComponentConfig>(StringComparer.OrdinalIgnoreCase)
         {
@@ -76,15 +76,15 @@ public class InitComponentStoreTests
         using var dir = new TempDirectory();
         var userFile = Path.Combine(dir, "sub", "appsettings.user.json");
         Directory.CreateDirectory(Path.GetDirectoryName(userFile)!);
-        File.WriteAllText(userFile, """{ "Eigenes": 1, "Images": { "Other": "x" } }""");
+        File.WriteAllText(userFile, """{ "Eigenes": 1, "Inits": { "Other": "x" } }""");
 
         InitComponentStore.Add(BuiltIns(), userFile, "htop", new ComponentConfig { Snap = "htop" }, replace: false);
 
         var root = JsonNode.Parse(File.ReadAllText(userFile))!;
         Assert.Equal(1, root["Eigenes"]!.GetValue<int>());
-        Assert.Equal("x", root["Images"]!["Other"]!.GetValue<string>());
-        Assert.Equal("htop", root["Images"]!["Components"]!["htop"]!["Snap"]!.GetValue<string>());
-        Assert.Null(root["Images"]!["Components"]!["htop"]!["NeedsCloudInit"]);
+        Assert.Equal("x", root["Inits"]!["Other"]!.GetValue<string>());
+        Assert.Equal("htop", root["Inits"]!["Components"]!["htop"]!["Snap"]!.GetValue<string>());
+        Assert.Null(root["Inits"]!["Components"]!["htop"]!["NeedsCloudInit"]);
         Assert.Equal("htop", InitComponentStore.ReadUser(userFile)["htop"].Snap);
     }
 
@@ -166,8 +166,8 @@ public class InitComponentStoreTests
         }
 
         Assert.Equal(Path.GetFullPath(Path.Combine(dir, "install.sh")), saved.Script);
-        var merged = InitComponentStore.Merge(new AppConfig { Images = BuiltIns() }, userFile);
-        Assert.Contains("tool.ready", InitCloudInit.Generate("p", merged.Images, ["tool"]));
+        var merged = InitComponentStore.Merge(new AppConfig { Inits = BuiltIns() }, userFile);
+        Assert.Contains("tool.ready", InitCloudInit.Generate("p", merged.Inits, ["tool"]));
     }
 
     [Fact]
@@ -189,17 +189,17 @@ public class InitComponentStoreTests
     {
         using var dir = new TempDirectory();
         var userFile = Path.Combine(dir, "u.json");
-        var config = new AppConfig { Images = BuiltIns() };
+        var config = new AppConfig { Inits = BuiltIns() };
         Assert.Same(config, InitComponentStore.Merge(config, userFile));
 
-        InitComponentStore.Add(config.Images, userFile, "htop", new ComponentConfig { Snap = "htop" }, replace: false);
+        InitComponentStore.Add(config.Inits, userFile, "htop", new ComponentConfig { Snap = "htop" }, replace: false);
         var merged = InitComponentStore.Merge(config, userFile);
 
-        Assert.Equal(["htop"], InitComponents.ResolveSnaps(merged.Images, ["HTOP"]));
-        var list = InitComponentStore.List(merged.Images, userFile);
+        Assert.Equal(["htop"], InitComponents.ResolveSnaps(merged.Inits, ["HTOP"]));
+        var list = InitComponentStore.List(merged.Inits, userFile);
         Assert.Equal(["htop", "opencode"], list.Select(e => e.Name));
         Assert.Equal([ComponentSource.User, ComponentSource.BuiltIn], list.Select(e => e.Source));
-        Assert.Single(config.Images.Components);
+        Assert.Single(config.Inits.Components);
     }
 
     [Fact]
@@ -207,10 +207,10 @@ public class InitComponentStoreTests
     {
         using var dir = new TempDirectory();
         var userFile = Path.Combine(dir, "u.json");
-        File.WriteAllText(userFile, """{ "Images": { "Components": { "OpenCode": { "Snap": "x" } } } }""");
+        File.WriteAllText(userFile, """{ "Inits": { "Components": { "OpenCode": { "Snap": "x" } } } }""");
 
         var error = Assert.Throws<MultipassException>(
-            () => InitComponentStore.Merge(new AppConfig { Images = BuiltIns() }, userFile));
+            () => InitComponentStore.Merge(new AppConfig { Inits = BuiltIns() }, userFile));
         Assert.Contains("mitgeliefert", error.Message);
     }
 }

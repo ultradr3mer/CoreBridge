@@ -9,8 +9,15 @@
   <ItemGroup>
     <PackageReference Include="BouncyCastle.Cryptography" Version="2.7.0" />
     <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="10.0.0" />
+    <PackageReference Include="Microsoft.Extensions.FileProviders.Physical" Version="10.0.0" />
     <PackageReference Include="UnionTypes" Version="0.1.0" />
     <PackageReference Include="YamlDotNet" Version="16.3.0" />
+  </ItemGroup>
+
+  <!-- Rückfragen als Ereignisse (ChoiceEvent): Core fragt über dieselben Typen wie CLI und TUI.
+       Nur in diese Richtung — Interaction kennt Core nicht. -->
+  <ItemGroup>
+    <ProjectReference Include="..\CoreBridge.Interaction\CoreBridge.Interaction.csproj" />
   </ItemGroup>
 
   <!-- Vertrauter Signierschlüssel: Ressource statt Config, damit keine Datei ihren eigenen Schlüssel mitbringt. -->

@@ -26,7 +26,7 @@ public class InitProfileResolverTests
         File.WriteAllText(InitStore.ConfigFile("agent"), config.ToJson());
 
         var profile = InitProfileResolver.Resolve(
-            new ImagesConfig { DefaultRuntimeImage = "daily:26.10" },
+            new InitsConfig { DefaultRuntimeImage = "daily:26.10" },
             "agent");
 
         Assert.NotNull(profile);
@@ -53,7 +53,7 @@ public class InitProfileResolverTests
 
         var explicitPath = Path.Combine(store.Path, "explicit.yaml");
         var profile = InitProfileResolver.Resolve(
-            new ImagesConfig(),
+            new InitsConfig(),
             "agent",
             explicitPath);
 
@@ -63,7 +63,7 @@ public class InitProfileResolverTests
     [Fact]
     public void KatalogUndURLsBleibenUnveraendert()
     {
-        var config = new ImagesConfig();
+        var config = new InitsConfig();
 
         Assert.Null(InitProfileResolver.Resolve(config, "daily:26.10"));
         Assert.Null(InitProfileResolver.Resolve(config, "26.04"));
@@ -88,7 +88,7 @@ public class InitProfileResolverTests
                 SchemaVersion: 3).ToJson());
 
         var exception = Assert.Throws<MultipassException>(
-            () => InitProfileResolver.Resolve(new ImagesConfig(), "legacy"));
+            () => InitProfileResolver.Resolve(new InitsConfig(), "legacy"));
 
         Assert.Contains("init-delete", exception.Message);
     }

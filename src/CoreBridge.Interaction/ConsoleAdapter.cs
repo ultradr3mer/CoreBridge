@@ -1,5 +1,4 @@
 using System.Runtime.InteropServices;
-using CoreBridge.Core.Common;
 
 namespace CoreBridge.Interaction;
 
@@ -83,6 +82,12 @@ public class ConsoleAdapter
     private static readonly char[] SpinnerFrames = ['-', '/', '|', '\\'];
 
     /// <summary>
+    /// Fortschrittspunkt bei umgeleiteter Ausgabe: die Punkte reihen sich in
+    /// einer Zeile, statt Wagenrücklauf-Müll ins Log zu schreiben.
+    /// </summary>
+    private const string RedirectedTick = ".";
+
+    /// <summary>
     /// An einer echten Konsole dreht sich ein Spinner an Ort und Stelle; bei
     /// umgeleiteter Ausgabe (Datei, Pipe) bleiben es Punkte, damit kein
     /// Wagenrücklauf-Müll im Log landet.
@@ -92,10 +97,15 @@ public class ConsoleAdapter
     private bool _midProgressLine;
     private int _spinnerFrame;
     private TimeSpan _progressStart;
+    private int _progressWidth;
+    private bool _hintShown;
 
     /// <summary>
     /// Ein Fortschritts-Tick: Spinner mit Wartezeit seit dem ersten Tick
-    /// dieser Zeile (<c>| 12 s</c>), sonst ein Punkt.
+    /// dieser Zeile (<c>| 12 s</c>), sonst ein Punkt. Trägt der Tick ein offenes
+    /// <see cref="ProgressEvent.Offer"/>, stehen dessen Tasten daneben
+    /// (<c>— Stop hängt? k: jetzt beenden; Esc: Abbrechen</c>), und eine seit dem
+    /// letzten Tick gedrückte Taste beantwortet es.
     /// </summary>
     private void WriteProgress(ProgressEvent progress)
     {
@@ -103,21 +113,103 @@ public class ConsoleAdapter
         {
             this._progressStart = progress.EmissionTime;
             this._spinnerFrame = 0;
+            this._hintShown = false;
         }
 
+        // Ohne Tastatur gibt es nichts anzubieten: dann ist es ein gewöhnlicher Tick,
+        // und der Erzeuger schließt das Angebot am Ende mit der Standardantwort.
+        var offer = progress.Offer is { IsOpen: true } open && ConsoleAvailability.CanPrompt ? open : null;
+        var hint = offer is null ? null : OfferHint(offer);
         if (UseSpinner)
         {
             var frame = SpinnerFrames[this._spinnerFrame++ % SpinnerFrames.Length];
             var waited = progress.EmissionTime - this._progressStart;
+            var text = $"{frame} {waited.TotalSeconds:F0} s ";
             Console.Write("\r");
-            Write(Console.Out, ColorOut, ConsoleColor.DarkCyan, $"{frame} {waited.TotalSeconds:F0} s ");
+            Write(Console.Out, ColorOut, ConsoleColor.DarkCyan, text);
+            if (hint is not null)
+            {
+                Write(Console.Out, ColorOut, PromptColor, $"— {hint} ");
+                text += $"— {hint} ";
+            }
+
+            // Ein kürzerer Tick nach einem längeren ließe Reste des alten stehen.
+            Console.Write(new string(' ', Math.Max(0, this._progressWidth - text.Length)));
+            this._progressWidth = Math.Max(this._progressWidth, text.Length);
         }
         else
         {
-            Console.Write(Progress.ProgressTick);
+            if (hint is not null && !this._hintShown)
+            {
+                Console.Write($"({hint}) ");
+                this._hintShown = true;
+            }
+
+            Console.Write(RedirectedTick);
         }
 
         this._midProgressLine = true;
+        if (offer is not null)
+        {
+            AnswerByKey(offer);
+        }
+    }
+
+    /// <summary>Frage und die Antworten mit Taste: <c>Stop hängt? k: jetzt beenden; Esc: Abbrechen</c>.</summary>
+    private static string OfferHint(IChoiceInteraction offer)
+    {
+        var keyed = offer.Options
+            .Where(option => option.Keys.Count > 0)
+            .Select(option => $"{KeyLabel(option.Keys[0])}: {option.Display}");
+        return $"{offer.Printable} {string.Join("; ", keyed)}";
+    }
+
+    /// <summary>
+    /// Liest alle seit dem letzten Tick gedrückten Tasten, ohne zu blockieren, und
+    /// beantwortet <paramref name="offer"/> mit der ersten passenden. Andere Tasten
+    /// werden verworfen, damit sie nicht in einer späteren Eingabezeile landen.
+    /// </summary>
+    private static void AnswerByKey(IChoiceInteraction offer)
+    {
+        try
+        {
+            while (Console.KeyAvailable)
+            {
+                var key = ToKeys(Console.ReadKey(intercept: true));
+                if (offer.IsOpen)
+                {
+                    offer.TryChooseKey(key);
+                }
+            }
+        }
+        catch (InvalidOperationException)
+        {
+            // Keine echte Konsoleneingabe — dann gibt es nichts zu lesen.
+        }
+    }
+
+    /// <summary>Übersetzt eine Konsolentaste in <see cref="Keys"/> (Buchstaben klein, Strg als Flag).</summary>
+    private static Keys ToKeys(ConsoleKeyInfo info)
+    {
+        var key = info.Key switch
+        {
+            ConsoleKey.Enter => Keys.Enter,
+            ConsoleKey.Escape => Keys.Esc,
+            ConsoleKey.Backspace => Keys.Backspace,
+            ConsoleKey.Tab => Keys.Tab,
+            >= ConsoleKey.A and <= ConsoleKey.Z => (Keys)('a' + (info.Key - ConsoleKey.A)),
+            _ => Keys.None
+        };
+
+        return key != Keys.None && info.Modifiers.HasFlag(ConsoleModifiers.Control) ? key | Keys.Ctrl : key;
+    }
+
+    /// <summary>Anzeige einer Taste: <c>k</c>, <c>Strg+K</c>, <c>Enter</c>.</summary>
+    private static string KeyLabel(Keys key)
+    {
+        var plain = key & ~Keys.Ctrl;
+        var name = plain is >= Keys.A and <= Keys.Z ? ((char)plain).ToString() : plain.ToString();
+        return key.HasFlag(Keys.Ctrl) ? $"Strg+{name.ToUpperInvariant()}" : name;
     }
 
     /// <summary>
@@ -149,7 +241,8 @@ public class ConsoleAdapter
 
         if (UseSpinner)
         {
-            Console.Write("\r" + new string(' ', 16) + "\r");
+            Console.Write("\r" + new string(' ', Math.Max(16, this._progressWidth)) + "\r");
+            this._progressWidth = 0;
         }
         else
         {

@@ -8,8 +8,9 @@ namespace CoreBridge.Interaction;
 /// <param name="display">Beschriftung, z. B. <c>Yes</c>.</param>
 /// <param name="pattern">Kommagetrennte Eingaben, z. B. <c>y,yes,j,ja</c>.</param>
 /// <param name="keys">
-/// Tastenkürzel. Reine Dokumentation — die Konsolen-Eingabe wertet sie nicht
-/// aus, weil <c>Console.ReadLine</c> keine Einzeltasten kennt.
+/// Tastenkürzel. Konsolen-Rückfragen werten sie nicht aus, weil
+/// <c>Console.ReadLine</c> keine Einzeltasten kennt; ein Angebot auf einem
+/// Fortschritts-Tick (<see cref="ProgressEvent.Offer"/>) wird dagegen per Taste beantwortet.
 /// </param>
 [AttributeUsage(AttributeTargets.Field, AllowMultiple = false, Inherited = false)]
 public class OptionDef : Attribute
@@ -28,7 +29,7 @@ public class OptionDef : Attribute
     /// <summary>Alle akzeptierten Eingaben, z. B. <c>y, yes, j, ja</c>.</summary>
     public IReadOnlyList<string> Patterns { get; }
 
-    /// <summary>Tastenkürzel; werden von der Konsolen-Eingabe nicht ausgewertet.</summary>
+    /// <summary>Tastenkürzel; ausgewertet nur für Angebote auf Fortschritts-Ticks (<see cref="IChoiceInteraction.TryChooseKey"/>).</summary>
     public IReadOnlyList<Keys> Keys { get; }
 
     /// <summary>

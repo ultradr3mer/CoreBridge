@@ -62,13 +62,26 @@ public class ErrEvent : CliEvent
 /// Ein Fortschrittspunkt eines Warte-Loops. Die Konsole schreibt solche Punkte
 /// hintereinander in dieselbe Zeile, ohne sie abzuschließen.
 /// </summary>
+/// <remarks>
+/// Mit <see cref="Offer"/> trägt der Tick eine offene Auswahl, die der Benutzer
+/// beantworten darf, während weiter gewartet wird (überspringen, abbrechen). Das
+/// Angebot reist nur auf Ticks, nie als eigenes Ereignis: ein Konsument, der Ticks
+/// übergeht (ohne Konsole, die Lifecycle-Tests), bekommt es nie zu sehen, und der
+/// Erzeuger schließt es am Ende des Wartens mit der Standardantwort.
+/// </remarks>
 public class ProgressEvent : CliEvent
 {
     /// <summary>Der Punkt, den eine Konsole ohne Spinner je Tick schreibt.</summary>
     public const string Tick = ".";
 
-    public ProgressEvent(TimeSpan emissionTime)
+    /// <param name="emissionTime">Laufzeit des Kommandos beim Entstehen des Ereignisses.</param>
+    /// <param name="offer">Optional: eine Auswahl, die während des Wartens offen ist.</param>
+    public ProgressEvent(TimeSpan emissionTime, IChoiceInteraction? offer = null)
         : base(emissionTime, Tick)
     {
+        this.Offer = offer;
     }
+
+    /// <summary>Die während des Wartens offene Auswahl, <c>null</c> = reiner Fortschritt.</summary>
+    public IChoiceInteraction? Offer { get; }
 }

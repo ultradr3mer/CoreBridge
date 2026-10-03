@@ -3,9 +3,10 @@ namespace CoreBridge.Interaction;
 /// <summary>
 /// Tastenkürzel eines Auswahlpunkts, wie sie ein Terminal-UI erwarten würde.
 /// <see cref="OptionDef"/> nimmt sie als reines Dokumentationsdetail an
-/// (siehe <see cref="OptionDef.Keys"/>), die Konsolen-Eingabe
-/// (<see cref="ConsoleAdapter"/>) wertet sie nicht aus — <c>Console.ReadLine</c>
-/// kennt keine Einzeltasten.
+/// (siehe <see cref="OptionDef.Keys"/>), die Konsolen-Rückfragen
+/// (<see cref="ConsoleAdapter"/>) werten sie nicht aus — <c>Console.ReadLine</c>
+/// kennt keine Einzeltasten. Ausgewertet werden sie nur für das Angebot eines
+/// <see cref="ProgressEvent.Offer"/>, das während des Wartens Tasten liest.
 /// </summary>
 [Flags]
 public enum Keys

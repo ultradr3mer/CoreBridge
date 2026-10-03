@@ -6,7 +6,7 @@ namespace CoreBridge.Core.Inits;
 /// Wo die generierten cloud-init-Profile liegen. Standard:
 /// <Repo-Wurzel>/artifacts (Dev-Tool, keine App-Daten). Die Auflösung macht
 /// <see cref="RepoPaths"/>, damit sie unabhängig vom Arbeitsverzeichnis stimmt.
-/// Über Images:StoreRoot (AppConfig) konfigurierbar.
+/// Über Inits:StoreRoot (AppConfig) konfigurierbar.
 /// </summary>
 public static class InitStore
 {

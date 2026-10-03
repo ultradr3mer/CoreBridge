@@ -60,6 +60,22 @@ public abstract class InteractionEvent<T> : StdEvent, IOpenInteraction
     public bool IsOpen => !this.completion.Task.IsCompleted;
 
     /// <summary>
+    /// Die Antwort, falls schon eine da ist — ohne zu warten. Für Erzeuger, die weiterarbeiten
+    /// und nur nachsehen (Angebote auf Fortschritts-Ticks). Abgebrochen zählt nicht als Antwort.
+    /// </summary>
+    public bool TryGetAnswer(out T value)
+    {
+        if (this.completion.Task.IsCompletedSuccessfully)
+        {
+            value = this.completion.Task.Result;
+            return true;
+        }
+
+        value = default!;
+        return false;
+    }
+
+    /// <summary>
     /// Beantwortet das Ereignis. Mehrfaches Beantworten ist ein Fehler des
     /// Konsumenten, kein Grund für eine Ausnahme — deshalb <c>Try</c>.
     /// </summary>

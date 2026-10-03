@@ -27,9 +27,42 @@ public sealed class MultipassStatusOptions : MultipassOptions
 {
 }
 
-[Verb("multipass-restart", HelpText = "Startet den Windows-Dienst Multipass neu (wie Restart-Service -Force); hängt der Stop, wird nach Rückfrage multipassd beendet. Fragt ohne Administratorrechte nach einem erhöhten Neustart.")]
-public sealed class MultipassRestartOptions : MultipassOptions
+/// <summary>
+/// Verben, die sich selbst erhöht in einem neuen Fenster starten: dort setzt die CLI
+/// <c>--pause-on-exit</c>, damit das Admin-Fenster bis zu einer Taste offen bleibt.
+/// </summary>
+public interface IPauseOnExit
 {
+    bool PauseOnExit { get; }
+}
+
+[Verb("multipass-restart", HelpText = "Startet den Windows-Dienst Multipass neu (wie Restart-Service -Force); hängt der Stop, wird nach Rückfrage multipassd beendet. Fragt ohne Administratorrechte nach einem erhöhten Neustart.")]
+public sealed class MultipassRestartOptions : MultipassOptions, IPauseOnExit
+{
+    /// <summary>Intern: vom erhöhten Neustart gesetzt, damit das Admin-Fenster offen bleibt.</summary>
+    [Option("pause-on-exit", Hidden = true)]
+    public bool PauseOnExit { get; set; }
+
+    /// <summary>
+    /// Intern: der Benutzer hat im nicht erhöhten Fenster schon „jetzt beenden“
+    /// gewählt — das Admin-Fenster beendet den hängenden Daemon ohne erneutes Warten.
+    /// </summary>
+    [Option("kill-now", Hidden = true)]
+    public bool KillNow { get; set; }
+}
+
+[Verb("multipass-store", HelpText = "Zeigt oder ändert, wo Multipass seine Daten ablegt (MULTIPASS_STORAGE: Images, VM-Disks, Client-Zertifikate). Ändern startet den Dienst neu und braucht Administratorrechte; kopiert wird nichts.")]
+public sealed class MultipassStoreOptions : MultipassOptions, IPauseOnExit
+{
+    [Option('p', "path", HelpText = "Neuer Ordner für die Multipass-Daten, z. B. D:\\Multipass (wird angelegt). Ohne -p/--reset: nur anzeigen.")]
+    public string? Path { get; set; }
+
+    [Option("reset", HelpText = "Zurück zum Standardort %ProgramData%\\Multipass (MULTIPASS_STORAGE entfernen).")]
+    public bool Reset { get; set; }
+
+    [Option('y', "yes", HelpText = "Ohne Rückfrage umstellen.")]
+    public bool Yes { get; set; }
+
     /// <summary>Intern: vom erhöhten Neustart gesetzt, damit das Admin-Fenster offen bleibt.</summary>
     [Option("pause-on-exit", Hidden = true)]
     public bool PauseOnExit { get; set; }
@@ -40,13 +73,13 @@ public sealed class VmListOptions : MultipassOptions
 {
 }
 
-[Verb("vm-create", HelpText = "Legt eine neue VM an (Standard-Image: Images:DefaultRuntimeImage).")]
+[Verb("vm-create", HelpText = "Legt eine neue VM an (Standard-Image: Inits:DefaultRuntimeImage).")]
 public sealed class VmCreateOptions : MultipassOptions
 {
     [Option('n', "name", Required = true, HelpText = "Name der neuen VM.")]
     public string Name { get; set; } = string.Empty;
 
-    [Option('i', "image", HelpText = "Katalog-Image (z. B. daily:26.10), URL/Pfad oder Name eines per init-configure erzeugten Profils. Ohne Angabe: Images:DefaultRuntimeImage.")]
+    [Option('i', "image", HelpText = "Katalog-Image (z. B. daily:26.10), URL/Pfad oder Name eines per init-configure erzeugten Profils. Ohne Angabe: Inits:DefaultRuntimeImage.")]
     public string? Image { get; set; }
 
     [Option('c', "cloud-init", HelpText = "Pfad zu einer cloud-init-YAML; überschreibt die cloud-init eines Profils (z. B. aus init-configure).")]
@@ -68,7 +101,7 @@ public sealed class InitConfigureOptions : MultipassOptions
     [Option('c', "components", Default = "claude,dotnet", HelpText = "Komma-Liste der Komponenten (Übersicht: component-list, z. B. claude,dotnet,opencode,python,cline).")]
     public string Components { get; set; } = "claude,dotnet";
 
-    [Option("runtime-image", HelpText = "Multipass-Katalogname, den vm-create für dieses Profil startet (Standard: Config Images:DefaultRuntimeImage).")]
+    [Option("runtime-image", HelpText = "Multipass-Katalogname, den vm-create für dieses Profil startet (Standard: Config Inits:DefaultRuntimeImage).")]
     public string? RuntimeImage { get; set; }
 
     [Option('f', "force", HelpText = "Existierende Konfiguration überschreiben (sonst Fehler, wenn das Profil schon existiert).")]

@@ -9,7 +9,7 @@ namespace CoreBridge.Core.Config;
 /// </summary>
 public sealed record AppConfig
 {
-    public ImagesConfig Images { get; init; } = new();
+    public InitsConfig Inits { get; init; } = new();
 
     /// <summary>
     /// Standard-Timeout für Multipass-VM-Erstellung, z. B. 5m, 10s, 1000ms, dauert etwas.
@@ -38,6 +38,9 @@ public sealed record AppConfig
     /// </remarks>
     public string? MultipassLogPath { get; init; }
 
+    /// <summary>Protokoll jedes CLI-Aufrufs (Ausgabe, Rückfragen samt Antwort, Exit-Code).</summary>
+    public CommandLogConfig CommandLog { get; init; } = new();
+
     /// <summary>
     /// Dauer, die der Multipass-Simulator (<c>CoreBridge.Simulation</c>, nur Debug/Tests) lang laufende Verben
     /// (launch, start, stop, restart, clone) vorgibt, z. B. <c>4s</c> oder <c>0ms</c>.
@@ -57,7 +60,7 @@ public sealed record AppConfig
     };
 }
 
-public sealed record ImagesConfig
+public sealed record InitsConfig
 {
     /// <summary>
     /// Multipass-Katalogname, der beim Starten einer VM zugrunde liegt.
@@ -132,4 +135,31 @@ public sealed record CloudInitUserConfig
     public string[] Groups { get; init; } = [];
 
     public bool LockPassword { get; init; } = true;
+}
+
+/// <summary>
+/// Einstellungen des CLI-Protokolls (<c>cli-&lt;Datum&gt;.log</c>). Ein erhöhtes Fenster liest
+/// dieselben appsettings-Dateien, aber keine Env-Variablen des aufrufenden Fensters — UAC
+/// reicht nur Argumente weiter.
+/// </summary>
+public sealed record CommandLogConfig
+{
+    /// <summary>Protokoll an? Standard aus; <c>appsettings.Development.json</c> schaltet es ein.</summary>
+    public bool Enabled { get; init; }
+
+    /// <summary>Ordner einer Installation; Entwicklungspfade setzt <c>appsettings.Development.json</c> selbst.</summary>
+    public const string DefaultPath = @"%LOCALAPPDATA%\CoreBridge\logs";
+
+    /// <summary>
+    /// Ordner der Protokolle; Umgebungsvariablen werden aufgelöst. Absolut oder relativ zur
+    /// Repo-Wurzel (<see cref="Common.RepoPaths.Resolve"/>), wie <see cref="AppConfig.MultipassLogPath"/>.
+    /// Leer = <see cref="DefaultPath"/>.
+    /// </summary>
+    public string Path { get; init; } = DefaultPath;
+
+    /// <summary>Der wirksame Ordner, <c>null</c> wenn das Protokoll aus ist.</summary>
+    public string? ResolveDirectory() =>
+        this.Enabled
+            ? Common.RepoPaths.Resolve(string.IsNullOrWhiteSpace(this.Path) ? DefaultPath : this.Path)
+            : null;
 }

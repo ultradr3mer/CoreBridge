@@ -29,7 +29,7 @@ public sealed record ComponentListEntry(string Name, ComponentSource Source, Com
 /// <summary>
 /// Benutzereigene Komponenten in <see cref="InitStore.UserSettingsFile"/>
 /// (<c>&lt;StoreRoot&gt;/appsettings.user.json</c>, Form
-/// <c>{ "Images": { "Components": { … } } }</c>). Die mitgelieferten Komponenten
+/// <c>{ "Inits": { "Components": { … } } }</c>). Die mitgelieferten Komponenten
 /// aus appsettings.json bleiben unangetastet: hinzufügen und entfernen wirkt nur
 /// auf die Benutzerdatei, damit ein Update der Installation nichts überschreibt.
 /// </summary>
@@ -55,7 +55,7 @@ public static class InitComponentStore
 
     /// <summary>
     /// Ergänzt <paramref name="config"/> um die Komponenten der Benutzerdatei.
-    /// Nur <c>Images:Components</c> wird gelesen — die Datei kann weder StoreRoot
+    /// Nur <c>Inits:Components</c> wird gelesen — die Datei kann weder StoreRoot
     /// noch andere Einstellungen ändern. Ein Name, den auch appsettings
     /// definiert, ist ein Fehler statt eines stillen Zusammenführens.
     /// </summary>
@@ -67,7 +67,7 @@ public static class InitComponentStore
             return config;
         }
 
-        var merged = new Dictionary<string, ComponentConfig>(config.Images.Components, StringComparer.OrdinalIgnoreCase);
+        var merged = new Dictionary<string, ComponentConfig>(config.Inits.Components, StringComparer.OrdinalIgnoreCase);
         foreach (var (name, component) in user)
         {
             if (!merged.TryAdd(name, component))
@@ -77,7 +77,7 @@ public static class InitComponentStore
             }
         }
 
-        return config with { Images = config.Images with { Components = merged } };
+        return config with { Inits = config.Inits with { Components = merged } };
     }
 
     /// <summary>Komponenten der Benutzerdatei; fehlt die Datei, ist die Liste leer.</summary>
@@ -89,7 +89,7 @@ public static class InitComponentStore
             return components;
         }
 
-        var node = ReadRoot(userFile)["Images"]?["Components"];
+        var node = ReadRoot(userFile)["Inits"]?["Components"];
         if (node is null)
         {
             return components;
@@ -97,7 +97,7 @@ public static class InitComponentStore
 
         if (node is not JsonObject entries)
         {
-            throw new MultipassException($"{userFile}: Images:Components muss ein Objekt sein.");
+            throw new MultipassException($"{userFile}: Inits:Components muss ein Objekt sein.");
         }
 
         foreach (var (name, value) in entries)
@@ -109,11 +109,11 @@ public static class InitComponentStore
     }
 
     /// <summary>Alle wirksamen Komponenten mit Herkunft, alphabetisch.</summary>
-    /// <param name="images">Die bereits per <see cref="Merge"/> ergänzte Konfiguration.</param>
-    public static IReadOnlyList<ComponentListEntry> List(ImagesConfig images, string userFile)
+    /// <param name="inits">Die bereits per <see cref="Merge"/> ergänzte Konfiguration.</param>
+    public static IReadOnlyList<ComponentListEntry> List(InitsConfig inits, string userFile)
     {
         var user = ReadUser(userFile);
-        return images.Components
+        return inits.Components
             .OrderBy(entry => entry.Key, StringComparer.OrdinalIgnoreCase)
             .Select(entry => new ComponentListEntry(
                 entry.Key,
@@ -161,12 +161,12 @@ public static class InitComponentStore
     /// Arbeitsverzeichnis aufgelöst und absolut gespeichert.
     /// </summary>
     /// <returns>Die gespeicherte (normalisierte) Definition.</returns>
-    public static ComponentConfig Add(ImagesConfig images, string userFile, string name, ComponentConfig component, bool replace)
+    public static ComponentConfig Add(InitsConfig inits, string userFile, string name, ComponentConfig component, bool replace)
     {
         RequireValidName(name);
         var user = ReadUser(userFile);
         var exists = user.ContainsKey(name);
-        if (!exists && images.Components.ContainsKey(name))
+        if (!exists && inits.Components.ContainsKey(name))
         {
             throw new MultipassException(
                 $"Komponente '{name}' ist mitgeliefert (appsettings.json) und lässt sich nicht ändern — anderen Namen wählen.");
@@ -194,12 +194,12 @@ public static class InitComponentStore
     }
 
     /// <summary>Entfernt eine Benutzerkomponente; mitgelieferte sind nicht entfernbar.</summary>
-    public static void Remove(ImagesConfig images, string userFile, string name)
+    public static void Remove(InitsConfig inits, string userFile, string name)
     {
         var user = ReadUser(userFile);
         if (!user.ContainsKey(name))
         {
-            throw new MultipassException(images.Components.ContainsKey(name)
+            throw new MultipassException(inits.Components.ContainsKey(name)
                 ? $"Komponente '{name}' ist mitgeliefert (appsettings.json) und lässt sich nicht entfernen."
                 : $"Unbekannte Komponente '{name}'. Übersicht: `cb component-list`.");
         }
@@ -258,7 +258,7 @@ public static class InitComponentStore
                 $"Komponente '{name}': Script braucht einen InstallPath (absoluter Unix-Pfad im Gast, z. B. /usr/local/sbin/corebridge-install-{name}).");
         }
 
-        var probe = new ImagesConfig
+        var probe = new InitsConfig
         {
             Components = new Dictionary<string, ComponentConfig>(StringComparer.OrdinalIgnoreCase) { [name] = component }
         };
@@ -294,29 +294,29 @@ public static class InitComponentStore
         }
     }
 
-    /// <summary>Liefert <c>Images:Components</c> und legt fehlende Ebenen an.</summary>
+    /// <summary>Liefert <c>Inits:Components</c> und legt fehlende Ebenen an.</summary>
     private static JsonObject Section(JsonObject root, string userFile)
     {
-        if (root["Images"] is not JsonObject images)
+        if (root["Inits"] is not JsonObject inits)
         {
-            if (root["Images"] is not null)
+            if (root["Inits"] is not null)
             {
-                throw new MultipassException($"{userFile}: Images muss ein Objekt sein.");
+                throw new MultipassException($"{userFile}: Inits muss ein Objekt sein.");
             }
 
-            images = new JsonObject();
-            root["Images"] = images;
+            inits = new JsonObject();
+            root["Inits"] = inits;
         }
 
-        if (images["Components"] is not JsonObject components)
+        if (inits["Components"] is not JsonObject components)
         {
-            if (images["Components"] is not null)
+            if (inits["Components"] is not null)
             {
-                throw new MultipassException($"{userFile}: Images:Components muss ein Objekt sein.");
+                throw new MultipassException($"{userFile}: Inits:Components muss ein Objekt sein.");
             }
 
             components = new JsonObject();
-            images["Components"] = components;
+            inits["Components"] = components;
         }
 
         return components;

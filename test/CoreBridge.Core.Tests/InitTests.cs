@@ -274,9 +274,9 @@ public class InitCloudInitTests
         return Sequence(node).Children.Select(Scalar).ToArray();
     }
 
-    private static ImagesConfig Config(params (string Name, ComponentConfig Component)[] components)
+    private static InitsConfig Config(params (string Name, ComponentConfig Component)[] components)
     {
-        return new ImagesConfig
+        return new InitsConfig
         {
             Components = components.ToDictionary(
                 component => component.Name,
@@ -322,9 +322,9 @@ public class InitComponentsTests
             () => InitComponents.ResolveSnaps(config, ["rust"]));
     }
 
-    private static ImagesConfig Config(params (string Name, ComponentConfig Component)[] components)
+    private static InitsConfig Config(params (string Name, ComponentConfig Component)[] components)
     {
-        return new ImagesConfig
+        return new InitsConfig
         {
             Components = components.ToDictionary(
                 component => component.Name,
@@ -420,9 +420,9 @@ public class InitServiceConfigureGuardTests
         Assert.Empty(result.Snaps);
     }
 
-    private static ImagesConfig Config()
+    private static InitsConfig Config()
     {
-        return new ImagesConfig
+        return new InitsConfig
         {
             Components = new Dictionary<string, ComponentConfig>(StringComparer.OrdinalIgnoreCase)
             {
@@ -465,7 +465,7 @@ public class InitServiceListDeleteTests
         SeedStore(store, "alpha", ["claude"], []);
         SeedStore(store, "beta", ["dotnet"], ["dotnet-sdk-100"]);
 
-        var entries = new InitService(new ImagesConfig()).List();
+        var entries = new InitService(new InitsConfig()).List();
 
         Assert.Equal(2, entries.Count);
         Assert.Equal("alpha", entries[0].Name);
@@ -481,7 +481,7 @@ public class InitServiceListDeleteTests
         using var store = new TempDirectory();
         InitStore.Initialize(store);
 
-        Assert.Empty(new InitService(new ImagesConfig()).List());
+        Assert.Empty(new InitService(new InitsConfig()).List());
     }
 
     [Fact]
@@ -490,7 +490,7 @@ public class InitServiceListDeleteTests
         using var store = new TempDirectory();
         SeedStore(store, "agent", ["claude"], []);
 
-        var result = new InitService(new ImagesConfig()).Delete("agent");
+        var result = new InitService(new InitsConfig()).Delete("agent");
 
         Assert.Equal(InitStore.ProfileDir("agent"), result.ProfileDir);
         Assert.False(Directory.Exists(result.ProfileDir));
@@ -502,7 +502,7 @@ public class InitServiceListDeleteTests
         using var store = new TempDirectory();
         InitStore.Initialize(store);
 
-        Assert.Throws<MultipassException>(() => new InitService(new ImagesConfig()).Delete("gibtsnicht"));
+        Assert.Throws<MultipassException>(() => new InitService(new InitsConfig()).Delete("gibtsnicht"));
     }
 }
 

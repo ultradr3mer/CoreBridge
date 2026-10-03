@@ -14,9 +14,11 @@ public class ComponentScriptTests
     [InlineData("python", "/usr/local/sbin/corebridge-install-python", "python3.14")]
     [InlineData("cline", "/usr/local/sbin/corebridge-install-cline", "npm install -g --allow-scripts=cline,protobufjs cline")]
     [InlineData("git", "/usr/local/sbin/corebridge-install-git", "git --version")]
+    // Auch ohne Login-Shell im PATH (multipass exec), wie /usr/local/bin/claude.
+    [InlineData("dotnet", "/usr/local/sbin/corebridge-install-dotnet", "ln -sfn \"$dotnet_source\" /usr/local/bin/dotnet")]
     public void KomponenteBettetSkriptEinUndRuftEsAuf(string component, string installPath, string scriptMarker)
     {
-        var config = LoadShippedImagesConfig();
+        var config = LoadShippedInitsConfig();
 
         var yaml = InitCloudInit.Generate("agent", config, [component]);
 
@@ -26,10 +28,31 @@ public class ComponentScriptTests
         Assert.Contains($"touch /var/lib/corebridge/{component}.ready", yaml);
     }
 
+    /// <summary>
+    /// vm-create und vm-install halten eine Komponente erst mit ihrem
+    /// <c>.ready</c>-Marker für installiert — ein Skript ohne ihn (wie lange
+    /// install-dotnet.sh) läuft durch und gilt trotzdem als gescheitert.
+    /// </summary>
+    [Fact]
+    public void JedesKomponentenSkriptSetztSeinenMarker()
+    {
+        var config = LoadShippedInitsConfig();
+
+        var withScript = config.Components.Where(c => !string.IsNullOrWhiteSpace(c.Value.Script)).ToList();
+        Assert.NotEmpty(withScript);
+        foreach (var (name, _) in withScript)
+        {
+            var yaml = InitCloudInit.Generate("agent", config, [name]);
+            Assert.True(
+                yaml.Contains($"touch /var/lib/corebridge/{name}.ready", StringComparison.Ordinal),
+                $"Skript der Komponente '{name}' setzt keinen Marker /var/lib/corebridge/{name}.ready.");
+        }
+    }
+
     [Fact]
     public void AlleAusgeliefertenKomponentenSindKombinierbar()
     {
-        var config = LoadShippedImagesConfig();
+        var config = LoadShippedInitsConfig();
 
         var yaml = InitCloudInit.Generate("all", config, config.Components.Keys);
 
@@ -42,22 +65,22 @@ public class ComponentScriptTests
     [Fact]
     public void GitInstalliertNurGit()
     {
-        var yaml = InitCloudInit.Generate("agent", LoadShippedImagesConfig(), ["git"]);
+        var yaml = InitCloudInit.Generate("agent", LoadShippedInitsConfig(), ["git"]);
 
         Assert.Contains("- 'git'", yaml);
         Assert.DoesNotContain("openssh-server", yaml);
         Assert.DoesNotContain("authorized_keys", yaml);
     }
 
-    private static ImagesConfig LoadShippedImagesConfig()
+    private static InitsConfig LoadShippedInitsConfig()
     {
         var path = InitStore.ResolvePath("src/CoreBridge.Cli/appsettings.json");
         using var document = JsonDocument.Parse(File.ReadAllText(path));
-        var images = document.RootElement.GetProperty("Images").Deserialize<ImagesConfig>(
+        var inits = document.RootElement.GetProperty("Inits").Deserialize<InitsConfig>(
             new JsonSerializerOptions { PropertyNameCaseInsensitive = true })!;
-        return images with
+        return inits with
         {
-            Components = new Dictionary<string, ComponentConfig>(images.Components, StringComparer.OrdinalIgnoreCase)
+            Components = new Dictionary<string, ComponentConfig>(inits.Components, StringComparer.OrdinalIgnoreCase)
         };
     }
 }

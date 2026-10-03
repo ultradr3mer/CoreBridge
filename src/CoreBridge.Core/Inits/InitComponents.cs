@@ -10,7 +10,7 @@ namespace CoreBridge.Core.Inits;
 /// </summary>
 public static class InitComponents
 {
-    public static string[] ResolveSnaps(ImagesConfig config, IEnumerable<string> components)
+    public static string[] ResolveSnaps(InitsConfig config, IEnumerable<string> components)
     {
         return Resolve(config, components)
             .Select(component => component.Snap)
@@ -20,7 +20,7 @@ public static class InitComponents
             .ToArray();
     }
 
-    internal static ComponentConfig[] Resolve(ImagesConfig config, IEnumerable<string> components)
+    internal static ComponentConfig[] Resolve(InitsConfig config, IEnumerable<string> components)
     {
         return components
             .Select(name => name.Trim())
@@ -30,7 +30,7 @@ public static class InitComponents
                 if (!config.Components.TryGetValue(name, out var component))
                 {
                     throw new MultipassException(
-                        $"Unbekannte Komponente '{name}'. Bekannt (Config Images:Components): {string.Join(", ", config.Components.Keys)}.");
+                        $"Unbekannte Komponente '{name}'. Bekannt (Config Inits:Components): {string.Join(", ", config.Components.Keys)}.");
                 }
 
                 return component;

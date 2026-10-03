@@ -10,7 +10,8 @@ public sealed record DoctorReport(
     string? DaemonVersion,
     string? RawVersionOutput,
     string? Error,
-    IReadOnlyList<string> Hints);
+    IReadOnlyList<string> Hints,
+    bool NotAuthenticated = false);
 
 public static class Doctor
 {
@@ -58,14 +59,18 @@ public static class Doctor
             }
 
             var (client, daemon) = MultipassVersion.Parse(result.StdOut);
+            var notAuthenticated = daemon is null && IsNotAuthenticated(multipass, binary, timeoutMs);
             return new DoctorReport(
                 true,
                 binary,
                 client,
                 daemon,
                 result.StdOut,
-                daemon is null ? "Daemon hat keine Version gemeldet (läuft der multipassd-Dienst?)." : null,
-                Array.Empty<string>());
+                notAuthenticated
+                    ? NotAuthenticatedMessage
+                    : daemon is null ? "Daemon hat keine Version gemeldet (läuft der multipassd-Dienst?)." : null,
+                Array.Empty<string>(),
+                notAuthenticated);
         }
         catch (JsonException)
         {
@@ -88,6 +93,38 @@ public static class Doctor
                 exception.StdOut,
                 $"multipass version: {exception.Message}",
                 InstallationHints);
+        }
+    }
+
+    /// <summary>
+    /// Meldung, wenn der Dienst läuft, den Client aber ablehnt. Warten hilft dann nicht:
+    /// der Dienst kennt das Client-Zertifikat nicht (typisch nach einem neuen Speicherort
+    /// über <c>MULTIPASS_STORAGE</c>, dessen Daten die bisherigen Zertifikate nicht enthalten).
+    /// </summary>
+    public const string NotAuthenticatedMessage =
+        "Der Multipass-Dienst läuft, lehnt diesen Client aber ab (nicht authentifiziert) — Warten hilft nicht. "
+        + "Typisch nach einem neuen Speicherort (MULTIPASS_STORAGE): die vertrauten Client-Zertifikate liegen im alten. "
+        + "Eine Passphrase (`multipass set local.passphrase`) kann nur ein schon vertrauter Client setzen — auch als Administrator nicht. "
+        + "Abhilfe: zurück zum vorigen Speicherort (`cb multipass-store --reset` oder `-p <alter Ordner>`), "
+        + "oder Multipass reparieren/neu installieren: der installierende Benutzer wird automatisch vertraut.";
+
+    /// <summary>
+    /// <c>multipass version</c> endet auch dann mit Exit 0, wenn der Dienst den Client
+    /// ablehnt — es fehlt nur die Daemon-Version. Erst ein Befehl, der den Dienst braucht,
+    /// verrät den Grund: „The client is not authenticated with the Multipass service.“
+    /// Scheitert die Probe selbst (Timeout, unbekannter Aufruf einer Attrappe), gilt das
+    /// nicht als Ablehnung.
+    /// </summary>
+    private static bool IsNotAuthenticated(IMultipassCli multipass, string binary, int timeoutMs)
+    {
+        try
+        {
+            var probe = multipass.Run(new[] { "list", "--format", "json" }, timeoutMs, binary);
+            return (probe.StdOut + probe.StdErr).Contains("not authenticated", StringComparison.OrdinalIgnoreCase);
+        }
+        catch (MultipassException)
+        {
+            return false;
         }
     }
 }

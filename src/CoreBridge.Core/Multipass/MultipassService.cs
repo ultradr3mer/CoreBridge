@@ -1,9 +1,11 @@
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 using System.Security.Principal;
 using System.Text.RegularExpressions;
 using CoreBridge.Core.Common;
 using CoreBridge.Core.Vm;
+using CoreBridge.Interaction;
 
 namespace CoreBridge.Core.Multipass;
 
@@ -28,6 +30,9 @@ public enum MultipassServiceState
 public class MultipassService
 {
     public const string ServiceName = "Multipass";
+
+    /// <summary>Exit-Code von <c>sc.exe</c> bzw. Windows-Fehler „Zugriff verweigert“.</summary>
+    private const int AccessDenied = 5;
 
     public const string DaemonProcessName = "multipassd";
 
@@ -54,18 +59,35 @@ public class MultipassService
     /// starten und warten, bis der Daemon wieder antwortet. Liefert
     /// Fortschrittsmeldungen, sobald sie entstehen; wirft
     /// <see cref="MultipassException"/>, wenn ein Schritt scheitert oder das
-    /// Beenden abgelehnt wird.
+    /// Beenden abgelehnt wird, und <see cref="MultipassAccessDeniedException"/>,
+    /// sobald ein Schritt Rechte braucht, die der Benutzer nicht hat — vorab, wenn
+    /// er den Dienst gar nicht steuern darf (dann ohne jeden Eingriff), oder
+    /// mitten im Ablauf, z. B. beim harten Beenden des als SYSTEM laufenden Daemons.
     /// </summary>
     /// <param name="confirm">Ja/Nein-Rückfrage an den Benutzer; <c>true</c> = Ja.</param>
+    /// <param name="offerWhileStopping">
+    /// Erzeugt beim Beginn des Wartens auf den Stop ein Angebot (der Aufrufer trägt es auf
+    /// seinen Ticks, siehe <c>ProgressEvent.Offer</c>). Es bleibt offen, solange gewartet
+    /// wird: <see cref="HungStopOptions.Kill"/> beendet das Warten sofort und den Daemon
+    /// ohne weitere Rückfrage — ein hängender Stop antwortet erfahrungsgemäß ohnehin nicht
+    /// mehr —, <see cref="HungStopOptions.Cancel"/> bricht mit
+    /// <see cref="OperationCanceledException"/> ab. Endet das Warten unbeantwortet, schließt
+    /// der Dienst es mit der Standardantwort.
+    /// </param>
+    /// <param name="killNow">Gar nicht erst warten, sondern gleich beenden (erhöhtes Fenster nach <c>k</c>).</param>
+    /// <param name="acceptRejectedClient">Siehe <see cref="IsDaemonResponding"/>.</param>
     public async IAsyncEnumerable<string> Restart(
         TimeSpan timeout,
         Func<string, bool> confirm,
+        Func<string, ChoiceEvent<HungStopOptions>>? offerWhileStopping = null,
+        bool killNow = false,
+        bool acceptRejectedClient = false,
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
-        if (!IsElevated())
+        if (!IsElevated() && !CanControlService())
         {
-            throw new MultipassException(
-                $"Neustart des Dienstes {ServiceName} benötigt Administratorrechte — PowerShell als Administrator starten.");
+            throw new MultipassAccessDeniedException(
+                $"Der Benutzer darf den Dienst {ServiceName} nicht stoppen und starten — dafür braucht es Administratorrechte.");
         }
 
         var state = QueryState();
@@ -86,14 +108,33 @@ public class MultipassService
             // Ein hängender Stop ist hier kein Fehler, sondern führt zur Kill-Rückfrage.
             // yield darf nicht im try mit catch stehen, daher nur MoveNextAsync überwachen.
             var stopped = true;
-            await using (var wait = WaitForStateAsync(
-                MultipassServiceState.Stopped,
-                timeout,
-                () => string.Empty,
-                cancellationToken).GetAsyncEnumerator(cancellationToken))
+            var kill = killNow;
+            var offer = kill ? null : offerWhileStopping?.Invoke($"Warten auf den Stop von {ServiceName}:");
+            try
             {
+                await using var wait = WaitForStateAsync(
+                    MultipassServiceState.Stopped,
+                    timeout,
+                    () => string.Empty,
+                    cancellationToken).GetAsyncEnumerator(cancellationToken);
                 while (true)
                 {
+                    if (offer is not null && offer.TryGetAnswer(out var answer))
+                    {
+                        if (answer == HungStopOptions.Cancel)
+                        {
+                            throw new OperationCanceledException($"Neustart abgebrochen — Service {ServiceName} bleibt in {QueryState()}.");
+                        }
+
+                        kill = answer == HungStopOptions.Kill;
+                    }
+
+                    if (kill)
+                    {
+                        stopped = false;
+                        break;
+                    }
+
                     try
                     {
                         if (!await wait.MoveNextAsync())
@@ -110,6 +151,10 @@ public class MultipassService
                     yield return wait.Current;
                 }
             }
+            finally
+            {
+                offer?.SetDefault();
+            }
 
             if (!stopped)
             {
@@ -120,8 +165,17 @@ public class MultipassService
                         $"Service {ServiceName} reagiert nicht ({QueryState()}), meldet aber keinen Prozess — Rechner neu starten.");
                 }
 
-                yield return $"Service reagiert nach {timeout.TotalSeconds:F0} s nicht ({QueryState()}).";
-                if (!confirm($"Daemon-Prozess {DaemonProcessName} (PID {processId}) hart beenden?"))
+                if (kill)
+                {
+                    yield return $"Warten abgebrochen ({QueryState()}) — {DaemonProcessName} (PID {processId}) wird hart beendet.";
+                }
+                else
+                {
+                    yield return $"Service reagiert nach {timeout.TotalSeconds:F0} s nicht ({QueryState()}).";
+                }
+
+                if (!kill
+                    && !confirm($"Daemon-Prozess {DaemonProcessName} (PID {processId}) hart beenden?"))
                 {
                     throw new MultipassException(
                         $"Abgebrochen — {DaemonProcessName} (PID {processId}) wurde nicht beendet, Service bleibt in {QueryState()}.");
@@ -172,22 +226,26 @@ public class MultipassService
         {
             yield return "Starte Service ...";
             RequestStart();
-            await foreach (var line in WaitForStateAsync(
-                MultipassServiceState.Running,
+            await foreach (var line in WaitUntilAsync(
+                () => QueryState() == MultipassServiceState.Running,
                 timeout,
                 () => $"Service {ServiceName} ist nach {timeout.TotalSeconds:F0} s nicht Running ({QueryState()}).",
-                cancellationToken))
+                cancellationToken,
+                waited => confirm($"Service {ServiceName} ist nach {waited.TotalSeconds:F0} s noch nicht Running ({QueryState()}) — weiter warten?")))
             {
                 yield return line;
             }
         }
 
+        // Nach einem Neustart braucht der Daemon oft länger als DefaultTimeout, bis er
+        // antwortet (Hyper-V, VMs) — das ist kein Fehler, deshalb wird gefragt statt abgebrochen.
         yield return "Warte auf Daemon ...";
         await foreach (var line in WaitUntilAsync(
-            IsDaemonResponding,
+            () => IsDaemonResponding(acceptRejectedClient),
             timeout,
             () => $"Service {ServiceName} läuft, aber der Daemon antwortet nach {timeout.TotalSeconds:F0} s nicht auf `multipass version`.",
-            cancellationToken))
+            cancellationToken,
+            waited => confirm($"Der Daemon antwortet nach {waited.TotalSeconds:F0} s noch nicht auf `multipass version` — weiter warten?")))
         {
             yield return line;
         }
@@ -204,6 +262,57 @@ public class MultipassService
         return new WindowsPrincipal(identity).IsInRole(WindowsBuiltInRole.Administrator);
     }
 
+    /// <summary>
+    /// Darf der Benutzer den Dienst stoppen und starten? Fragt die Rechte beim
+    /// Dienststeuerungs-Manager an (<c>OpenService</c> mit <c>SERVICE_START |
+    /// SERVICE_STOP</c>), ohne den Dienst anzufassen. Die Dienst-ACL entscheidet,
+    /// nicht die Gruppe: standardmäßig dürfen das nur Administratoren und SYSTEM.
+    /// </summary>
+    public virtual bool CanControlService()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return false;
+        }
+
+        var manager = OpenSCManager(null, null, ScManagerConnect);
+        if (manager == IntPtr.Zero)
+        {
+            return false;
+        }
+
+        try
+        {
+            var service = OpenService(manager, ServiceName, ServiceQueryStatus | ServiceStart | ServiceStop);
+            if (service == IntPtr.Zero)
+            {
+                return false;
+            }
+
+            CloseServiceHandle(service);
+            return true;
+        }
+        finally
+        {
+            CloseServiceHandle(manager);
+        }
+    }
+
+    private const uint ScManagerConnect = 0x0001;
+    private const uint ServiceQueryStatus = 0x0004;
+    private const uint ServiceStart = 0x0010;
+    private const uint ServiceStop = 0x0020;
+
+    [DllImport("advapi32.dll", EntryPoint = "OpenSCManagerW", SetLastError = true, CharSet = CharSet.Unicode)]
+    private static extern IntPtr OpenSCManager(string? machineName, string? databaseName, uint desiredAccess);
+
+    [DllImport("advapi32.dll", EntryPoint = "OpenServiceW", SetLastError = true, CharSet = CharSet.Unicode)]
+    private static extern IntPtr OpenService(IntPtr manager, string serviceName, uint desiredAccess);
+
+    [DllImport("advapi32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool CloseServiceHandle(IntPtr handle);
+
     public virtual MultipassServiceState QueryState()
     {
         var (exitCode, output) = RunSc("queryex", ServiceName);
@@ -219,6 +328,11 @@ public class MultipassService
     public virtual void RequestStop()
     {
         var (exitCode, output) = RunSc("stop", ServiceName);
+        if (exitCode == AccessDenied)
+        {
+            throw new MultipassAccessDeniedException($"sc stop {ServiceName}: Zugriff verweigert.");
+        }
+
         if (exitCode is not (0 or 1061 or 1062))
         {
             throw new MultipassException($"sc stop {ServiceName} beendet mit Exit {exitCode}: {output.Trim()}");
@@ -229,6 +343,11 @@ public class MultipassService
     public virtual void RequestStart()
     {
         var (exitCode, output) = RunSc("start", ServiceName);
+        if (exitCode == AccessDenied)
+        {
+            throw new MultipassAccessDeniedException($"sc start {ServiceName}: Zugriff verweigert.");
+        }
+
         if (exitCode is not (0 or 1056))
         {
             throw new MultipassException($"sc start {ServiceName} beendet mit Exit {exitCode}: {output.Trim()}");
@@ -260,6 +379,12 @@ public class MultipassService
         {
             // Prozess war bereits beendet.
         }
+        catch (System.ComponentModel.Win32Exception exception) when (exception.NativeErrorCode == AccessDenied)
+        {
+            throw new MultipassAccessDeniedException(
+                $"{DaemonProcessName} (PID {processId}) läuft als SYSTEM — hart beenden geht nur mit Administratorrechten.",
+                exception);
+        }
         catch (System.ComponentModel.Win32Exception exception)
         {
             throw new MultipassException(
@@ -268,9 +393,26 @@ public class MultipassService
         }
     }
 
-    public virtual bool IsDaemonResponding()
+    /// <param name="acceptRejectedClient">
+    /// <c>true</c>: ein Dienst, der den Client ablehnt, gilt als hochgefahren — nach
+    /// einem neuen Speicherort ist das der erwartete Zustand (<c>multipass-store</c>).
+    /// </param>
+    /// <exception cref="MultipassException">
+    /// Wenn der Dienst den Client ablehnt (<see cref="DoctorReport.NotAuthenticated"/>)
+    /// und das nicht erwartet ist: dann antwortet er nie mit einer Version, und Warten wäre sinnlos.
+    /// </exception>
+    public virtual bool IsDaemonResponding(bool acceptRejectedClient = false)
     {
-        return Doctor.Check().DaemonVersion is not null;
+        // Ohne Grenze wartete eine einzelne Abfrage 60 s (Standard von Doctor.Check).
+        var report = Doctor.Check(timeoutMs: (int)_commandTimeout.TotalMilliseconds);
+        if (report.NotAuthenticated)
+        {
+            return acceptRejectedClient
+                ? true
+                : throw new MultipassException(Doctor.NotAuthenticatedMessage);
+        }
+
+        return report.DaemonVersion is not null;
     }
 
     /// <summary>Liest die PID aus der <c>PID</c>-Zeile von <c>sc.exe queryex</c>, 0 wenn keine.</summary>
@@ -318,26 +460,55 @@ public class MultipassService
     /// <exception cref="MultipassServiceTimeoutException">
     /// Mit <paramref name="timeoutMessage"/>, wenn <paramref name="condition"/> nicht innerhalb von <paramref name="timeout"/> erfüllt ist.
     /// </exception>
+    /// <param name="keepWaiting">
+    /// Nach jedem abgelaufenen <paramref name="timeout"/> gefragt (mit der bisherigen
+    /// Wartezeit): <c>true</c> wartet einen weiteren Abschnitt, sonst — oder ohne
+    /// Callback — folgt die <see cref="MultipassServiceTimeoutException"/>.
+    /// </param>
     private async IAsyncEnumerable<string> WaitUntilAsync(
         Func<bool> condition,
         TimeSpan timeout,
         Func<string> timeoutMessage,
-        [EnumeratorCancellation] CancellationToken cancellationToken)
+        [EnumeratorCancellation] CancellationToken cancellationToken,
+        Func<TimeSpan, bool>? keepWaiting = null)
     {
-        var stopwatch = Stopwatch.StartNew();
+        var total = Stopwatch.StartNew();
+        var slice = Stopwatch.StartNew();
+
+        void CheckTimeout()
+        {
+            if (slice.Elapsed < timeout)
+            {
+                return;
+            }
+
+            if (keepWaiting?.Invoke(total.Elapsed) != true)
+            {
+                throw new MultipassServiceTimeoutException(timeoutMessage());
+            }
+
+            slice.Restart();
+        }
+
         while (true)
         {
-            if (await Task.Run(condition, cancellationToken))
+            // Eine einzelne Abfrage kann selbst dauern (multipass version, solange der
+            // Daemon hochfährt). Währenddessen laufen die Ticks weiter, damit der
+            // Fortschritt sichtbar bleibt und der Konsument Tasten lesen kann.
+            var check = Task.Run(condition, cancellationToken);
+            while (await Task.WhenAny(check, Task.Delay(_pollInterval, cancellationToken)) != check)
+            {
+                CheckTimeout();
+                yield return Progress.ProgressTick;
+            }
+
+            if (await check)
             {
                 yield return "OK";
                 yield break;
             }
 
-            if (stopwatch.Elapsed >= timeout)
-            {
-                throw new MultipassServiceTimeoutException(timeoutMessage());
-            }
-
+            CheckTimeout();
             yield return Progress.ProgressTick;
 
             await Task.Delay(_pollInterval, cancellationToken);
