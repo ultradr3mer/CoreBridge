@@ -25,6 +25,19 @@ public static partial class Program
     }
   }
 
+  /// <summary>CPU/Memory/Disk-Angaben prüfen, bevor etwas an einer VM passiert.</summary>
+  private static VmResources ParseResources(int? cpus, string? memory, string? disk)
+  {
+    try
+    {
+      return VmResources.Parse(cpus, memory, disk);
+    }
+    catch (MultipassException exception)
+    {
+      throw new ProgramExecutionException(1, exception.Message);
+    }
+  }
+
   /// <summary>Multipass-Namensregel: Buchstaben, Ziffern, Bindestriche; Beginn mit Buchstabe, Ende ohne Bindestrich.</summary>
   private static readonly System.Text.RegularExpressions.Regex VmNamePattern =
       new("^[A-Za-z](?:[A-Za-z0-9-]*[A-Za-z0-9])?$", System.Text.RegularExpressions.RegexOptions.CultureInvariant);
@@ -67,6 +80,8 @@ public static partial class Program
 
     var launchImage = profile?.RuntimeImage ?? image ?? config.Inits.DefaultRuntimeImage;
     var cloudInit = options.CloudInit ?? profile?.CloudInitPath;
+    // Angaben an vm-create schlagen die Vorgaben des Profils.
+    var resources = ParseResources(options.Cpus, options.Memory, options.Disk).Over(profile?.Resources ?? VmResources.None);
     if (!VmNamePattern.IsMatch(options.Name))
     {
       throw new ProgramExecutionException(
@@ -83,7 +98,7 @@ public static partial class Program
 
     await events.Emit(events.Std($"Lege VM `{options.Name}` an ("
         + (profile is null ? $"Image: {launchImage}" : $"Profil: {profile.Name} → Image: {launchImage}")
-        + $"{(options.Disk is null ? string.Empty : $", Disk: {options.Disk}")}"
+        + (resources.IsEmpty ? string.Empty : $", {resources}")
         + $"{(cloudInit is null ? string.Empty : ", cloud-init")}) ..."));
 
     var stopwatch = System.Diagnostics.Stopwatch.StartNew();
@@ -95,11 +110,13 @@ public static partial class Program
           () => vms.Create(
               options.Name,
               launchImage,
-              options.Disk,
+              resources.Disk,
               cloudInit,
               waitSlice,
               () => context.Events.Ask(context.Events.Choice<YesNoOptions>(
-                  $"VM `{options.Name}` is not ready after {stopwatch.Elapsed.TotalSeconds:F0} s — keep waiting?")) == YesNoOptions.Yes));
+                  $"VM `{options.Name}` is not ready after {stopwatch.Elapsed.TotalSeconds:F0} s — keep waiting?")) == YesNoOptions.Yes,
+              resources.Cpus,
+              resources.Memory));
     }
     catch (MultipassTimeoutException)
     {

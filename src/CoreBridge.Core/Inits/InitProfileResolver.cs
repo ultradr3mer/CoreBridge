@@ -8,11 +8,13 @@ namespace CoreBridge.Core.Inits;
 /// Aufgelöstes Launch-Profil für einen von <c>init-configure</c> erzeugten Namen.
 /// </summary>
 /// <param name="Components">Die Komponenten, für die <c>init-configure</c> die cloud-init gerendert hat.</param>
+/// <param name="Resources">CPU/Memory/Disk-Vorgaben des Profils; Angaben an <c>vm-create</c> schlagen sie.</param>
 public sealed record InitProfile(
     string Name,
     string RuntimeImage,
     string? CloudInitPath,
-    IReadOnlyList<string> Components);
+    IReadOnlyList<string> Components,
+    VmResources? Resources = null);
 
 /// <summary>
 /// Trennt normale Multipass-Katalognamen von CoreBridge-Profilen.
@@ -107,7 +109,8 @@ public static class InitProfileResolver
             requestedImage,
             runtimeImage,
             cloudInitPath,
-            profileConfig.Components);
+            profileConfig.Components,
+            new VmResources(profileConfig.Cpus, profileConfig.Memory, profileConfig.Disk));
     }
 
     private static string? ResolveCloudInit(

@@ -46,17 +46,15 @@ public sealed class VmService
         string? disk = null,
         string? cloudInitPath = null,
         TimeSpan? waitSlice = null,
-        Func<bool>? keepWaiting = null)
+        Func<bool>? keepWaiting = null,
+        int? cpus = null,
+        string? memory = null)
     {
         // multipass hat ein eigenes Launch-Timeout (Default 300 s, inkl. cloud-init) —
         // ohne --timeout bricht es lange vor unserem Prozess-Timeout ab. Die feste
         // Obergrenze sorgt dafür, dass der Daemon nicht vor dem Benutzer aufgibt.
         var args = new List<string> { "launch", image, "--name", name, "--timeout", LaunchTimeoutSeconds.ToString() };
-        if (disk is not null)
-        {
-            args.Add("--disk");
-            args.Add(disk);
-        }
+        args.AddRange(new VmResources(cpus, memory, disk).LaunchArguments());
 
         if (cloudInitPath is not null)
         {
@@ -169,19 +167,35 @@ public sealed class VmService
         return Run(new[] { "restore", $"{name}.{snapshot}", "--destructive" }, timeoutMs, keepWaiting);
     }
 
-    /// <summary>Disk-Größe laut <c>multipass get local.&lt;vm&gt;.disk</c>, z. B. <c>5.0GiB</c>.</summary>
-    public string GetDisk(string name, int timeoutMs = 60_000)
+    /// <summary>Disk-Größe laut <c>multipass get local.&lt;vm&gt;.disk</c>, z. B. <c>5.0GiB</c>.</summary>
+    public string GetDisk(string name, int timeoutMs = 60_000) => GetSetting(name, "disk", timeoutMs);
+
+    /// <summary>
+    /// Eine VM-Einstellung laut <c>multipass get local.&lt;vm&gt;.&lt;key&gt;</c>
+    /// (<c>cpus</c> → <c>2</c>, <c>memory</c> → <c>1.0GiB</c>, <c>disk</c> → <c>5.0GiB</c>).
+    /// </summary>
+    public string GetSetting(string name, string key, int timeoutMs = 60_000)
     {
-        var result = _cli.Run(new[] { "get", $"local.{name}.disk" }, timeoutMs);
+        var result = _cli.Run(new[] { "get", $"local.{name}.{key}" }, timeoutMs);
         if (result.ExitCode != 0)
         {
             var message = MultipassStdErr.Clean(result.StdErr);
             throw new MultipassException(string.IsNullOrEmpty(message)
-                ? $"multipass get local.{name}.disk beendet mit Exit {result.ExitCode}."
+                ? $"multipass get local.{name}.{key} beendet mit Exit {result.ExitCode}."
                 : $"{message} (multipass Exit {result.ExitCode})");
         }
 
         return MultipassOutput.CleanLines(result.StdOut).FirstOrDefault()?.Trim() ?? string.Empty;
+    }
+
+    /// <summary>
+    /// <c>multipass set local.&lt;vm&gt;.&lt;key&gt;=&lt;value&gt;</c> (<c>cpus</c>, <c>memory</c>)
+    /// auf einer <em>gestoppten</em> VM; die Disk geht über <see cref="SetDisk"/>.
+    /// </summary>
+    /// <inheritdoc cref="Start"/>
+    public MultipassRunResult SetSetting(string name, string key, string value, int timeoutMs = 180_000, Func<bool>? keepWaiting = null)
+    {
+        return Run(new[] { "set", $"local.{name}.{key}={value}" }, timeoutMs, keepWaiting);
     }
 
     /// <summary>

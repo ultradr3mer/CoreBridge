@@ -69,6 +69,9 @@ public sealed class SimulatedMultipassCli : IMultipassCli, IMultipassDouble
     /// <summary>Multipass-Standard ohne <c>launch --disk</c>.</summary>
     private const string DefaultDisk = "5.0GiB";
 
+    /// <summary>Multipass-Standard ohne <c>launch --memory</c>.</summary>
+    private const string DefaultMemory = "1.0GiB";
+
     private readonly TimeSpan _delay;
 
     /// <summary>Einziger öffentlicher Konstruktor — den wählt der Container.</summary>
@@ -196,6 +199,12 @@ public sealed class SimulatedMultipassCli : IMultipassCli, IMultipassDouble
             vm => real.Run(["get", $"local.{vm.Name}.disk"], timeoutMs) is { ExitCode: 0 } disk && disk.StdOut.Trim().Length > 0
                 ? disk.StdOut.Trim()
                 : DefaultDisk);
+        string Setting(string vm, string key, string fallback) =>
+            real.Run(["get", $"local.{vm}.{key}"], timeoutMs) is { ExitCode: 0 } result && result.StdOut.Trim().Length > 0
+                ? result.StdOut.Trim()
+                : fallback;
+        var cpus = vms.ToDictionary(vm => vm.Name, vm => int.TryParse(Setting(vm.Name, "cpus", "1"), out var count) ? count : 1);
+        var memories = vms.ToDictionary(vm => vm.Name, vm => Setting(vm.Name, "memory", DefaultMemory));
         var markers = new Dictionary<string, List<string>>();
         if (probeMarkers)
         {
@@ -222,6 +231,8 @@ public sealed class SimulatedMultipassCli : IMultipassCli, IMultipassDouble
                     State = vm.State,
                     Release = vm.Release,
                     Disk = disks[vm.Name],
+                    Cpus = cpus[vm.Name],
+                    Memory = memories[vm.Name],
                     Ip = vm.Ip ?? previous?.Ip ?? NextIp(state),
                     Components = markers.TryGetValue(vm.Name, out var probed) ? [.. probed] : [.. previous?.Components ?? []],
                     Markers = markers.TryGetValue(vm.Name, out var probedMarkers) ? [.. probedMarkers] : [.. previous?.Markers ?? []],
@@ -441,6 +452,8 @@ public sealed class SimulatedMultipassCli : IMultipassCli, IMultipassDouble
             Release = ReleaseOf(image),
             Ip = NextIp(state),
             Disk = Value(args, "--disk", "-d") is { } disk && MultipassSize.TryParse(disk, out var bytes) ? FormatSize(bytes) : DefaultDisk,
+            Cpus = Value(args, "--cpus", "-c") is { } cpus && int.TryParse(cpus, out var cpuCount) ? cpuCount : 1,
+            Memory = Value(args, "--memory", "-m") is { } memory && MultipassSize.TryParse(memory, out var memoryBytes) ? FormatSize(memoryBytes) : DefaultMemory,
             Components = components,
             Markers = components.ToList()
         });
@@ -587,6 +600,8 @@ public sealed class SimulatedMultipassCli : IMultipassCli, IMultipassDouble
             Release = vm.Release,
             Ip = NextIp(state),
             Disk = vm.Disk,
+            Cpus = vm.Cpus,
+            Memory = vm.Memory,
             Components = [.. vm.Components],
             Markers = [.. vm.Markers],
             Files = new Dictionary<string, string>(vm.Files),
@@ -719,14 +734,14 @@ public sealed class SimulatedMultipassCli : IMultipassCli, IMultipassDouble
                 $"IPv4:           {(running ? vm.Ip : "--")}",
                 $"Release:        {(running ? vm.Release : "--")}",
                 "Image hash:     --",
-                $"CPU(s):         {(running ? "1" : "--")}",
+                $"CPU(s):         {(running ? vm.Cpus.ToString(System.Globalization.CultureInfo.InvariantCulture) : "--")}",
                 $"Load:           {(running ? "0.00 0.00 0.00" : "--")}",
                 $"Disk usage:     {(running ? "2.1GiB out of " + vm.Disk : "--")}",
-                $"Memory usage:   {(running ? "312.4MiB out of 1.0GiB" : "--")}",
+                $"Memory usage:   {(running ? "312.4MiB out of " + vm.Memory : "--")}",
                 "Mounts:         --"));
             info[vm.Name] = new Dictionary<string, object?>
             {
-                ["cpu_count"] = running ? "1" : string.Empty,
+                ["cpu_count"] = running ? vm.Cpus.ToString(System.Globalization.CultureInfo.InvariantCulture) : string.Empty,
                 ["disks"] = new { sda1 = new { total = vm.Disk } },
                 ["ipv4"] = running ? new[] { vm.Ip } : Array.Empty<string>(),
                 ["release"] = running ? vm.Release : string.Empty,
@@ -740,10 +755,10 @@ public sealed class SimulatedMultipassCli : IMultipassCli, IMultipassDouble
             : Ok(string.Join("\n\n", blocks) + "\n");
     }
 
-    /// <summary>Nur <c>local.&lt;vm&gt;.disk</c>; Fehlertext wie Multipass 1.16.3.</summary>
+    /// <summary><c>local.&lt;vm&gt;.cpus|memory|disk</c>; Fehlertext wie Multipass 1.16.3.</summary>
     private static MultipassRunResult Get(SimState state, IReadOnlyList<string> args)
     {
-        var key = Regex.Match(args.ElementAtOrDefault(1) ?? string.Empty, @"^local\.(.+)\.disk$");
+        var key = Regex.Match(args.ElementAtOrDefault(1) ?? string.Empty, @"^local\.(.+)\.(cpus|memory|disk)$");
         if (!key.Success)
         {
             return Fail($"get failed: unknown setting '{args.ElementAtOrDefault(1)}' (simulation).");
@@ -752,23 +767,29 @@ public sealed class SimulatedMultipassCli : IMultipassCli, IMultipassDouble
         var vm = Find(state, key.Groups[1].Value);
         return vm is null
             ? Fail($"get failed: Cannot obtain instance settings; instance: {key.Groups[1].Value}; reason: No such instance")
-            : Ok(vm.Disk + "\n");
+            : Ok(key.Groups[2].Value switch
+            {
+                "cpus" => vm.Cpus.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                "memory" => vm.Memory,
+                _ => vm.Disk
+            } + "\n");
     }
 
     /// <summary>
     /// <c>set local.&lt;vm&gt;.disk=&lt;size&gt;</c> mit den Ablehnungen von Multipass 1.16.3
-    /// (laufende VM, ungültige Größe, Verkleinern — Texte am 2026-09-26 aufgenommen).
+    /// (laufende VM, ungültige Größe, Verkleinern — Texte am 2026-09-26 aufgenommen);
+    /// <c>cpus</c>/<c>memory</c> mit Texten in Anlehnung daran.
     /// </summary>
     private static MultipassRunResult Set(SimState state, IReadOnlyList<string> args)
     {
         var setting = args.ElementAtOrDefault(1) ?? string.Empty;
-        var key = Regex.Match(setting, @"^local\.(.+)\.disk=(.*)$");
+        var key = Regex.Match(setting, @"^local\.(.+)\.(cpus|memory|disk)=(.*)$");
         if (!key.Success)
         {
             return Fail($"set failed: unknown setting '{setting}' (simulation).");
         }
 
-        var (name, size) = (key.Groups[1].Value, key.Groups[2].Value);
+        var (name, property, size) = (key.Groups[1].Value, key.Groups[2].Value, key.Groups[3].Value);
         var vm = Find(state, name);
         if (vm is null)
         {
@@ -780,9 +801,32 @@ public sealed class SimulatedMultipassCli : IMultipassCli, IMultipassDouble
             return Fail($"set failed: Cannot update instance settings; instance: {name}; reason: Instance must be stopped for modification");
         }
 
+        if (property == "cpus")
+        {
+            // Text in Anlehnung an die Disk-Ablehnungen (nicht aufgenommen).
+            if (!int.TryParse(size, System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out var count) || count < 1)
+            {
+                return Fail($"set failed: Invalid setting '{setting}': Need a positive integer (in decimal format) for the number of CPUs");
+            }
+
+            vm.Cpus = count;
+            return Ok(string.Empty);
+        }
+
         if (!MultipassSize.TryParse(size, out var bytes))
         {
             return Fail($"set failed: Invalid setting '{setting}': {size} is not a valid memory size - need a non-negative integer (in base 10) or a decimal followed by K, M, or G (e.g. 1234B, 42MiB, 0.5G)");
+        }
+
+        if (property == "memory")
+        {
+            if (bytes < 128L * 1024 * 1024)
+            {
+                return Fail($"set failed: Invalid setting '{setting}': Memory can't be less than 128M");
+            }
+
+            vm.Memory = FormatSize(bytes);
+            return Ok(string.Empty);
         }
 
         if (MultipassSize.TryParse(vm.Disk, out var current) && bytes < current)
@@ -1029,6 +1073,11 @@ public sealed class SimulatedMultipassCli : IMultipassCli, IMultipassDouble
 
         /// <summary>Wie <c>multipass get local.&lt;vm&gt;.disk</c> es ausgibt.</summary>
         public string Disk { get; set; } = DefaultDisk;
+
+        public int Cpus { get; set; } = 1;
+
+        /// <summary>Wie <c>multipass get local.&lt;vm&gt;.memory</c> es ausgibt.</summary>
+        public string Memory { get; set; } = DefaultMemory;
 
         public List<string> Components { get; set; } = [];
 

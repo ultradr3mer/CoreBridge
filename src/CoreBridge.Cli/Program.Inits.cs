@@ -1,5 +1,6 @@
 using CoreBridge.Interaction;
 using CoreBridge.Core.Inits;
+using CoreBridge.Core.Vm;
 
 namespace CoreBridge.Cli;
 
@@ -10,6 +11,7 @@ public static partial class Program
     var events = context.Events;
     var config = context.Config;
     var components = options.Components.Split(',', StringSplitOptions.RemoveEmptyEntries);
+    var resources = ParseResources(options.Cpus, options.Memory, options.Disk);
     await events.Emit(events.Std($"Erzeuge Profil '{options.Name}' ({string.Join(", ", components)}) ..."));
     var inits = new InitService(config.Inits);
     var result = await Task.Run(
@@ -17,12 +19,18 @@ public static partial class Program
             options.Name,
             components,
             force: options.Force,
-            runtimeImage: options.RuntimeImage),
+            runtimeImage: options.RuntimeImage,
+            resources: resources.IsEmpty ? null : resources),
         context.CancellationToken);
 
     await events.Emit(events.Std($"Profil '{result.Name}' erzeugt."));
     await events.Emit(events.Std($"  Config:       {result.ConfigPath}"));
     await events.Emit(events.Std($"  Runtime-Image: {result.RuntimeImage}"));
+    if (result.Resources is { IsEmpty: false } defaults)
+    {
+      await events.Emit(events.Std($"  Ressourcen:   {defaults} (Vorgabe für vm-create)"));
+    }
+
     await events.Emit(events.Std($"  Snaps:        {(result.Snaps.Length == 0 ? "keine" : string.Join(", ", result.Snaps))}"));
     await events.Emit(events.Std(result.CloudInitPath is null
         ? "  cloud-init: nicht nötig (keine Gast-Provisionierung)."
@@ -41,10 +49,11 @@ public static partial class Program
       return;
     }
 
-    await events.Emit(events.Std($"{"Name",-20} {"Komponenten",-28} Snaps"));
+    await events.Emit(events.Std($"{"Name",-20} {"Komponenten",-28} {"Snaps",-20} Ressourcen"));
     foreach (var entry in entries)
     {
-      await events.Emit(events.Std($"{entry.Name,-20} {string.Join(",", entry.Components),-28} {string.Join(",", entry.Snaps)}"));
+      var resources = entry.Resources is { IsEmpty: false } r ? r.ToString() : "-";
+      await events.Emit(events.Std($"{entry.Name,-20} {string.Join(",", entry.Components),-28} {(entry.Snaps.Length == 0 ? "-" : string.Join(",", entry.Snaps)),-20} {resources}"));
     }
   }
 

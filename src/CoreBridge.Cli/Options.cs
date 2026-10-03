@@ -88,8 +88,14 @@ public sealed class VmCreateOptions : MultipassOptions
     [Option('c', "cloud-init", HelpText = "Pfad zu einer cloud-init-YAML; überschreibt die cloud-init eines Profils (z. B. aus init-configure).")]
     public string? CloudInit { get; set; }
 
-    [Option('d', "disk", HelpText = "Disk-Größe, z. B. 20G (multipass-Standard: 5G).")]
+    [Option('d', "disk", HelpText = "Disk-Größe, z. B. 20G (multipass-Standard: 5G; schlägt die Vorgabe des Profils).")]
     public string? Disk { get; set; }
+
+    [Option("cpus", HelpText = "Anzahl CPUs (multipass-Standard: 1; schlägt die Vorgabe des Profils).")]
+    public int? Cpus { get; set; }
+
+    [Option('m', "memory", HelpText = "Arbeitsspeicher, z. B. 4G (multipass-Standard: 1G; schlägt die Vorgabe des Profils).")]
+    public string? Memory { get; set; }
 
     [Option("snapshot", HelpText = "Nach erfolgreicher Provisionierung (Profil/cloud-init) ohne Rückfrage stoppen und diesen Snapshot anlegen.")]
     public string? Snapshot { get; set; }
@@ -106,6 +112,15 @@ public sealed class InitConfigureOptions : MultipassOptions
 
     [Option("runtime-image", HelpText = "Multipass-Katalogname, den vm-create für dieses Profil startet (Standard: Config Inits:DefaultRuntimeImage).")]
     public string? RuntimeImage { get; set; }
+
+    [Option("cpus", HelpText = "Vorgabe für vm-create: Anzahl CPUs.")]
+    public int? Cpus { get; set; }
+
+    [Option("memory", HelpText = "Vorgabe für vm-create: Arbeitsspeicher, z. B. 4G.")]
+    public string? Memory { get; set; }
+
+    [Option("disk", HelpText = "Vorgabe für vm-create: Disk-Größe, z. B. 20G.")]
+    public string? Disk { get; set; }
 
     [Option('f', "force", HelpText = "Existierende Konfiguration überschreiben (sonst Fehler, wenn das Profil schon existiert).")]
     public bool Force { get; set; }
@@ -267,14 +282,20 @@ public sealed class VmRestoreOptions : MultipassOptions
     public string Snapshot { get; set; } = string.Empty;
 }
 
-[Verb("vm-resize", HelpText = "Vergrößert die Disk einer VM (multipass set local.<vm>.disk=<size>) — z. B. klein aufsetzen, zum Arbeiten wachsen lassen; eine laufende VM wird nach Rückfrage gestoppt und danach wieder gestartet.")]
+[Verb("vm-resize", HelpText = "Ändert CPUs, Arbeitsspeicher und/oder Disk einer VM (multipass set local.<vm>.cpus|memory|disk) — z. B. klein aufsetzen, zum Arbeiten wachsen lassen; die Disk wächst nur. Eine laufende VM wird nach Rückfrage gestoppt und danach wieder gestartet.")]
 public sealed class VmResizeOptions : MultipassOptions
 {
     [Option('n', "name", Required = true, HelpText = "Name der VM.")]
     public string Name { get; set; } = string.Empty;
 
-    [Option('d', "disk", Required = true, HelpText = "Neue Disk-Größe, z. B. 20G (nur größer als die aktuelle; Multipass verkleinert nicht).")]
-    public string Disk { get; set; } = string.Empty;
+    [Option('d', "disk", HelpText = "Neue Disk-Größe, z. B. 20G (nur größer als die aktuelle; Multipass verkleinert nicht).")]
+    public string? Disk { get; set; }
+
+    [Option("cpus", HelpText = "Neue Anzahl CPUs.")]
+    public int? Cpus { get; set; }
+
+    [Option('m', "memory", HelpText = "Neuer Arbeitsspeicher, z. B. 4G.")]
+    public string? Memory { get; set; }
 }
 
 [Verb("vm-install", HelpText = "Installiert Komponenten in eine vorhandene VM (dieselben Schritte wie cloud-init: Pakete, Snaps, Komponenten-Skript, Marker-Prüfung) und empfiehlt danach einen Snapshot.")]
