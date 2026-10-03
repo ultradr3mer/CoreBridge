@@ -1,3 +1,4 @@
+using CoreBridge.Interaction;
 using Microsoft.Win32;
 
 namespace CoreBridge.Core.Multipass;
@@ -28,7 +29,8 @@ public sealed record MultipassStorageLocation(string Path, MultipassStorageSourc
 /// weder kopiert noch verschoben oder gelöscht; mitgenommen werden nur die Einstellungen
 /// (<see cref="CopySettings"/>). Schreiben braucht Administratorrechte.
 /// </summary>
-public class MultipassStorage
+/// <param name="events">Optional: erhält jeden Schreibzugriff (System-Variable, Registry) als <see cref="DiagnosticEvent"/>.</param>
+public class MultipassStorage(EventFactory? events = null)
 {
     public const string VariableName = "MULTIPASS_STORAGE";
 
@@ -150,8 +152,11 @@ public class MultipassStorage
         Environment.GetEnvironmentVariable(VariableName, EnvironmentVariableTarget.Machine);
 
     /// <summary>Schreibt die System-Variable; <see cref="Environment"/> benachrichtigt dabei offene Fenster (WM_SETTINGCHANGE).</summary>
-    protected virtual void WriteSystemVariable(string? path) =>
+    protected virtual void WriteSystemVariable(string? path)
+    {
+        events?.Post(events.Diagnostic($"System-Variable {VariableName} := {path ?? "(entfernt)"}"));
         Environment.SetEnvironmentVariable(VariableName, path, EnvironmentVariableTarget.Machine);
+    }
 
     protected virtual string[]? ReadServiceEnvironment()
     {
@@ -173,6 +178,8 @@ public class MultipassStorage
 
         using var key = Registry.LocalMachine.OpenSubKey(ServiceKey, writable: true)
             ?? throw new MultipassException($"Dienst {MultipassService.ServiceName} nicht gefunden (HKLM\\{ServiceKey}).");
+        events?.Post(events.Diagnostic($"Registry HKLM\\{ServiceKey}\\{EnvironmentValue} := "
+            + (environment.Length == 0 ? "(entfernt)" : string.Join(" | ", environment))));
         if (environment.Length == 0)
         {
             key.DeleteValue(EnvironmentValue, throwOnMissingValue: false);

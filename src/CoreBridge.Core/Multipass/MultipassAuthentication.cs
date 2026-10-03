@@ -12,7 +12,9 @@ namespace CoreBridge.Core.Multipass;
 /// <remarks>
 /// Läuft absichtlich über einen eigenen <see cref="MultipassCli"/> statt über den Client
 /// der CLI: der kann ein <c>LoggingMultipassCli</c> sein, und die Passphrase gehört in
-/// kein Log. Sie steht nur kurz auf der Kommandozeile von <c>multipass.exe</c>.
+/// kein Log. Sie steht nur kurz auf der Kommandozeile von <c>multipass.exe</c>. Die CLI
+/// umhüllt ihn mit einem <see cref="TracingMultipassCli"/> und meldet die Passphrase vorher
+/// per <c>EventFactory.AddSecret</c>, damit sie im CLI-Protokoll nur als <c>***</c> erscheint.
 /// </remarks>
 public class MultipassAuthentication(IMultipassCli? cli = null)
 {

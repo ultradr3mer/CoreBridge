@@ -39,12 +39,22 @@ public class MultipassService
     private readonly TimeSpan _pollInterval;
     private readonly TimeSpan _killTimeout;
     private readonly TimeSpan _commandTimeout;
+    private readonly EventFactory? _events;
 
     /// <param name="pollInterval">Abstand der Zustandsabfragen (Standard 500 ms).</param>
     /// <param name="killTimeout">Wartezeit auf <c>Stopped</c> nach dem harten Beenden (Standard 15 s).</param>
     /// <param name="commandTimeout">Wartezeit auf einen einzelnen <c>sc.exe</c>-Aufruf (Standard 30 s; CLI: <c>DefaultTimeout</c>).</param>
-    public MultipassService(TimeSpan? pollInterval = null, TimeSpan? killTimeout = null, TimeSpan? commandTimeout = null)
+    /// <param name="events">
+    /// Optional: erhält jeden <c>sc.exe</c>- und <c>multipass version</c>-Aufruf als
+    /// <see cref="ToolCallEvent"/> und das harte Beenden als <see cref="DiagnosticEvent"/>.
+    /// </param>
+    public MultipassService(
+        TimeSpan? pollInterval = null,
+        TimeSpan? killTimeout = null,
+        TimeSpan? commandTimeout = null,
+        EventFactory? events = null)
     {
+        _events = events;
         _pollInterval = pollInterval ?? TimeSpan.FromMilliseconds(500);
         _killTimeout = killTimeout ?? TimeSpan.FromSeconds(15);
         _commandTimeout = commandTimeout ?? TimeSpan.FromSeconds(30);
@@ -372,15 +382,20 @@ public class MultipassService
         try
         {
             using var process = Process.GetProcessById(processId);
+            Diagnose($"Beende {process.ProcessName} (PID {processId}) samt Prozessbaum hart.");
             process.Kill(entireProcessTree: true);
-            process.WaitForExit(5_000);
+            Diagnose(process.WaitForExit(5_000)
+                ? $"PID {processId} beendet."
+                : $"PID {processId} nach 5 s noch nicht beendet.");
         }
         catch (ArgumentException)
         {
             // Prozess war bereits beendet.
+            Diagnose($"PID {processId} läuft nicht mehr — nichts zu beenden.");
         }
         catch (System.ComponentModel.Win32Exception exception) when (exception.NativeErrorCode == AccessDenied)
         {
+            Diagnose($"PID {processId} beenden: Zugriff verweigert.");
             throw new MultipassAccessDeniedException(
                 $"{DaemonProcessName} (PID {processId}) läuft als SYSTEM — hart beenden geht nur mit Administratorrechten.",
                 exception);
@@ -404,7 +419,9 @@ public class MultipassService
     public virtual bool IsDaemonResponding(bool acceptRejectedClient = false)
     {
         // Ohne Grenze wartete eine einzelne Abfrage 60 s (Standard von Doctor.Check).
-        var report = Doctor.Check(timeoutMs: (int)_commandTimeout.TotalMilliseconds);
+        var report = Doctor.Check(
+            cli: _events is null ? null : new TracingMultipassCli(new MultipassCli(), _events),
+            timeoutMs: (int)_commandTimeout.TotalMilliseconds);
         if (report.NotAuthenticated)
         {
             return acceptRejectedClient
@@ -515,6 +532,8 @@ public class MultipassService
         }
     }
 
+    private void Diagnose(string text) => _events?.Post(_events.Diagnostic(text));
+
     private (int ExitCode, string Output) RunSc(params string[] args)
     {
         var startInfo = new ProcessStartInfo
@@ -530,6 +549,7 @@ public class MultipassService
             startInfo.ArgumentList.Add(arg);
         }
 
+        var stopwatch = Stopwatch.StartNew();
         using var process = Process.Start(startInfo)
             ?? throw new MultipassException("sc.exe konnte nicht gestartet werden.");
         var stdErrTask = process.StandardError.ReadToEndAsync();
@@ -537,11 +557,15 @@ public class MultipassService
         if (!process.WaitForExit(_commandTimeout))
         {
             process.Kill();
+            _events?.Post(_events.ToolCall("sc", args, null, stopwatch.Elapsed, stdOut, null,
+                $"keine Antwort in {_commandTimeout.TotalSeconds:F0} s, Prozess beendet"));
 
             throw new MultipassException(
                 $"sc {string.Join(' ', args)} hat nicht innerhalb von {_commandTimeout.TotalSeconds:F0} s geantwortet.");
         }
 
-        return (process.ExitCode, stdOut + stdErrTask.GetAwaiter().GetResult());
+        var stdErr = stdErrTask.GetAwaiter().GetResult();
+        _events?.Post(_events.ToolCall("sc", args, process.ExitCode, stopwatch.Elapsed, stdOut, stdErr));
+        return (process.ExitCode, stdOut + stdErr);
     }
 }
