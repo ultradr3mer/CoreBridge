@@ -2,7 +2,9 @@ using System.Globalization;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
+using System.Text;
 using System.Text.RegularExpressions;
+using CoreBridge.Core.Authenticity;
 using CoreBridge.Core.Config;
 using CoreBridge.Core.Multipass;
 using YamlDotNet.Core;
@@ -32,6 +34,10 @@ public sealed record ComponentListEntry(string Name, ComponentSource Source, Com
 /// <c>{ "Inits": { "Components": { … } } }</c>). Die mitgelieferten Komponenten
 /// aus appsettings.json bleiben unangetastet: hinzufügen und entfernen wirkt nur
 /// auf die Benutzerdatei, damit ein Update der Installation nichts überschreibt.
+/// Die Datei darf unsigniert sein; ist sie signiert (clearsigned oder mit
+/// <c>.clearsigned.asc</c>/<c>.asc</c> daneben), muss die Signatur gültig sein
+/// (<see cref="SignaturePolicy.Optional"/>), und hinzufügen/entfernen lehnt ab,
+/// statt die Signatur stillschweigend ungültig zu machen.
 /// </summary>
 public static class InitComponentStore
 {
@@ -280,10 +286,12 @@ public static class InitComponentStore
 
     private static JsonObject ReadRoot(string userFile)
     {
+        var content = SettingsSignatures.Unwrap(
+            userFile, File.ReadAllBytes(userFile), SignaturePolicy.Optional, TrustedKeys.CoreBridge, DateTime.UtcNow);
         try
         {
             return JsonNode.Parse(
-                    File.ReadAllText(userFile),
+                    Encoding.UTF8.GetString(content).TrimStart('\uFEFF'),
                     documentOptions: new JsonDocumentOptions { CommentHandling = JsonCommentHandling.Skip, AllowTrailingCommas = true })
                 as JsonObject
                 ?? throw new MultipassException($"{userFile}: erwartet ein JSON-Objekt.");
@@ -324,6 +332,12 @@ public static class InitComponentStore
 
     private static void Write(string userFile, JsonObject root)
     {
+        if (SettingsSignatures.IsSigned(userFile))
+        {
+            throw new MultipassException(
+                $"{userFile} ist signiert — eine Änderung machte die Signatur ungültig. Signatur entfernen, ändern und neu signieren.");
+        }
+
         Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(userFile))!);
         var temp = userFile + ".tmp";
         File.WriteAllText(temp, root.ToJsonString(WriteOptions) + Environment.NewLine);

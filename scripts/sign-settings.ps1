@@ -3,10 +3,12 @@
   Signiert die mitgelieferten appsettings (oder angegebene Dateien) für CoreBridge.
 
 .DESCRIPTION
-  Deployment-Werkzeug, nicht Teil des Produkts: CoreBridge prüft beim Start nur,
-  dass appsettings.json und appsettings.{Environment}.json eine gültige
-  abgetrennte Signatur <datei>.asc des eingebetteten CoreBridge-Schlüssels
-  haben (src/CoreBridge.Core/Authenticity/corebridge-signing.pub.asc).
+  Deployment-Werkzeug, nicht Teil des Produkts: CoreBridge prüft beim Start
+  appsettings.json und appsettings.{Environment}.json gegen den eingebetteten
+  CoreBridge-Schlüssel (src/CoreBridge.Core/Authenticity/corebridge-signing.pub.asc).
+  Signiert gilt eine Datei mit <datei>.clearsigned.asc oder <datei>.asc daneben.
+  Fehlt die Signatur, warnt die CLI; ist sie ungültig (auch: Datei nach dem
+  Signieren geändert), bricht sie mit Exit 3 ab.
 
   Pro Datei: gpg --detach-sign --armor --textmode (CanonicalTextDocument, damit
   CRLF/LF-Wechsel durch git die Signatur nicht bricht), SHA-256. Danach wird
@@ -32,7 +34,7 @@
 
 .PARAMETER ClearSign
   Klartextsignatur (gpg --clearsign) nach <datei>.clearsigned.asc statt abgetrennter
-  Signatur. Geprüft wird nur per gpg; `cb settings-verify` kennt das Format nicht.
+  Signatur. Die CLI lädt weiter die Datei selbst und prüft sie gegen diese Signatur.
 
 .EXAMPLE
   .\scripts\sign-settings.ps1
@@ -99,10 +101,7 @@ foreach ($file in $Files) {
     Write-Host "signiert: $signature"
 }
 
-if ($ClearSign) {
-    Write-Host 'cb settings-verify übersprungen: prüft nur abgetrennte Signaturen (<datei>.asc).'
-}
-elseif (-not $NoCliCheck) {
+if (-not $NoCliCheck) {
     # Gegenprobe mit dem eingebetteten Schlüssel, wie CoreBridge beim Start prüft.
     & dotnet run --project (Join-Path $root 'src\CoreBridge.Cli') -- settings-verify -f ($Files -join ',')
     if ($LASTEXITCODE -ne 0) {

@@ -60,23 +60,29 @@ public static partial class Program
   /// Default Development) → appsettings.local.json (gitignored) → Env-Variablen
   /// (Doppelter Unterstrich, z. B. Inits__StoreRoot). Keine Passwörter in der
   /// Config — Secrets laufen über die CORE_BRIDGE_*_PASSWORD-Env-Kette.
-  /// Vorher müssen appsettings.json und appsettings.{Environment}.json gültig
-  /// signiert sein (<see cref="SettingsSignatures"/>), sonst
-  /// <see cref="SettingsSignatureException"/>; <paramref name="requireSignatures"/> ist nur
-  /// für <c>settings-verify</c> aus, das die Prüfung selbst meldet.
+  /// Signaturen (<see cref="SettingsSignatures"/>): fehlt sie bei appsettings.json
+  /// oder appsettings.{Environment}.json, landet die Datei in
+  /// <paramref name="warnings"/>; appsettings.local.json darf unsigniert sein.
+  /// Eine vorhandene, aber ungültige Signatur wirft
+  /// <see cref="SettingsSignatureException"/>. <paramref name="checkSignatures"/>
+  /// ist nur für <c>settings-verify</c> aus, das die Prüfung selbst meldet.
   /// </summary>
-  private static AppConfig LoadSystemConfig()
+  private static AppConfig LoadSystemConfig(bool checkSignatures, out IReadOnlyList<SignatureCheck> warnings)
   {
     var environment = CurrentEnvironment;
+    var files = new SignedFileProvider(
+        AppContext.BaseDirectory,
+        name => checkSignatures ? SettingsSignatures.PolicyFor(name, environment) : SignaturePolicy.Ignore);
 
     var configuration = new ConfigurationBuilder()
-        .SetFileProvider(new SignedFileProvider(AppContext.BaseDirectory, requireSignature: false))
+        .SetFileProvider(files)
         .AddJsonFile("appsettings.json", optional: false)
         .AddJsonFile($"appsettings.{environment}.json", optional: true)
         .AddJsonFile("appsettings.local.json", optional: true)
         .AddEnvironmentVariables()
         .Build();
 
+    warnings = files.Warnings;
     return configuration.Get<AppConfig>()
       ?? throw new InvalidOperationException("Konfiguration konnte nicht gebunden werden (appsettings.json).");
   }
@@ -87,7 +93,7 @@ public static partial class Program
     var userProfile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
 
     var configuration = new ConfigurationBuilder()
-        .SetFileProvider(new SignedFileProvider(localAppData, requireSignature: false))
+        .SetFileProvider(new SignedFileProvider(localAppData, _ => SignaturePolicy.Optional))
         .AddJsonFile($"appsettings.{userProfile}.json", optional: true)
         .Build();
 
@@ -109,9 +115,10 @@ public static partial class Program
     }
 
     AppConfig config;
+    IReadOnlyList<SignatureCheck> unsigned;
     try
     {
-      config = LoadSystemConfig();
+      config = LoadSystemConfig(checkSignatures: options is not SettingsVerifyOptions, out unsigned);
     }
     catch (Exception exception) when (ToExecutionException(exception) is { } failure)
     {
@@ -128,6 +135,13 @@ public static partial class Program
 
     // Protokoll laut CommandLog-Config (Standard aus; Development: <Repo>/artifacts/logs).
     using var log = CommandLog.Open(config.CommandLog.ResolveDirectory(), args);
+    foreach (var check in unsigned)
+    {
+      var warning = SettingsSignatures.WarningMessage(check);
+      log.Write("warnung", warning);
+      Console.Error.WriteLine(warning);
+    }
+
     var exitCode = 0;
     try
     {
@@ -284,7 +298,9 @@ public static partial class Program
       SettingsSignatureException => new(
           3,
           exception.Message + Environment.NewLine
-              + "Nach einer Änderung neu signieren: .\\scripts\\sign-settings.ps1 (prüfen: cb settings-verify).",
+              + "Die mitgelieferten appsettings bleiben unverändert; eigene Werte gehören nach appsettings.local.json "
+              + "(Komponenten: component-add). Wer den Signierschlüssel hat, signiert nach einer Änderung neu: "
+              + ".\\scripts\\sign-settings.ps1 -ClearSign (prüfen: cb settings-verify).",
           exception),
       MultipassException => new(1, exception.Message, exception),
       GitException => new(1, exception.Message, exception),
@@ -368,8 +384,9 @@ public static partial class Program
   }
 
   /// <summary>
-  /// Meldet je Datei OK oder den Grund der Ablehnung; ohne <c>-f</c> die
-  /// signaturpflichtigen appsettings neben der CLI. Exit 3, wenn eine fehlschlägt.
+  /// Meldet je Datei OK, UNSIGNIERT (Warnung) oder den Grund der Ablehnung;
+  /// ohne <c>-f</c> die mitgelieferten appsettings neben der CLI. Exit 3, wenn
+  /// eine Signatur ungültig ist.
   /// </summary>
   private static async Task RunSettingsVerify(CommandContext context, SettingsVerifyOptions options)
   {
@@ -377,14 +394,17 @@ public static partial class Program
     var now = DateTime.UtcNow;
     var files = options.Files.ToList();
     var checks = files.Count > 0
-        ? files.Select(file => PgpFileVerifier.VerifyFile(Path.GetFullPath(file), TrustedKeys.CoreBridge, now)).ToList()
+        ? files.Select(file => SettingsSignatures.VerifyFile(Path.GetFullPath(file), TrustedKeys.CoreBridge, now)).ToList()
         : SettingsSignatures.Check(AppContext.BaseDirectory, CurrentEnvironment, TrustedKeys.CoreBridge, now);
 
     foreach (var check in checks)
     {
-      await events.Emit(check.Valid
-          ? events.Std($"OK       {check.File} — {check.Reason}")
-          : events.Err($"UNGÜLTIG {check.File} — {check.Reason}"));
+      await events.Emit(check switch
+      {
+        { Valid: true } => events.Std($"OK         {check.File} — {check.Reason}"),
+        { Unsigned: true } => events.Err($"UNSIGNIERT {check.File} — {check.Reason}"),
+        _ => events.Err($"UNGÜLTIG   {check.File} — {check.Reason}")
+      });
     }
 
     SettingsSignatures.RequireValid(checks);

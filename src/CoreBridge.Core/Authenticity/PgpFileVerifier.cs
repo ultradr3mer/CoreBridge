@@ -10,6 +10,8 @@ namespace CoreBridge.Core.Authenticity;
 /// Primärschlüssels (z. B. <c>CoreBridge &lt;core@brid.ge&gt;</c>), sobald der
 /// Schlüssel bekannt ist. <see cref="ContentMismatch"/> ist nur gesetzt, wenn
 /// Schlüssel und Signatur in Ordnung sind, der Inhalt aber nicht passt.
+/// <see cref="Unsigned"/>: die Datei hat gar keine Signatur — was das bedeutet,
+/// entscheidet die <see cref="SignaturePolicy"/> des Aufrufers.
 /// </summary>
 public sealed record SignatureCheck(
     string File,
@@ -18,7 +20,8 @@ public sealed record SignatureCheck(
     string? Fingerprint = null,
     DateTime? SignedAt = null,
     string? SignerUserId = null,
-    bool ContentMismatch = false);
+    bool ContentMismatch = false,
+    bool Unsigned = false);
 
 /// <summary>
 /// Prüft abgetrennte OpenPGP-Signaturen (<c>&lt;datei&gt;.asc</c>, armored oder
@@ -50,7 +53,7 @@ public static class PgpFileVerifier
 
         if (!File.Exists(signaturePath))
         {
-            return new SignatureCheck(path, false, $"Signatur fehlt ({Path.GetFileName(signaturePath)}).");
+            return new SignatureCheck(path, false, $"Signatur fehlt ({Path.GetFileName(signaturePath)}).", Unsigned: true);
         }
 
         using var data = File.OpenRead(path);

@@ -5,23 +5,38 @@ using Org.BouncyCastle.Bcpg.OpenPgp;
 namespace CoreBridge.Core.Authenticity;
 
 /// <summary>
-/// Dateiquelle für den <c>ConfigurationBuilder</c>, die Clearsign-Dateien
-/// (<c>gpg --clearsign</c>) prüft und dem JSON-Provider nur den Klartext gibt.
-/// Das Parsen bleibt beim normalen <c>AddJsonFile</c>; hier wird nur entschieden,
-/// welche Bytes er bekommt (<see cref="ClearsignedContent.Unwrap"/>).
-/// <paramref name="requireSignature"/> gibt an, ob auch unsignierter Klartext
-/// geladen oder direkt abgebrochen wird. Eine ungültige Signatur bricht immer ab,
-/// mit <see cref="SettingsSignatureException"/> (Exit 3).
+/// Dateiquelle für den <c>ConfigurationBuilder</c>, die Signaturen prüft
+/// (<see cref="SettingsSignatures.Unwrap"/>) und dem JSON-Provider nur den zu
+/// ladenden Inhalt gibt. Das Parsen bleibt beim normalen <c>AddJsonFile</c>.
+/// <paramref name="policy"/> bestimmt je Dateiname, was eine fehlende Signatur
+/// bedeutet; eine ungültige bricht ab (außer bei
+/// <see cref="SignaturePolicy.Ignore"/>), mit
+/// <see cref="SettingsSignatureException"/> (Exit 3). Unsignierte Dateien unter
+/// <see cref="SignaturePolicy.Warn"/> stehen nach dem <c>Build()</c> in
+/// <see cref="Warnings"/>.
 /// </summary>
 public sealed class SignedFileProvider(
     string root,
-    bool requireSignature,
+    Func<string, SignaturePolicy> policy,
     PgpPublicKeyRingBundle? trusted = null,
     TimeProvider? time = null) : IFileProvider
 {
     private readonly PhysicalFileProvider files = new(root);
+    private readonly List<SignatureCheck> warnings = [];
     private readonly PgpPublicKeyRingBundle trusted = trusted ?? TrustedKeys.CoreBridge;
     private readonly TimeProvider time = time ?? TimeProvider.System;
+
+    /// <summary>Unsignierte Dateien, die laut Stufe eine Warnung wert sind.</summary>
+    public IReadOnlyList<SignatureCheck> Warnings
+    {
+        get
+        {
+            lock (warnings)
+            {
+                return warnings.ToList();
+            }
+        }
+    }
 
     public IFileInfo GetFileInfo(string subpath)
     {
@@ -38,8 +53,15 @@ public sealed class SignedFileProvider(
         using var stream = file.CreateReadStream();
         using var buffer = new MemoryStream();
         stream.CopyTo(buffer);
-        return ClearsignedContent.Unwrap(
-                file.PhysicalPath ?? file.Name, buffer.ToArray(), requireSignature, trusted, time.GetUtcNow().UtcDateTime);
+        var found = new List<SignatureCheck>();
+        var content = SettingsSignatures.Unwrap(
+            file.PhysicalPath ?? file.Name, buffer.ToArray(), policy(file.Name), trusted, time.GetUtcNow().UtcDateTime, found);
+        lock (warnings)
+        {
+            warnings.AddRange(found);
+        }
+
+        return content;
     }
 
     /// <summary>
