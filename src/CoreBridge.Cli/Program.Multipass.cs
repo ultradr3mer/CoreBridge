@@ -131,7 +131,7 @@ public static partial class Program
     await events.Emit(events.Std($"Speicherort: {current.Path} ({DescribeSource(current.Source)})"));
     if (options.Path is null && !options.Reset)
     {
-      await ReportClientTrust(context);
+      await ReportClientTrust(context, passphrase: null);
       return;
     }
 
@@ -160,15 +160,20 @@ public static partial class Program
     if (!options.Yes
         && !await context.ConfirmAsync(
             $"Multipass legt seine Daten danach unter {effective} ab. Vorhandene VMs und Images bleiben in {current.Path} "
-            + "und sind dann nicht mehr sichtbar — es wird nichts kopiert oder gelöscht. Der Dienst wird dafür neu gestartet"
+            + "und sind dann nicht mehr sichtbar — sie werden weder kopiert noch gelöscht; mitgenommen werden nur die Einstellungen "
+            + "(multipassd.conf, damit die Passphrase gilt), wo das Ziel keine eigenen hat. Der Dienst wird dafür neu gestartet"
             + (elevated ? string.Empty : " (braucht Administratorrechte, UAC-Abfrage)") + ". Umstellen?"))
     {
       throw new ProgramExecutionException(1, $"Abgebrochen — der Speicherort bleibt {current.Path}.");
     }
 
+    // Die Passphrase setzt nur ein vertrauter Client — also jetzt, solange der Dienst diesen
+    // Client noch kennt; nach dem Umstellen nimmt `multipass authenticate` ihn damit wieder auf.
+    string? passphrase = null;
     if (!options.PauseOnExit)
     {
       await StopRunningVmsForStore(context);
+      passphrase = await PreparePassphrase(context);
     }
 
     if (elevated)
@@ -203,17 +208,60 @@ public static partial class Program
     }
 
     await events.Emit(events.Std($"multipass-store: OK — Speicherort {storage.Current().Path}"));
-    await ReportClientTrust(context);
+    await ReportClientTrust(context, passphrase);
   }
 
-  /// <summary>Erhöht: Ordner anlegen, Variable an beiden Stellen setzen, Dienst neu starten.</summary>
+  /// <summary>
+  /// Setzt eine zufällige Passphrase (<c>multipass set local.passphrase</c>), solange dieser
+  /// Client noch vertraut ist. Sie lebt nur in diesem Aufruf und wird nirgends gespeichert.
+  /// Geht es nicht — etwa weil der Dienst den Client schon jetzt ablehnt —, gibt es einen
+  /// Hinweis und <c>null</c>; umgestellt wird trotzdem.
+  /// </summary>
+  private static async Task<string?> PreparePassphrase(CommandContext context)
+  {
+    var events = context.Events;
+    var passphrase = MultipassAuthentication.NewPassphrase();
+    MultipassRunResult result;
+    try
+    {
+      result = await Task.Run(() => new MultipassAuthentication().SetPassphrase(passphrase, context.DefaultTimeoutMs), context.CancellationToken);
+    }
+    catch (MultipassException exception)
+    {
+      result = new MultipassRunResult(1, string.Empty, exception.Message, 0);
+    }
+
+    if (result.ExitCode == 0)
+    {
+      await events.Emit(events.Std("Passphrase gesetzt (zufällig, nur für diesen Vorgang) — damit wird dieser Client nach dem Umstellen wieder aufgenommen."));
+      return passphrase;
+    }
+
+    await events.Emit(events.Std(
+        $"Hinweis: die Passphrase ließ sich nicht setzen ({FirstLine(result.StdErr, result.StdOut)}) — der Dienst vertraut diesem Client schon jetzt nicht; "
+        + "nach dem Umstellen entscheidet, ob der Ziel-Ordner ihm vertraut."));
+    return null;
+  }
+
+  /// <summary>
+  /// Erhöht: Ordner anlegen, die Einstellungen samt Passphrase mitnehmen
+  /// (<see cref="MultipassStorage.CopySettings"/>), Variable an beiden Stellen setzen, Dienst
+  /// neu starten. Kopiert wird vor dem Neustart — bis dahin arbeitet der Dienst noch im
+  /// alten Ordner, der neue ist unbenutzt.
+  /// </summary>
   private static async Task SwitchStorage(CommandContext context, MultipassStorage storage, MultipassService service, string? target)
   {
     var events = context.Events;
-    if (target is not null)
-    {
-      Directory.CreateDirectory(target);
-    }
+    var from = storage.Current().Path;
+    var to = target ?? MultipassStorage.DefaultPath;
+    Directory.CreateDirectory(to);
+    static string Describe(string file) => File.Exists(file) ? $"{new FileInfo(file).Length} Bytes" : "fehlt";
+    await events.Emit(events.Std(
+        $"{MultipassStorage.SettingsFile} vorher: {from} {Describe(Path.Combine(from, MultipassStorage.SettingsFile))}, "
+        + $"{to} {Describe(Path.Combine(to, MultipassStorage.SettingsFile))}"));
+    await events.Emit(events.Std(MultipassStorage.CopySettings(from, to)
+        ? $"{MultipassStorage.SettingsFile} (Einstellungen samt Passphrase) aus {from} mitgenommen."
+        : $"{MultipassStorage.SettingsFile}: {to} hat eigene (oder {from} keine) — nicht kopiert."));
 
     storage.Set(target);
     await events.Emit(events.Std(target is null
@@ -271,26 +319,45 @@ public static partial class Program
   }
 
   /// <summary>
-  /// Prüft, ob der Dienst diesen Client annimmt. Nach einem neuen Speicherort tut er es
-  /// nicht — dann die beiden Schritte, mit denen der Client einmalig vertraut wird.
+  /// Prüft, ob der Dienst diesen Client annimmt. Lehnt er ab und gibt es eine Passphrase
+  /// von vor dem Umstellen, wird der Client damit aufgenommen (<c>multipass authenticate</c>)
+  /// und erneut geprüft. Bleibt er abgelehnt, endet das Kommando mit Exit 1 und dem Weg,
+  /// der wirklich hilft (<see cref="Doctor.NotAuthenticatedMessage"/>).
   /// </summary>
-  private static async Task ReportClientTrust(CommandContext context)
+  private static async Task ReportClientTrust(CommandContext context, string? passphrase)
   {
     var events = context.Events;
-    var report = await Task.Run(() => Doctor.Check(cli: context.Vms.Cli, timeoutMs: context.DefaultTimeoutMs), context.CancellationToken);
+    var report = await CheckDaemon(context);
+    if (report.NotAuthenticated && passphrase is not null)
+    {
+      MultipassRunResult result;
+      try
+      {
+        result = await Task.Run(() => new MultipassAuthentication().Authenticate(passphrase, context.DefaultTimeoutMs), context.CancellationToken);
+      }
+      catch (MultipassException exception)
+      {
+        result = new MultipassRunResult(1, string.Empty, exception.Message, 0);
+      }
+
+      await events.Emit(events.Std(result.ExitCode == 0
+          ? "multipass authenticate: OK"
+          : $"multipass authenticate fehlgeschlagen ({FirstLine(result.StdErr, result.StdOut)}) — der Ziel-Ordner kennt diese Passphrase nicht (er hatte wohl eigene Einstellungen, die nicht überschrieben werden)."));
+      report = await CheckDaemon(context);
+    }
+
     if (report.NotAuthenticated)
     {
-      await events.Emit(events.Std("Der Multipass-Dienst kennt diesen Client noch nicht (neuer Speicherort, leere Daten). Einmalig vertrauen lassen:"));
-      await events.Emit(events.Std("  1. in einer PowerShell als Administrator:  multipass set local.passphrase"));
-      await events.Emit(events.Std("  2. hier, ohne Administratorrechte:         multipass authenticate"));
-      await events.Emit(events.Std("Danach prüfen: cb multipass-status"));
-      return;
+      throw new ProgramExecutionException(1, Doctor.NotAuthenticatedMessage);
     }
 
     await events.Emit(report.DaemonVersion is null
         ? events.Std($"Warnung: {report.Error}")
         : events.Std($"Daemon {report.DaemonVersion} — dieser Client ist authentifiziert."));
   }
+
+  private static Task<DoctorReport> CheckDaemon(CommandContext context) =>
+      Task.Run(() => Doctor.Check(cli: context.Vms.Cli, timeoutMs: context.DefaultTimeoutMs), context.CancellationToken);
 
   private static string DescribeSource(MultipassStorageSource source) => source switch
   {

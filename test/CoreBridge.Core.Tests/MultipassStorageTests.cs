@@ -77,6 +77,73 @@ public class MultipassStorageTests
         Assert.Equal(expected, MultipassStorage.SamePath(left, right));
     }
 
+    /// <summary>
+    /// Wie aufgenommen: der frische Ordner hat eine leere multipassd.conf — die alte kommt mit
+    /// (samt Passphrase), sonst nichts: weder vertraute Zertifikate noch VMs.
+    /// </summary>
+    [Fact]
+    public void CopySettingsNimmtEinstellungenInFrischenOrdnerMit()
+    {
+        using var folders = new TempFolders();
+        folders.Write(folders.From, "multipassd.conf", "[local] passphrase=hash");
+        folders.Write(folders.From, @"data\authenticated-certs\multipass_client_certs.pem", "CERT");
+        folders.Write(folders.From, @"data\vault\instances\vm\cloud-init-config.iso", "VM");
+        folders.Write(folders.To, "multipassd.conf", string.Empty);
+
+        Assert.True(MultipassStorage.CopySettings(folders.From, folders.To));
+
+        Assert.Equal("[local] passphrase=hash", folders.Read(folders.To, "multipassd.conf"));
+        Assert.False(File.Exists(Path.Combine(folders.To, @"data\authenticated-certs\multipass_client_certs.pem")));
+        Assert.False(File.Exists(Path.Combine(folders.To, @"data\vault\instances\vm\cloud-init-config.iso")));
+    }
+
+    /// <summary>Ein Ordner mit eigenen Einstellungen (Zurückwechseln) bleibt unberührt.</summary>
+    [Fact]
+    public void CopySettingsLaesstEigeneEinstellungenDesZielsStehen()
+    {
+        using var folders = new TempFolders();
+        folders.Write(folders.From, "multipassd.conf", "neu");
+        folders.Write(folders.To, "multipassd.conf", "alt");
+
+        Assert.False(MultipassStorage.CopySettings(folders.From, folders.To));
+        Assert.Equal("alt", folders.Read(folders.To, "multipassd.conf"));
+    }
+
+    [Fact]
+    public void CopySettingsOhneQuelleOderAufDenselbenOrtKopiertNichts()
+    {
+        using var folders = new TempFolders();
+
+        Assert.False(MultipassStorage.CopySettings(folders.From, folders.To));
+        Assert.False(MultipassStorage.CopySettings(folders.From, folders.From + Path.DirectorySeparatorChar));
+    }
+
+    private sealed class TempFolders : IDisposable
+    {
+        private readonly string root = Path.Combine(Path.GetTempPath(), $"cbx-storage-{Guid.NewGuid():N}");
+
+        public string From => Path.Combine(this.root, "from");
+
+        public string To => Path.Combine(this.root, "to");
+
+        public void Write(string folder, string relative, string content)
+        {
+            var path = Path.Combine(folder, relative);
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            File.WriteAllText(path, content);
+        }
+
+        public string Read(string folder, string relative) => File.ReadAllText(Path.Combine(folder, relative));
+
+        public void Dispose()
+        {
+            if (Directory.Exists(this.root))
+            {
+                Directory.Delete(this.root, recursive: true);
+            }
+        }
+    }
+
     private sealed class FakeStorage : MultipassStorage
     {
         public string? System { get; set; }

@@ -126,19 +126,31 @@ public static partial class Program
       cancellation.Cancel();
     };
 
+    // Protokoll neben den übrigen Daten des Stores (Development: <Repo>/artifacts/logs).
+    using var log = CommandLog.Open(Path.Combine(RepoPaths.Resolve(config.Inits.StoreRoot), "logs"), args);
+    var exitCode = 0;
     try
     {
       // Konsument des Ereignisstroms: er schreibt alles auf die Konsole
       // und beantwortet die Rückfragen des Kommandos.
-      return await new ConsoleAdapter().AcceptEventStream(Run(config, options, cancellation.Token));
+      return exitCode = await new ConsoleAdapter().AcceptEventStream(log.Tee(Run(config, options, cancellation.Token)));
     }
     catch (ProgramExecutionException exception)
     {
+      log.Write("fehler", exception.Message);
       Console.Error.WriteLine(exception.Message);
-      return exception.ExitCode;
+      return exitCode = exception.ExitCode;
+    }
+    catch (Exception exception)
+    {
+      // Unerwartet = Bug: ins Protokoll, dann wie bisher weiterwerfen.
+      log.Write("bug", exception.ToString());
+      exitCode = -1;
+      throw;
     }
     finally
     {
+      log.Write("ende", $"Exit {exitCode}");
       ElevatedRelaunch.PauseIfRequested(options is IPauseOnExit { PauseOnExit: true });
     }
   }

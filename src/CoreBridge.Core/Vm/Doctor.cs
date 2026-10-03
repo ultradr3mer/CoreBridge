@@ -103,9 +103,10 @@ public static class Doctor
     /// </summary>
     public const string NotAuthenticatedMessage =
         "Der Multipass-Dienst läuft, lehnt diesen Client aber ab (nicht authentifiziert) — Warten hilft nicht. "
-        + "Typisch nach einem neuen Speicherort (MULTIPASS_STORAGE): der Dienst kennt das Client-Zertifikat nicht mehr. "
-        + "Abhilfe: als Administrator eine Passphrase setzen (`multipass set local.passphrase`), "
-        + "danach als normaler Benutzer `multipass authenticate` mit derselben Passphrase.";
+        + "Typisch nach einem neuen Speicherort (MULTIPASS_STORAGE): die vertrauten Client-Zertifikate liegen im alten. "
+        + "Eine Passphrase (`multipass set local.passphrase`) kann nur ein schon vertrauter Client setzen — auch als Administrator nicht. "
+        + "Abhilfe: zurück zum vorigen Speicherort (`cb multipass-store --reset` oder `-p <alter Ordner>`), "
+        + "oder Multipass reparieren/neu installieren: der installierende Benutzer wird automatisch vertraut.";
 
     /// <summary>
     /// <c>multipass version</c> endet auch dann mit Exit 0, wenn der Dienst den Client

@@ -61,6 +61,9 @@ public interface IChoiceInteraction : IOpenInteraction
 
     /// <summary>Schließt die Rückfrage mit <see cref="DefaultOption"/>.</summary>
     bool SetDefault();
+
+    /// <summary>Beschriftung der gegebenen Antwort, <c>null</c> solange offen oder abgebrochen — etwa fürs Log.</summary>
+    string? AnswerDisplay { get; }
 }
 
 /// <summary>
@@ -94,6 +97,9 @@ public class ChoiceEvent<T> : InteractionEvent<T>, IChoiceInteraction where T : 
     OptionDef IChoiceInteraction.DefaultOption => this.DefaultOption;
 
     bool IChoiceInteraction.TryParseChoice(string input) => this.TryParseChoice(input, out _);
+
+    /// <inheritdoc/>
+    public string? AnswerDisplay => this.TryGetAnswer(out var answer) ? OptionDef.FromAttribute(answer).Display : null;
 
     /// <inheritdoc/>
     public bool TryChooseKey(Keys key)
