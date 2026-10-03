@@ -145,6 +145,132 @@ public class SimulatedMultipassCliTests
         Assert.Equal(0, service.Exec("sim-b", "claude --version").ExitCode);
     }
 
+    /// <summary>Die exec-Kommandos des CLI-Lifecycles (Stage05/05b) — ausgewertet, nicht nur durchgewinkt.</summary>
+    [Theory]
+    [InlineData("echo cbx-exec-$((20+22))", 0, "cbx-exec-42\n")]
+    [InlineData(". /etc/os-release && test \"$VERSION_ID\" = \"26.10\"", 0, "")]
+    [InlineData(". /etc/os-release && test \"$VERSION_ID\" = \"24.04\"", 1, "")]
+    [InlineData("command -v claude >/dev/null && claude --version", 0, "2.0.14 (Claude Code)\n")]
+    [InlineData("command -v dotnet >/dev/null && dotnet --version", 1, "")]
+    [InlineData("echo user=$(id -un) root=$(sudo id -un)", 0, "user=ubuntu root=root\n")]
+    [InlineData("x=$((6*7)); echo \"${x}\" '$x' ${UNSET:-leer}", 0, "42 $x leer\n")]
+    [InlineData("false || echo ok; true && false; echo rc=$?", 0, "ok\nrc=1\n")]
+    [InlineData("cd /nirgends", 2, "")]
+    [InlineData("cloud-init status --wait >/dev/null 2>&1 || true", 0, "")]
+    [InlineData("grep VERSION_ID /etc/os-release | head -n 1", 0, "VERSION_ID=\"26.10\"\n")]
+    public void ExecLaeuftDurchDieSimulierteShell(string command, int exitCode, string stdOut)
+    {
+        using var temp = new TempDirectory();
+        var service = new VmService(Simulator(temp));
+        service.Create("sim-a", "daily:26.10", cloudInitPath: ClaudeCloudInit(temp));
+
+        var result = service.Exec("sim-a", command);
+
+        Assert.Equal(exitCode, result.ExitCode);
+        Assert.Equal(stdOut, result.StdOut);
+    }
+
+    [Fact]
+    public void DateienUndVerzeichnisseBleibenZwischenExecsErhalten()
+    {
+        using var temp = new TempDirectory();
+        var service = new VmService(Simulator(temp));
+        service.Create("sim-a", "daily:26.10");
+
+        Assert.Equal(0, service.Exec("sim-a", "mkdir -p ~/work/demo && cd ~/work/demo && echo hallo > a.txt && echo welt >> a.txt").ExitCode);
+        Assert.Equal("hallo\nwelt\n", service.Exec("sim-a", "cat /home/ubuntu/work/demo/a.txt").StdOut);
+        Assert.Equal("demo\n", service.Exec("sim-a", "ls work").StdOut);
+        Assert.Equal(1, service.Exec("sim-a", "test -f nix.txt").ExitCode);
+        Assert.Contains("No such file", service.Exec("sim-a", "cat nix.txt").StdErr);
+
+        // Marker sind Dateien wie andere auch.
+        Assert.Equal(0, service.Exec("sim-a", "sudo touch /var/lib/corebridge/demo.ready").ExitCode);
+        Assert.Equal("demo.ready\n", service.Exec("sim-a", "ls /var/lib/corebridge").StdOut);
+    }
+
+    /// <summary>vm-connect (Stage06): jedes exec ist ein eigenes Skript, das Arbeitsverzeichnis wandert über die Marker-Zeile mit.</summary>
+    [Fact]
+    public void ConsoleSessionTraegtDasArbeitsverzeichnisWeiter()
+    {
+        using var temp = new TempDirectory();
+        var service = new VmService(Simulator(temp));
+        service.Create("sim-a", "daily:26.10");
+        var timeout = TimeSpan.FromSeconds(5);
+
+        using var session = service.OpenConsole("sim-a", timeoutMs: 5_000);
+        session.SendLine("cd /tmp");
+        session.SendCommand("echo cwd=$(pwd)", "cwd=/tmp", timeout);
+        session.SendCommand("echo cbx-connect-$((20+22))", "cbx-connect-42", timeout);
+        session.SendCommand("echo user=$(id -un)", "user=ubuntu", timeout);
+
+        Assert.Equal("/tmp", session.WorkingDirectory);
+    }
+
+    /// <summary><c>multipass-sim.exe</c>: Kommandozeile und Ausgaben wie <c>multipass.exe</c>.</summary>
+    [Fact]
+    public void KommandozeileGibtAusWieMultipass()
+    {
+        using var temp = new TempDirectory();
+        var state = Path.Combine(temp.Path, "state.json");
+
+        Assert.Equal((0, "No instances found.\n", ""), CommandLine(state, "list"));
+        Assert.Equal((0, "Launched: demo\n", ""), CommandLine(state, "launch", "26.10", "--name", "demo"));
+        CommandLine(state, "launch", "--name", "demo2");
+        CommandLine(state, "stop", "demo");
+        Assert.Equal((0, "Snapshot taken: demo.base\n", ""), CommandLine(state, "snapshot", "demo", "--name", "base", "--comment", "frisch"));
+
+        Assert.Equal(
+            "Name                    State             IPv4             Image\n"
+            + "demo                    Stopped           --               Ubuntu 26.10\n"
+            + "demo2                   Running           172.30.99.3      Ubuntu 26.10\n",
+            CommandLine(state, "list").Out);
+        Assert.Equal(
+            "Instance   Snapshot   Parent   Comment\n"
+            + "demo       base       --       frisch\n",
+            CommandLine(state, "list", "--snapshots").Out);
+        Assert.Contains("State:          Stopped\n", CommandLine(state, "info", "demo").Out);
+        Assert.Equal(2, MultipassVmList.Parse(CommandLine(state, "list", "--format", "json").Out).Count);
+
+        var missing = CommandLine(state, "exec", "nope", "--", "true");
+        Assert.Equal(2, missing.Code);
+        Assert.Contains("instance \"nope\" does not exist", missing.Err);
+    }
+
+    [Fact]
+    public void KommandozeilenShellStartetDieVmUndTraegtDasVerzeichnis()
+    {
+        using var temp = new TempDirectory();
+        var state = Path.Combine(temp.Path, "state.json");
+        CommandLine(state, "launch", "--name", "demo");
+        CommandLine(state, "stop", "demo");
+
+        var shell = CommandLineWithInput(state, "cd /tmp\npwd\nmkdir -p work && cd work\npwd\nexit\necho nie", "shell", "demo");
+
+        Assert.Equal((0, "Starting demo\n/tmp\n/tmp/work\n", ""), shell);
+        Assert.Equal("Running", new VmService(SimulatedMultipassCli.At(state, TimeSpan.Zero)).Find("demo")!.State);
+    }
+
+    private static (int Code, string Out, string Err) CommandLine(string state, params string[] args) =>
+        CommandLineWithInput(state, string.Empty, args);
+
+    private static (int Code, string Out, string Err) CommandLineWithInput(string state, string input, params string[] args)
+    {
+        var output = new StringWriter();
+        var error = new StringWriter();
+        var code = MultipassSimCommandLine.Run(args, new StringReader(input), output, error, interactive: false, state, TimeSpan.Zero);
+        return (code, output.ToString(), error.ToString());
+    }
+
+    private static string ClaudeCloudInit(TempDirectory temp)
+    {
+        var cloudInit = Path.Combine(temp.Path, "cloud-init.yaml");
+        File.WriteAllText(cloudInit, """
+            runcmd:
+              - ["/usr/local/sbin/corebridge-install-claude", "ubuntu"]
+            """);
+        return cloudInit;
+    }
+
     [Fact]
     public void TransferHinUndZurueck()
     {
