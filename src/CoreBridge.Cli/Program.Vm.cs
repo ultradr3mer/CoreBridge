@@ -42,9 +42,9 @@ public static partial class Program
     var (config, vms, cancellationToken) = (context.Config, context.Vms, context.CancellationToken);
     var waitSlice = config.DefaultTimeoutVmCreation.ReadTime();
     var requestedImage = string.IsNullOrWhiteSpace(options.Image)
-        ? config.Images.DefaultRuntimeImage
+        ? config.Inits.DefaultRuntimeImage
         : options.Image.Trim();
-    var profile = InitProfileResolver.Resolve(config.Images, requestedImage, options.CloudInit);
+    var profile = InitProfileResolver.Resolve(config.Inits, requestedImage, options.CloudInit);
     var launchImage = profile?.RuntimeImage ?? requestedImage;
     var cloudInit = options.CloudInit ?? profile?.CloudInitPath;
     if (!VmNamePattern.IsMatch(options.Name))
@@ -174,7 +174,7 @@ public static partial class Program
       return;
     }
 
-    var markers = InitInstall.Markers(context.Config.Images, profile.Components);
+    var markers = InitInstall.Markers(context.Config.Inits, profile.Components);
     var missing = new List<(string Component, string Marker)>();
     foreach (var (component, marker) in markers)
     {

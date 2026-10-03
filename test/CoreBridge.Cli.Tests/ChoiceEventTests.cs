@@ -1,3 +1,4 @@
+using CoreBridge.Core.Multipass;
 using CoreBridge.Interaction;
 
 namespace CoreBridge.Cli.Tests;
@@ -89,6 +90,43 @@ public class ChoiceEventTests
     {
         Assert.Equal(YesNoOptions.No, OptionDef.DefaultOf<YesNoOptions>().Value);
         Assert.Equal(OkCancelOptions.Cancel, OptionDef.DefaultOf<OkCancelOptions>().Value);
+    }
+
+    /// <summary>Angebote auf Ticks werden per Taste beantwortet — über die <c>Keys</c> der Optionen.</summary>
+    [Fact]
+    public void TasteBeantwortetUeberOptionDefKeys()
+    {
+        IChoiceInteraction offer = new ChoiceEvent<HungStopOptions>(TimeSpan.Zero, "Warten auf den Stop:");
+
+        Assert.False(offer.TryChooseKey(Keys.X));
+        Assert.False(offer.TryChooseKey(Keys.W));
+        Assert.True(offer.IsOpen);
+
+        Assert.True(offer.TryChooseKey(Keys.K));
+        Assert.Equal(HungStopOptions.Kill, ((ChoiceEvent<HungStopOptions>)offer).GetUserInputAsync().GetResult());
+        Assert.False(offer.TryChooseKey(Keys.Esc));
+    }
+
+    /// <summary>
+    /// Ohne Antwort schließt der Erzeuger das Angebot mit „weiter warten“; danach ist
+    /// nichts mehr offen, und das Kommando endet nicht an einer vergessenen Rückfrage.
+    /// </summary>
+    [Fact]
+    public void UnbeantwortetesAngebotAufTicksSchliesstMitWeiterWarten()
+    {
+        var channel = System.Threading.Channels.Channel.CreateUnbounded<CliEvent>();
+        var events = new EventFactory(channel.Writer);
+
+        var offer = events.Choice<HungStopOptions>("Warten auf den Stop:");
+        var tick = events.Tick(offer);
+
+        Assert.Same(offer, tick.Offer);
+        Assert.Equal(1, events.OpenInteractionCount);
+        Assert.Throws<InvalidOperationException>(() => events.AssertNoOpenInteractions());
+
+        Assert.True(offer.SetDefault());
+        Assert.Equal(HungStopOptions.Wait, offer.GetUserInputAsync().GetResult());
+        events.AssertNoOpenInteractions();
     }
 
     [Fact]

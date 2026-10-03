@@ -52,6 +52,13 @@ public interface IChoiceInteraction : IOpenInteraction
     /// </summary>
     bool TryParseChoice(string input);
 
+    /// <summary>
+    /// Antwortet, falls <paramref name="key"/> zu den <see cref="OptionDef.Keys"/> einer
+    /// Antwort gehört — der Weg für Angebote auf Fortschritts-Ticks, bei denen keine
+    /// Zeile gelesen wird, sondern einzelne Tasten.
+    /// </summary>
+    bool TryChooseKey(Keys key);
+
     /// <summary>Schließt die Rückfrage mit <see cref="DefaultOption"/>.</summary>
     bool SetDefault();
 }
@@ -87,6 +94,13 @@ public class ChoiceEvent<T> : InteractionEvent<T>, IChoiceInteraction where T : 
     OptionDef IChoiceInteraction.DefaultOption => this.DefaultOption;
 
     bool IChoiceInteraction.TryParseChoice(string input) => this.TryParseChoice(input, out _);
+
+    /// <inheritdoc/>
+    public bool TryChooseKey(Keys key)
+    {
+        var option = this.Options.FirstOrDefault(candidate => candidate.Keys.Contains(key));
+        return option is not null && this.SetResult(option.Value);
+    }
 
     /// <summary>Schließt die Rückfrage mit <see cref="DefaultOption"/>.</summary>
     public bool SetDefault() => this.SetResult(this.DefaultOption.Value);

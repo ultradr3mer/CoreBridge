@@ -27,9 +27,9 @@ public sealed record InitDeleteResult(string Name, string? ProfileDir);
 /// </summary>
 public sealed class InitService
 {
-    private readonly ImagesConfig _config;
+    private readonly InitsConfig _config;
 
-    public InitService(ImagesConfig config)
+    public InitService(InitsConfig config)
     {
         _config = config;
     }
@@ -66,7 +66,7 @@ public sealed class InitService
             : runtimeImage.Trim();
         if (string.IsNullOrWhiteSpace(resolvedRuntimeImage))
         {
-            throw new MultipassException("Runtime-Image fehlt (Images:DefaultRuntimeImage).");
+            throw new MultipassException("Runtime-Image fehlt (Inits:DefaultRuntimeImage).");
         }
 
         Directory.CreateDirectory(InitStore.ProfileDir(name));

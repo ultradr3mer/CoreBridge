@@ -9,7 +9,7 @@ namespace CoreBridge.Core.Config;
 /// </summary>
 public sealed record AppConfig
 {
-    public ImagesConfig Images { get; init; } = new();
+    public InitsConfig Inits { get; init; } = new();
 
     /// <summary>
     /// Standard-Timeout für Multipass-VM-Erstellung, z. B. 5m, 10s, 1000ms, dauert etwas.
@@ -57,7 +57,7 @@ public sealed record AppConfig
     };
 }
 
-public sealed record ImagesConfig
+public sealed record InitsConfig
 {
     /// <summary>
     /// Multipass-Katalogname, der beim Starten einer VM zugrunde liegt.

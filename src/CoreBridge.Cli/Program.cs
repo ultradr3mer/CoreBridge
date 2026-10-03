@@ -23,6 +23,7 @@ public static partial class Program
   [
       typeof(MultipassStatusOptions),
         typeof(MultipassRestartOptions),
+        typeof(MultipassStoreOptions),
         typeof(VmListOptions),
         typeof(VmCreateOptions),
         typeof(VmStartOptions),
@@ -57,7 +58,7 @@ public static partial class Program
   /// Leitsatz 6: CLI und TUI lesen dieselbe Config-Quelle. Reihenfolge:
   /// appsettings.json → appsettings.{Environment}.json (Env DOTNET_ENVIRONMENT,
   /// Default Development) → appsettings.local.json (gitignored) → Env-Variablen
-  /// (Doppelter Unterstrich, z. B. Images__StoreRoot). Keine Passwörter in der
+  /// (Doppelter Unterstrich, z. B. Inits__StoreRoot). Keine Passwörter in der
   /// Config — Secrets laufen über die CORE_BRIDGE_*_PASSWORD-Env-Kette.
   /// Vorher müssen appsettings.json und appsettings.{Environment}.json gültig
   /// signiert sein (<see cref="SettingsSignatures"/>), sonst
@@ -138,11 +139,7 @@ public static partial class Program
     }
     finally
     {
-      if (options is MultipassRestartOptions { PauseOnExit: true })
-      {
-        Console.Write("Any key to continue ...");
-        Console.ReadKey(intercept: true);
-      }
+      ElevatedRelaunch.PauseIfRequested(options is IPauseOnExit { PauseOnExit: true });
     }
   }
 
@@ -297,7 +294,7 @@ public static partial class Program
       EventFactory factory,
       CancellationToken cancellationToken)
   {
-    InitStore.Initialize(config.Images.StoreRoot);
+    InitStore.Initialize(config.Inits.StoreRoot);
     config = InitComponentStore.Merge(config, InitStore.UserSettingsFile);
     using var services = CoreBridgeContainer.Create(config);
     var cli = MultipassCliFactory.Create(services);
@@ -306,6 +303,12 @@ public static partial class Program
     {
       // git auf dem Host erreicht keine simulierte VM.
       throw new ProgramExecutionException(1, "repo-send/repo-receive are not supported in simulation — git has to run inside a real VM.");
+    }
+
+    if (cli is IMultipassDouble && options is MultipassStoreOptions)
+    {
+      // Der Speicherort ist eine echte Einstellung des Rechners; neben simulierten VMs führte sie in die Irre.
+      throw new ProgramExecutionException(1, "multipass-store ändert den echten Multipass-Dienst und läuft deshalb nicht in der Simulation (cb-sim).");
     }
 
     if (cli is IMultipassDouble multipassDouble && options is not (InitConfigureOptions or InitListOptions or InitDeleteOptions or ComponentListOptions or ComponentAddOptions or ComponentRemoveOptions or SettingsVerifyOptions or MultipassRestartOptions))
@@ -322,7 +325,8 @@ public static partial class Program
     return options switch
     {
       MultipassStatusOptions => RunMultipassStatus(context),
-      MultipassRestartOptions => RunMultipassRestart(context),
+      MultipassRestartOptions o => RunMultipassRestart(context, o),
+      MultipassStoreOptions o => RunMultipassStore(context, o),
       VmListOptions => RunVmList(context),
       VmCreateOptions o => RunVmCreate(context, o),
       VmStartOptions o => RunVmStart(context, o),

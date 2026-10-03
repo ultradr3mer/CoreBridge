@@ -33,6 +33,14 @@ public sealed class EventFactory
 
     public ProgressEvent Tick() => new(this.Elapsed);
 
+    /// <summary>
+    /// Fortschrittspunkt, der eine offene Auswahl trägt (siehe <see cref="ProgressEvent.Offer"/>).
+    /// Das Angebot selbst entsteht mit <see cref="Choice{T}"/> und wird damit wie jede
+    /// Rückfrage verfolgt; emittiert wird es nur über solche Ticks, und der Erzeuger
+    /// schließt es am Ende des Wartens (<see cref="IChoiceInteraction.SetDefault"/>).
+    /// </summary>
+    public ProgressEvent Tick(IChoiceInteraction offer) => new(this.Elapsed, offer);
+
     public ChoiceEvent<T> Choice<T>(string message, TimeSpan? timeout = null) where T : struct, Enum
     {
         return Track(new ChoiceEvent<T>(this.Elapsed, message, timeout));

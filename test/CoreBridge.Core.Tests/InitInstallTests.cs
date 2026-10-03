@@ -16,7 +16,7 @@ public class InitInstallTests
     [Fact]
     public void PlanFolgtDerCloudInitReihenfolge()
     {
-        var steps = InitInstall.Plan(LoadShippedImagesConfig(), ["python", "dotnet"]);
+        var steps = InitInstall.Plan(LoadShippedInitsConfig(), ["python", "dotnet"]);
         var titles = steps.Select(s => s.Title).ToArray();
 
         Assert.StartsWith("warten, bis cloud-init", titles[0]);
@@ -49,7 +49,7 @@ public class InitInstallTests
     [Fact]
     public void MarkerNurFuerKomponentenMitSkript()
     {
-        var markers = InitInstall.Markers(LoadShippedImagesConfig(), ["claude", "opencode", "dotnet"]);
+        var markers = InitInstall.Markers(LoadShippedInitsConfig(), ["claude", "opencode", "dotnet"]);
 
         Assert.Equal(
             new[]
@@ -64,7 +64,7 @@ public class InitInstallTests
     [Fact]
     public void UnbekannteKomponenteNenntDieBekannten()
     {
-        var exception = Assert.Throws<MultipassException>(() => InitInstall.Plan(LoadShippedImagesConfig(), ["pyton"]));
+        var exception = Assert.Throws<MultipassException>(() => InitInstall.Plan(LoadShippedInitsConfig(), ["pyton"]));
 
         Assert.Contains("pyton", exception.Message);
         Assert.Contains("python", exception.Message);
@@ -94,7 +94,7 @@ public class InitInstallTests
         service.Create("sim-a", "daily:26.10");
 
         MultipassRunResult? last = null;
-        foreach (var step in InitInstall.Plan(LoadShippedImagesConfig(), [component]))
+        foreach (var step in InitInstall.Plan(LoadShippedInitsConfig(), [component]))
         {
             last = step.IsUpload
                 ? service.Put(step.ScriptSource!, "sim-a", step.RemotePath)
@@ -105,15 +105,15 @@ public class InitInstallTests
         Assert.NotNull(last);
     }
 
-    private static ImagesConfig LoadShippedImagesConfig()
+    private static InitsConfig LoadShippedInitsConfig()
     {
         var path = InitStore.ResolvePath("src/CoreBridge.Cli/appsettings.json");
         using var document = JsonDocument.Parse(File.ReadAllText(path));
-        var images = document.RootElement.GetProperty("Images").Deserialize<ImagesConfig>(
+        var inits = document.RootElement.GetProperty("Inits").Deserialize<InitsConfig>(
             new JsonSerializerOptions { PropertyNameCaseInsensitive = true })!;
-        return images with
+        return inits with
         {
-            Components = new Dictionary<string, ComponentConfig>(images.Components, StringComparer.OrdinalIgnoreCase)
+            Components = new Dictionary<string, ComponentConfig>(inits.Components, StringComparer.OrdinalIgnoreCase)
         };
     }
 }

@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Spielwiese für CoreBridge.Interaction: zeigt Ausgabe, Spinner, Rückfragen und
+       Angebote auf Fortschritts-Ticks an einer echten Konsole. Wird nicht ausgeliefert. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\CoreBridge.Interaction\CoreBridge.Interaction.csproj" />
+  </ItemGroup>
+
+</Project>

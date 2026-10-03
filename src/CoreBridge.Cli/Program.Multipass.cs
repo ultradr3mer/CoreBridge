@@ -43,19 +43,24 @@ public static partial class Program
         await events.Emit(events.Std(line));
       }
 
+      // Ein abgelehnter Client wird durch einen Neustart nicht authentifiziert.
       throw new ProgramExecutionException(
           1,
-          $"{report.Error} — Dienst neu starten mit `cb multipass-restart`.");
+          report.NotAuthenticated ? report.Error : $"{report.Error} — Dienst neu starten mit `cb multipass-restart`.");
     }
   }
 
-  private static async Task RunMultipassRestart(CommandContext context)
+  private static async Task RunMultipassRestart(CommandContext context, MultipassRestartOptions options)
   {
     var events = context.Events;
     var cancellationToken = context.CancellationToken;
     var timeout = context.Config.DefaultTimeout.ReadTime();
     var stopwatch = System.Diagnostics.Stopwatch.StartNew();
     var service = new MultipassService(commandTimeout: timeout);
+
+    // Ein hängender Stop antwortet erfahrungsgemäß nicht mehr: während des Wartens
+    // beendet `k` den Daemon sofort, statt den ganzen DefaultTimeout abzusitzen.
+    var offer = new StopOffer(events);
 
     // Erst ohne Erhöhung: ob der Benutzer den Dienst steuern darf, entscheidet
     // dessen ACL, nicht die Gruppe. Erhöht wird nur, wenn es wirklich nicht geht —
@@ -64,18 +69,12 @@ public static partial class Program
     // vorgefundenen Zustand fort (StopPending → warten → beenden).
     if (service.IsElevated() || service.CanControlService())
     {
-      // MultipassService erwartet Func<string,bool>; die blockiert auf einem
-      // Threadpool-Thread, während der Konsument den Kanal bedient.
-      bool ConfirmInCore(string question)
-          => events.Ask(events.Choice<YesNoOptions>(question)) == YesNoOptions.Yes;
-
       try
       {
-        await foreach (var line in service.Restart(timeout, ConfirmInCore, cancellationToken))
-        {
-          await events.Emit(line == Progress.ProgressTick ? events.Tick() : events.Std(line));
-        }
-
+        await EmitRestart(
+            events,
+            offer,
+            service.Restart(timeout, ConfirmInCore(events), offer.Open, options.KillNow, cancellationToken: cancellationToken));
         await events.Emit(events.Std($"multipass-restart: OK ({stopwatch.Elapsed.TotalSeconds:F1} s) — State: {service.QueryState()}"));
         return;
       }
@@ -95,8 +94,11 @@ public static partial class Program
     }
 
     await events.Emit(events.Std("Starte erhöht (UAC-Abfrage) — Ausgabe und Rückfragen folgen im Administratorfenster ..."));
-    var exitCode = await RunElevatedAsync(context.Config.DefaultTimeout, cancellationToken);
-    if (exitCode == ControlCExit)
+    var exitCode = await ElevatedRelaunch.RunAsync(
+        typeof(Program).Assembly.Location,
+        ["multipass-restart", "--pause-on-exit", "--timeout", context.Config.DefaultTimeout, .. (offer.KillChosen || options.KillNow ? new[] { "--kill-now" } : [])],
+        cancellationToken);
+    if (exitCode == ElevatedRelaunch.ControlCExit)
     {
       // Fenster geschlossen oder Strg+C statt einer Taste: über das Ergebnis
       // des Neustarts sagt der Exit-Code dann nichts.
@@ -113,64 +115,226 @@ public static partial class Program
     await events.Emit(events.Std($"multipass-restart: OK ({stopwatch.Elapsed.TotalSeconds:F1} s, erhöht) — State: {service.QueryState()}"));
   }
 
-  /// <summary><c>STATUS_CONTROL_C_EXIT</c> (0xC000013A): Konsolenfenster geschlossen oder Strg+C.</summary>
-  private const int ControlCExit = unchecked((int)0xC000013A);
+  /// <summary>
+  /// Zeigt oder ändert den Speicherort der Multipass-Daten (<c>MULTIPASS_STORAGE</c>).
+  /// Ändern: Rückfrage, laufende VMs nach Rückfrage stoppen, dann — erhöht, notfalls
+  /// per UAC in einem neuen Fenster — Variable setzen und den Dienst neu starten. Es
+  /// wird nichts kopiert: der neue Ort ist leer, und der Dienst kennt diesen Client
+  /// dort noch nicht. Deshalb prüft das ursprüngliche Fenster zum Schluss die
+  /// Authentifizierung und zeigt, wie der Client einmalig vertraut wird.
+  /// </summary>
+  private static async Task RunMultipassStore(CommandContext context, MultipassStoreOptions options)
+  {
+    var events = context.Events;
+    var storage = new MultipassStorage();
+    var current = storage.Current();
+    await events.Emit(events.Std($"Speicherort: {current.Path} ({DescribeSource(current.Source)})"));
+    if (options.Path is null && !options.Reset)
+    {
+      await ReportClientTrust(context);
+      return;
+    }
+
+    if (options.Path is not null && options.Reset)
+    {
+      throw new ProgramExecutionException(1, "Entweder -p/--path oder --reset angeben, nicht beides.");
+    }
+
+    var target = options.Reset ? null : Path.GetFullPath(options.Path!.Trim());
+    var effective = target ?? MultipassStorage.DefaultPath;
+    if (File.Exists(effective))
+    {
+      throw new ProgramExecutionException(1, $"`{effective}` ist eine Datei — der Speicherort muss ein Ordner sein.");
+    }
+
+    // Steht der Ort nur als System-Variable fest, erreicht er den Dienst erst nach einem
+    // Neustart des Rechners; dann lohnt das Umstellen trotzdem (Dienst-Umgebung).
+    if (MultipassStorage.SamePath(current.Path, effective) && current.Source != MultipassStorageSource.System)
+    {
+      await events.Emit(events.Std($"multipass-store: unverändert ({effective})."));
+      return;
+    }
+
+    var service = new MultipassService(commandTimeout: context.Config.DefaultTimeout.ReadTime());
+    var elevated = service.IsElevated();
+    if (!options.Yes
+        && !await context.ConfirmAsync(
+            $"Multipass legt seine Daten danach unter {effective} ab. Vorhandene VMs und Images bleiben in {current.Path} "
+            + "und sind dann nicht mehr sichtbar — es wird nichts kopiert oder gelöscht. Der Dienst wird dafür neu gestartet"
+            + (elevated ? string.Empty : " (braucht Administratorrechte, UAC-Abfrage)") + ". Umstellen?"))
+    {
+      throw new ProgramExecutionException(1, $"Abgebrochen — der Speicherort bleibt {current.Path}.");
+    }
+
+    if (!options.PauseOnExit)
+    {
+      await StopRunningVmsForStore(context);
+    }
+
+    if (elevated)
+    {
+      await SwitchStorage(context, storage, service, target);
+    }
+    else
+    {
+      await events.Emit(events.Std("Starte erhöht (UAC-Abfrage) — Ausgabe und Rückfragen folgen im Administratorfenster ..."));
+      var exitCode = await ElevatedRelaunch.RunAsync(
+          typeof(Program).Assembly.Location,
+          ["multipass-store", .. (target is null ? new[] { "--reset" } : ["--path", target]), "--yes", "--pause-on-exit", "--timeout", context.Config.DefaultTimeout],
+          context.CancellationToken);
+      if (exitCode == ElevatedRelaunch.ControlCExit)
+      {
+        throw new ProgramExecutionException(
+            1,
+            $"Das Administratorfenster wurde geschlossen, bevor multipass-store fertig war — Speicherort jetzt: {storage.Current().Path}; prüfen mit `cb multipass-store`.");
+      }
+
+      if (exitCode != 0)
+      {
+        throw new ProgramExecutionException(exitCode, $"multipass-store im Administratorfenster fehlgeschlagen (Exit {exitCode}).");
+      }
+    }
+
+    if (options.PauseOnExit)
+    {
+      // Das Admin-Fenster prüft nicht: authentifiziert werden muss der Client des Benutzers.
+      await events.Emit(events.Std("Fertig — die Prüfung des Clients folgt im ursprünglichen Fenster."));
+      return;
+    }
+
+    await events.Emit(events.Std($"multipass-store: OK — Speicherort {storage.Current().Path}"));
+    await ReportClientTrust(context);
+  }
+
+  /// <summary>Erhöht: Ordner anlegen, Variable an beiden Stellen setzen, Dienst neu starten.</summary>
+  private static async Task SwitchStorage(CommandContext context, MultipassStorage storage, MultipassService service, string? target)
+  {
+    var events = context.Events;
+    if (target is not null)
+    {
+      Directory.CreateDirectory(target);
+    }
+
+    storage.Set(target);
+    await events.Emit(events.Std(target is null
+        ? $"{MultipassStorage.VariableName} entfernt (System-Variable und Dienst-Umgebung) — Standard {MultipassStorage.DefaultPath}"
+        : $"{MultipassStorage.VariableName} = {target} (System-Variable und Dienst-Umgebung)"));
+
+    // Ein leerer Speicherort kennt keinen Client: dass der Dienst ihn ablehnt, ist hier
+    // der erwartete Zustand und kein Grund, auf eine Daemon-Version zu warten.
+    var offer = new StopOffer(events);
+    await EmitRestart(
+        events,
+        offer,
+        service.Restart(
+            context.Config.DefaultTimeout.ReadTime(),
+            ConfirmInCore(events),
+            offer.Open,
+            acceptRejectedClient: true,
+            cancellationToken: context.CancellationToken));
+  }
 
   /// <summary>
-  /// Startet dieselbe CLI per UAC (<c>runas</c>) mit <c>multipass-restart
-  /// --pause-on-exit --timeout &lt;timeout&gt;</c> (der wirksame <c>DefaultTimeout</c>)
-  /// und wartet auf ihr Ende. Läuft die CLI als DLL unter <c>dotnet</c>,
-  /// wird die DLL als erstes Argument mitgegeben; läuft sie eingebettet in einem
-  /// fremden Host (Testhost), wird die CLI neben der Assembly gestartet.
+  /// Laufende VMs vor dem Umstellen stoppen (nach Rückfrage). Lässt sich die Liste
+  /// nicht abfragen — etwa weil der Dienst diesen Client schon jetzt ablehnt —, gibt
+  /// es nur einen Hinweis.
   /// </summary>
-  private static async Task<int> RunElevatedAsync(string timeout, CancellationToken cancellationToken)
+  private static async Task StopRunningVmsForStore(CommandContext context)
   {
-    var processPath = Environment.ProcessPath
-        ?? throw new ProgramExecutionException(1, "Pfad der laufenden CLI unbekannt — erhöhter Neustart nicht möglich.");
-    var cliAssembly = typeof(Program).Assembly.Location;
-    var processName = Path.GetFileNameWithoutExtension(processPath);
-    var (fileName, passAssembly) = processName switch
-    {
-      _ when string.Equals(processName, "dotnet", StringComparison.OrdinalIgnoreCase) => (processPath, true),
-      _ when string.Equals(processName, Path.GetFileNameWithoutExtension(cliAssembly), StringComparison.OrdinalIgnoreCase) => (processPath, false),
-      // Eingebettet (z. B. Program.Run im Testhost): nicht den fremden Host
-      // neu starten, sondern die CLI neben der Assembly.
-      _ when File.Exists(Path.ChangeExtension(cliAssembly, ".exe")) => (Path.ChangeExtension(cliAssembly, ".exe"), false),
-      _ => ("dotnet", true)
-    };
-    var startInfo = new System.Diagnostics.ProcessStartInfo
-    {
-      FileName = fileName,
-      UseShellExecute = true,
-      Verb = "runas",
-      WorkingDirectory = Environment.CurrentDirectory
-    };
-    if (passAssembly)
-    {
-      startInfo.ArgumentList.Add(cliAssembly);
-    }
-
-    foreach (var argument in new[] { "multipass-restart", "--pause-on-exit" })
-    {
-      startInfo.ArgumentList.Add(argument);
-    }
-
-    startInfo.ArgumentList.Add("--timeout");
-    startInfo.ArgumentList.Add(timeout);
-
-    System.Diagnostics.Process? process;
+    var events = context.Events;
+    IReadOnlyList<VmInfo> vms;
     try
     {
-      process = System.Diagnostics.Process.Start(startInfo);
+      vms = await Task.Run(() => context.Vms.List(context.DefaultTimeoutMs), context.CancellationToken);
     }
-    catch (System.ComponentModel.Win32Exception exception) when (exception.NativeErrorCode == 1223)
+    catch (MultipassException exception)
     {
-      throw new ProgramExecutionException(1, "Abgebrochen — Administratorrechte in der UAC-Abfrage abgelehnt.");
+      await events.Emit(events.Std($"Hinweis: laufende VMs ließen sich nicht abfragen ({exception.Message.Trim()}) — laufen noch welche, vorher von Hand stoppen."));
+      return;
     }
 
-    using var elevated = process
-        ?? throw new ProgramExecutionException(1, "Erhöhter Prozess konnte nicht gestartet werden.");
-    await elevated.WaitForExitAsync(cancellationToken);
-    return elevated.ExitCode;
+    var running = vms.Where(vm => !vm.IsStopped && !vm.IsDeleted).ToList();
+    if (running.Count == 0)
+    {
+      return;
+    }
+
+    if (!await context.ConfirmAsync($"{running.Count} VM(s) laufen noch ({string.Join(", ", running.Select(vm => vm.Name))}) — vor dem Umstellen stoppen?"))
+    {
+      throw new ProgramExecutionException(1, "Abgebrochen — erst die VMs stoppen, dann den Speicherort umstellen.");
+    }
+
+    foreach (var vm in running)
+    {
+      await StopVm(context, vm);
+    }
+  }
+
+  /// <summary>
+  /// Prüft, ob der Dienst diesen Client annimmt. Nach einem neuen Speicherort tut er es
+  /// nicht — dann die beiden Schritte, mit denen der Client einmalig vertraut wird.
+  /// </summary>
+  private static async Task ReportClientTrust(CommandContext context)
+  {
+    var events = context.Events;
+    var report = await Task.Run(() => Doctor.Check(cli: context.Vms.Cli, timeoutMs: context.DefaultTimeoutMs), context.CancellationToken);
+    if (report.NotAuthenticated)
+    {
+      await events.Emit(events.Std("Der Multipass-Dienst kennt diesen Client noch nicht (neuer Speicherort, leere Daten). Einmalig vertrauen lassen:"));
+      await events.Emit(events.Std("  1. in einer PowerShell als Administrator:  multipass set local.passphrase"));
+      await events.Emit(events.Std("  2. hier, ohne Administratorrechte:         multipass authenticate"));
+      await events.Emit(events.Std("Danach prüfen: cb multipass-status"));
+      return;
+    }
+
+    await events.Emit(report.DaemonVersion is null
+        ? events.Std($"Warnung: {report.Error}")
+        : events.Std($"Daemon {report.DaemonVersion} — dieser Client ist authentifiziert."));
+  }
+
+  private static string DescribeSource(MultipassStorageSource source) => source switch
+  {
+    MultipassStorageSource.Service => "Dienst-Umgebung",
+    MultipassStorageSource.System => $"System-Variable {MultipassStorage.VariableName}",
+    _ => "Standard"
+  };
+
+  /// <summary>
+  /// Ja/Nein-Rückfrage für <see cref="MultipassService"/>, das <c>Func&lt;string,bool&gt;</c>
+  /// erwartet; sie blockiert auf einem Threadpool-Thread, während der Konsument den Kanal bedient.
+  /// </summary>
+  private static Func<string, bool> ConfirmInCore(EventFactory events)
+  {
+    return question => events.Ask(events.Choice<YesNoOptions>(question)) == YesNoOptions.Yes;
+  }
+
+  /// <summary>
+  /// Meldungen eines Dienst-Neustarts weiterreichen. Solange der Dienst auf den Stop
+  /// wartet, ist sein Angebot (<see cref="StopOffer"/>) offen und reist auf den Ticks mit;
+  /// beantwortet und geschlossen wird es im Dienst selbst.
+  /// </summary>
+  private static async Task EmitRestart(EventFactory events, StopOffer offer, IAsyncEnumerable<string> lines)
+  {
+    await foreach (var line in lines)
+    {
+      await events.Emit(line != Progress.ProgressTick
+          ? events.Std(line)
+          : offer.Current is { IsOpen: true } open ? events.Tick(open) : events.Tick());
+    }
+  }
+
+  /// <summary>
+  /// Das Angebot während des Wartens auf den Stop: <see cref="Open"/> ist die Fabrik für
+  /// <see cref="MultipassService.Restart"/>, <see cref="Current"/> trägt das Angebot auf die
+  /// Ticks, und <see cref="KillChosen"/> sagt hinterher, ob <c>k</c> gedrückt wurde — dann
+  /// bekommt ein erhöhtes Fenster <c>--kill-now</c>, statt erneut zu warten.
+  /// </summary>
+  private sealed class StopOffer(EventFactory events)
+  {
+    public ChoiceEvent<HungStopOptions>? Current { get; private set; }
+
+    public bool KillChosen => this.Current?.TryGetAnswer(out var answer) == true && answer == HungStopOptions.Kill;
+
+    public ChoiceEvent<HungStopOptions> Open(string message) => this.Current = events.Choice<HungStopOptions>(message);
   }
 }

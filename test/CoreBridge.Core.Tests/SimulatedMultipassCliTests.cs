@@ -206,7 +206,7 @@ public class SimulatedMultipassCliTests
         {
             MultipassLogPath = Path.Combine(temp.Path, "log"),
             MultipassSimulationDelay = "0ms",
-            Images = new ImagesConfig { StoreRoot = temp.Path },
+            Inits = new InitsConfig { StoreRoot = temp.Path },
             Bootstrap = new() { [typeof(IMultipassCli).FullName!] = typeof(SimulatedMultipassCli).FullName! }
         };
 

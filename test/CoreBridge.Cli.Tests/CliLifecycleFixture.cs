@@ -66,7 +66,7 @@ public sealed class CliLifecycleFixture
             // ReplayMultipassCli wiedergegeben werden kann. Bootstrap bleibt
             // Standard: hier läuft garantiert das echte Multipass.
             MultipassLogPath = "artifacts/mp-log/cli-lifecycle",
-            Images = new ImagesConfig
+            Inits = new InitsConfig
             {
                 StoreRoot = storePath,
                 Components = new Dictionary<string, ComponentConfig>(StringComparer.OrdinalIgnoreCase)
@@ -92,17 +92,17 @@ public sealed class CliLifecycleFixture
         };
 
         var suffix = CheckoutSuffix();
-        ImageName = $"cbx-cli-img-{suffix}";
+        InitName = $"cbx-cli-init-{suffix}";
         VmName = $"cbx-cli-vm-{suffix}";
     }
 
-    public string ImageName { get; }
+    public string InitName { get; }
 
     public string VmName { get; }
 
-    internal string ProfileConfigPath => Path.Combine(storePath, "profiles", ImageName, ImageName + ".profile.json");
+    internal string ProfileConfigPath => Path.Combine(storePath, "profiles", InitName, InitName + ".profile.json");
 
-    internal string CloudInitPath => Path.Combine(storePath, "profiles", ImageName, "cloud-init.yaml");
+    internal string CloudInitPath => Path.Combine(storePath, "profiles", InitName, "cloud-init.yaml");
 
     /// <summary>
     /// Konsumiert den Ausgabestrom vollständig, schreibt jede Meldung sofort ins

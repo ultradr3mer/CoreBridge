@@ -18,7 +18,7 @@ public class ComponentScriptTests
     [InlineData("dotnet", "/usr/local/sbin/corebridge-install-dotnet", "ln -sfn \"$dotnet_source\" /usr/local/bin/dotnet")]
     public void KomponenteBettetSkriptEinUndRuftEsAuf(string component, string installPath, string scriptMarker)
     {
-        var config = LoadShippedImagesConfig();
+        var config = LoadShippedInitsConfig();
 
         var yaml = InitCloudInit.Generate("agent", config, [component]);
 
@@ -36,7 +36,7 @@ public class ComponentScriptTests
     [Fact]
     public void JedesKomponentenSkriptSetztSeinenMarker()
     {
-        var config = LoadShippedImagesConfig();
+        var config = LoadShippedInitsConfig();
 
         var withScript = config.Components.Where(c => !string.IsNullOrWhiteSpace(c.Value.Script)).ToList();
         Assert.NotEmpty(withScript);
@@ -52,7 +52,7 @@ public class ComponentScriptTests
     [Fact]
     public void AlleAusgeliefertenKomponentenSindKombinierbar()
     {
-        var config = LoadShippedImagesConfig();
+        var config = LoadShippedInitsConfig();
 
         var yaml = InitCloudInit.Generate("all", config, config.Components.Keys);
 
@@ -65,22 +65,22 @@ public class ComponentScriptTests
     [Fact]
     public void GitInstalliertNurGit()
     {
-        var yaml = InitCloudInit.Generate("agent", LoadShippedImagesConfig(), ["git"]);
+        var yaml = InitCloudInit.Generate("agent", LoadShippedInitsConfig(), ["git"]);
 
         Assert.Contains("- 'git'", yaml);
         Assert.DoesNotContain("openssh-server", yaml);
         Assert.DoesNotContain("authorized_keys", yaml);
     }
 
-    private static ImagesConfig LoadShippedImagesConfig()
+    private static InitsConfig LoadShippedInitsConfig()
     {
         var path = InitStore.ResolvePath("src/CoreBridge.Cli/appsettings.json");
         using var document = JsonDocument.Parse(File.ReadAllText(path));
-        var images = document.RootElement.GetProperty("Images").Deserialize<ImagesConfig>(
+        var inits = document.RootElement.GetProperty("Inits").Deserialize<InitsConfig>(
             new JsonSerializerOptions { PropertyNameCaseInsensitive = true })!;
-        return images with
+        return inits with
         {
-            Components = new Dictionary<string, ComponentConfig>(images.Components, StringComparer.OrdinalIgnoreCase)
+            Components = new Dictionary<string, ComponentConfig>(inits.Components, StringComparer.OrdinalIgnoreCase)
         };
     }
 }

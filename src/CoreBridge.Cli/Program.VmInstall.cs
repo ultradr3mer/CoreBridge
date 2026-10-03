@@ -28,7 +28,7 @@ public static partial class Program
       RequireValidName(options.Snapshot);
     }
 
-    var steps = InitInstall.Plan(context.Config.Images, components);
+    var steps = InitInstall.Plan(context.Config.Inits, components);
     await EnsureRunning(context, name, ask: false);
 
     // apt und snap brauchen Minuten: gewartet wird in Abschnitten von

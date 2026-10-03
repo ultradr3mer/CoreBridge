@@ -69,7 +69,7 @@ public sealed class SimulatedMultipassCli : IMultipassCli, IMultipassDouble
     /// <summary>Einziger öffentlicher Konstruktor — den wählt der Container.</summary>
     public SimulatedMultipassCli(AppConfig config)
         : this(
-            Path.Combine(RepoPaths.Resolve(config.Images.StoreRoot), FolderName, StateFileName),
+            Path.Combine(RepoPaths.Resolve(config.Inits.StoreRoot), FolderName, StateFileName),
             config.MultipassSimulationDelay.ReadTime())
     {
     }

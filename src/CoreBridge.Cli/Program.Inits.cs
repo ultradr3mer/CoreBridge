@@ -11,7 +11,7 @@ public static partial class Program
     var config = context.Config;
     var components = options.Components.Split(',', StringSplitOptions.RemoveEmptyEntries);
     await events.Emit(events.Std($"Erzeuge Profil '{options.Name}' ({string.Join(", ", components)}) ..."));
-    var inits = new InitService(config.Images);
+    var inits = new InitService(config.Inits);
     var result = await Task.Run(
         () => inits.Configure(
             options.Name,
@@ -34,7 +34,7 @@ public static partial class Program
   private static async Task RunInitList(CommandContext context)
   {
     var events = context.Events;
-    var entries = await Task.Run(() => new InitService(context.Config.Images).List(), context.CancellationToken);
+    var entries = await Task.Run(() => new InitService(context.Config.Inits).List(), context.CancellationToken);
     if (entries.Count == 0)
     {
       await events.Emit(events.Std("Keine konfigurierten Profile."));
@@ -51,7 +51,7 @@ public static partial class Program
   private static async Task RunInitDelete(CommandContext context, InitDeleteOptions options)
   {
     var result = await Task.Run(
-        () => new InitService(context.Config.Images).Delete(options.Name),
+        () => new InitService(context.Config.Inits).Delete(options.Name),
         context.CancellationToken);
     await context.Events.Emit(context.Events.Std($"Konfiguration gelöscht: {result.ProfileDir}"));
   }
@@ -59,7 +59,7 @@ public static partial class Program
   private static async Task RunComponentList(CommandContext context, ComponentListOptions options)
   {
     var events = context.Events;
-    var entries = InitComponentStore.List(context.Config.Images, InitStore.UserSettingsFile);
+    var entries = InitComponentStore.List(context.Config.Inits, InitStore.UserSettingsFile);
     if (!string.IsNullOrWhiteSpace(options.Name))
     {
       var entry = entries.FirstOrDefault(e => string.Equals(e.Name, options.Name, StringComparison.OrdinalIgnoreCase))
@@ -111,7 +111,7 @@ public static partial class Program
       replace = true;
     }
 
-    var saved = InitComponentStore.Add(context.Config.Images, userFile, options.Name, component, replace);
+    var saved = InitComponentStore.Add(context.Config.Inits, userFile, options.Name, component, replace);
     await events.Emit(events.Std($"Komponente '{options.Name}' gespeichert: {userFile}"));
     await events.Emit(events.Std(InitComponentStore.ToJson(saved)));
     await events.Emit(events.Std(string.Empty));
@@ -124,7 +124,7 @@ public static partial class Program
 
   private static async Task RunComponentRemove(CommandContext context, ComponentRemoveOptions options)
   {
-    InitComponentStore.Remove(context.Config.Images, InitStore.UserSettingsFile, options.Name);
+    InitComponentStore.Remove(context.Config.Inits, InitStore.UserSettingsFile, options.Name);
     await context.Events.Emit(context.Events.Std($"Komponente '{options.Name}' entfernt: {InitStore.UserSettingsFile}"));
     await context.Events.Emit(context.Events.Std("Bestehende Profile behalten ihre gerenderte cloud-init; neue init-configure/vm-install kennen die Komponente nicht mehr."));
   }

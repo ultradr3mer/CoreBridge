@@ -128,7 +128,7 @@ public sealed class CliLifecycleTests
     {
         var result = await fixture.RunAsync(new InitConfigureOptions
         {
-            Name = fixture.ImageName,
+            Name = fixture.InitName,
             Components = "claude,dotnet",
             OverrideTimeout = "300s",
             Force = true
@@ -149,7 +149,7 @@ public sealed class CliLifecycleTests
         var result = await fixture.RunAsync(new VmCreateOptions
         {
             Name = fixture.VmName,
-            Image = fixture.ImageName,
+            Image = fixture.InitName,
             Snapshot = ConfiguredSnapshot
         }, output.WriteLine);
 
@@ -285,11 +285,11 @@ public sealed class CliLifecycleTests
     {
         if (!File.Exists(fixture.ProfileConfigPath))
         {
-            output.WriteLine($"Profil `{fixture.ImageName}` nicht vorhanden — nichts zu löschen.");
+            output.WriteLine($"Profil `{fixture.InitName}` nicht vorhanden — nichts zu löschen.");
             return;
         }
 
-        var delete = await fixture.RunAsync(new InitDeleteOptions { Name = fixture.ImageName }, output.WriteLine);
+        var delete = await fixture.RunAsync(new InitDeleteOptions { Name = fixture.InitName }, output.WriteLine);
 
         CliLifecycleFixture.AssertSucceeded(delete);
         Assert.False(File.Exists(fixture.ProfileConfigPath), $"Profilkonfiguration noch vorhanden: {fixture.ProfileConfigPath}");
