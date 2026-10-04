@@ -1,15 +1,14 @@
 function cb {
-    # Bewusst KEIN param(): sonst wird cb eine "advanced function" mit
-    # Common-Parameters (-InformationAction, -Verbose, ...), die CLI-Shortflags
-    # wie -i/-n/-c kaputt binden. Mit $args wird 1:1 durchgereicht.
-    # PowerShell macht aus `-c claude,dotnet` ein Array und reicht es an native
-    # Programme als getrennte Argumente weiter (`-c claude dotnet`) — der Parser
-    # verwirft den Rest dann stillschweigend. Listen daher wieder zusammenfügen.
-    $cliArgs = @(foreach ($arg in $args) { if ($arg -is [array]) { $arg -join ',' } else { $arg } })
-    # Checkout/Worktree, in dem man gerade steht: vom aktuellen Verzeichnis aufwärts
-    # bis zur CoreBridge.slnx (wie RepoPaths.Root) — so klappt cb auch aus Unterordnern.
-    # Außerhalb eines Checkouts (cb work in einem anderen Repo) gilt der Checkout, der die
-    # Funktion zuletzt installiert hat (install-cb.ps1 setzt ihn beim Bauen ein).
+    # No param(): Common Parameters would capture short flags such as -i, -n, or -c.
+    # Arrays (-c claude,dotnet) may arrive as separate arguments, so join them with commas.
+    $cliArgs = @(
+        foreach ($arg in $args) {
+            if ($arg -is [array]) { $arg -join ',' }
+            else { $arg }
+        }
+    )
+
+    # Checkout: search upward for CoreBridge.slnx; otherwise use the installed checkout.
     $root = (Get-Location).ProviderPath
     while ($root -and -not (Test-Path -LiteralPath (Join-Path $root 'CoreBridge.slnx'))) {
         $root = Split-Path -Parent $root
@@ -21,13 +20,14 @@ function cb {
     }
 
     if (-not $root) {
-        Write-Error "Kein CoreBridge-Checkout gefunden (keine CoreBridge.slnx in $((Get-Location).ProviderPath) oder darüber) — cb im Repo oder einem Worktree aufrufen."
+        Write-Error "No CoreBridge checkout found. Run cb in the repository or a worktree."
         return
     }
 
     if ($args.Count -eq 0) {
-        # Ohne Argument: in einem git-Repository arbeiten (cb work), sonst die TUI.
+        # Without arguments: run cb work inside a git repository, otherwise start the TUI.
         $inRepo = (git rev-parse --is-inside-work-tree 2>$null) -eq 'true'
+
         if ($inRepo) {
             dotnet run --project (Join-Path $root 'src\CoreBridge.Cli') -- work
         }
@@ -41,11 +41,10 @@ function cb {
 }
 
 function cb-sim {
-    # Wie cb, aber gegen den Multipass-Simulator (appsettings.Simulation.json):
-    # keine echten VMs, Zustand in artifacts\multipass-sim\state.json.
-    # Zurücksetzen: Remove-Item artifacts\multipass-sim -Recurse
+    # Run cb with the simulator. State is stored in artifacts\multipass-sim.
     $previous = $env:DOTNET_ENVIRONMENT
     $env:DOTNET_ENVIRONMENT = 'Simulation'
+
     try {
         cb @args
     }
