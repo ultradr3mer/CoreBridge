@@ -1,3 +1,4 @@
+using System.Collections;
 using System.Reflection;
 using CommandLine;
 
@@ -13,7 +14,10 @@ public sealed record CommandParameter(string Name, string? Abbreviation, bool Re
 /// <summary>
 /// Ein Verb mit Hilfe und Parametern, gelesen aus <c>[Verb]</c> und <c>[Option]</c>.
 /// </summary>
-public sealed record CommandMenu(string Name, string Help, IReadOnlyList<CommandParameter> Parameters);
+public sealed record CommandMenu(string Name, string Help, IReadOnlyList<CommandParameter> Parameters)
+{
+    public static CommandMenu Empty = new CommandMenu(string.Empty, string.Empty, []);
+}
 
 /// <summary>
 /// Das Menü aller registrierten Verben: <see cref="All"/> in der Reihenfolge von

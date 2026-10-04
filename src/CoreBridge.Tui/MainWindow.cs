@@ -16,7 +16,7 @@ public partial class MainWindow : Runnable
     static MainWindow()
     {
         // Die Verben aus den Attributen statt der Beispiel-Daten aus der View-Hälfte.
-        CommandMenuNames = CommandMenus.All.Select(menu => menu.Name).ToList();
+        CommandMenuNames = CommandMenus.All.ToList();
 
         // Die View-Hälfte meldet hierhin, sobald im DropDown ein Verb bestätigt wurde.
         CommandSelected = name =>
