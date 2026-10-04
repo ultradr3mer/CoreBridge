@@ -178,6 +178,9 @@ public sealed record WorkConfig
     /// <c>~/.corebridge/autostart</c>, die ein <c>.bashrc</c>-Haken ausführt.
     /// </summary>
     public string AgentLaunch { get; init; } = "exec";
+
+    /// <summary>Wie lange der Agent bei der Integration in der VM (<c>repo-receive</c>) Konflikte lösen darf.</summary>
+    public string IntegrateTimeout { get; init; } = "60m";
 }
 
 /// <summary>

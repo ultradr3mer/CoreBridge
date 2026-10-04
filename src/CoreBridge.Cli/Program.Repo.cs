@@ -109,30 +109,8 @@ public static partial class Program
     }
 
     var branch = SandboxRepo.TaskBranch(id);
-    var vmRefs = RequireVmSuccess(
-        $"refs of {name}",
-        await VmQuery(context, name, SandboxRepo.ListRefsCommand(repo, SandboxRepo.MainRef, SandboxRepo.TaskRef(id))));
-    var refs = SandboxRepo.ParseRefs(vmRefs.StdOut);
-    if (!refs.TryGetValue(SandboxRepo.TaskRef(id), out var taskCommit))
-    {
-      throw new ProgramExecutionException(1, $"VM `{name}` has no branch {branch} — list the ids with `cb repo-receive -n {name}`.");
-    }
-
     var tracking = SandboxRepo.TrackingRef(name, id);
-    if (await HostHasCommit(context, root, taskCommit))
-    {
-      // Schon einmal geholt (oder nichts Neues): kein Transfer nötig.
-      RequireGitSuccess($"update-ref {tracking}", await RunGit(context, root, "update-ref", tracking, taskCommit));
-      await events.Emit(events.Std($"{branch}: already on the host ({taskCommit[..7]})"));
-    }
-    else
-    {
-      // Nur bündeln, was über den main der VM hinausgeht — sofern der Host ihn kennt.
-      var vmMain = refs.GetValueOrDefault(SandboxRepo.MainRef);
-      var exclude = vmMain is not null && await HostHasCommit(context, root, vmMain) ? vmMain : null;
-      await TransferBundleFromVm(context, root, name, repo, id, exclude, tracking);
-    }
-
+    var taskCommit = await FetchTask(context, root, name, repo, id);
     if (await IsAncestor(context, root, tracking, SandboxRepo.MainRef))
     {
       await events.Emit(events.Std($"Nothing new — {branch} is already contained in main."));
@@ -140,13 +118,26 @@ public static partial class Program
     }
 
     // Nur Vorspulen: main muss Vorfahr des Task-Branches sein. Hat main seit dem Task-Start
-    // eigene Commits bekommen, wird nichts verändert — kein Merge-Commit, kein Konflikt.
+    // eigene Commits bekommen, wird auf dem Host nichts gemergt — das macht die VM.
     if (!await IsAncestor(context, root, SandboxRepo.MainRef, tracking))
     {
-      throw new ProgramExecutionException(
-          1,
-          $"main has commits that {branch} doesn't have — a fast-forward isn't possible, nothing was changed. "
-              + $"Rebase the task onto the current main in the VM (send it first with `cb repo-send -n {name}`), or merge by hand: `git merge {tracking}`.");
+      var behind = RequireGitSuccess("rev-list --count", await RunGit(context, root, "rev-list", "--count", $"{tracking}..main")).StdOut.Trim();
+      var agent = ChooseAgent(context, null, root);
+      await events.Emit(events.Std($"main has {behind} commit(s) that {branch} doesn't have — a fast-forward isn't possible."));
+      if (!options.Integrate && !await context.ConfirmAsync(
+              $"Integrate main into {branch} in `{name}` (send main, merge there, {agent} resolves conflicts, receive again)?"))
+      {
+        throw new ProgramExecutionException(
+            1,
+            $"Nothing was changed. Integrate in the VM with `cb repo-receive -n {name} -i {id} --integrate`, or merge by hand: `git merge {tracking}`.");
+      }
+
+      await IntegrateInVm(context, root, name, repo, id, agent);
+      taskCommit = await FetchTask(context, root, name, repo, id);
+      if (!await IsAncestor(context, root, SandboxRepo.MainRef, tracking))
+      {
+        throw new ProgramExecutionException(1, $"{branch} still doesn't contain main after the integration — nothing was changed on the host.");
+      }
     }
 
     var count = RequireGitSuccess("rev-list --count", await RunGit(context, root, "rev-list", "--count", $"main..{tracking}")).StdOut.Trim();
@@ -171,6 +162,113 @@ public static partial class Program
     }
 
     await events.Emit(events.Std($"main fast-forwarded to {taskCommit[..7]} ({commits} from {branch})."));
+  }
+
+  /// <summary>Holt <c>claude/&lt;id&gt;</c> nach <c>refs/remotes/&lt;vm&gt;/…</c> (ohne Transfer, wenn der Host den Commit schon hat); liefert dessen Commit.</summary>
+  private static async Task<string> FetchTask(CommandContext context, string root, string name, string repo, string id)
+  {
+    var events = context.Events;
+    var branch = SandboxRepo.TaskBranch(id);
+    var vmRefs = RequireVmSuccess(
+        $"refs of {name}",
+        await VmQuery(context, name, SandboxRepo.ListRefsCommand(repo, SandboxRepo.MainRef, SandboxRepo.TaskRef(id))));
+    var refs = SandboxRepo.ParseRefs(vmRefs.StdOut);
+    if (!refs.TryGetValue(SandboxRepo.TaskRef(id), out var taskCommit))
+    {
+      throw new ProgramExecutionException(1, $"VM `{name}` has no branch {branch} — list the ids with `cb repo-receive -n {name}`.");
+    }
+
+    var tracking = SandboxRepo.TrackingRef(name, id);
+    if (await HostHasCommit(context, root, taskCommit))
+    {
+      // Schon einmal geholt (oder nichts Neues): kein Transfer nötig.
+      RequireGitSuccess($"update-ref {tracking}", await RunGit(context, root, "update-ref", tracking, taskCommit));
+      await events.Emit(events.Std($"{branch}: already on the host ({taskCommit[..7]})"));
+    }
+    else
+    {
+      // Nur bündeln, was über den main der VM hinausgeht — sofern der Host ihn kennt.
+      var vmMain = refs.GetValueOrDefault(SandboxRepo.MainRef);
+      var exclude = vmMain is not null && await HostHasCommit(context, root, vmMain) ? vmMain : null;
+      await TransferBundleFromVm(context, root, name, repo, id, exclude, tracking);
+    }
+
+    return taskCommit;
+  }
+
+  /// <summary>
+  /// Vorwärtsintegration in der VM, ohne weiteres Zutun: main schicken, in der Arbeitskopie
+  /// <c>origin/main</c> in <c>claude/&lt;id&gt;</c> mergen; bei Konflikten löst der Agent (mit der
+  /// Sitzung des Tasks) und schreibt sein Urteil in eine Ergebnisdatei. Erst wenn Urteil und
+  /// git-Prüfung stimmen, geht der Branch ins Bare-Repo — sonst bleibt die VM zur Diagnose so stehen.
+  /// </summary>
+  private static async Task IntegrateInVm(CommandContext context, string root, string name, string repo, string id, string agent)
+  {
+    var events = context.Events;
+    var branch = SandboxRepo.TaskBranch(id);
+    var work = SandboxRepo.WorkDir(repo);
+    await Dispatch(context, new RepoSendOptions { Name = name, Repo = root, FromWork = true });
+
+    var dirty = RequireVmSuccess("status of the workspace", await VmQuery(context, name, SandboxRepo.DirtyCommand(repo)));
+    if (dirty.StdOut.Trim().Length > 0)
+    {
+      throw new ProgramExecutionException(
+          1,
+          $"The workspace {work} in `{name}` has uncommitted changes — commit or discard them there first (`cb vm-connect -n {name}`).");
+    }
+
+    await RunVmStep(context, name, $"checkout {branch}", SandboxRepo.CheckoutTaskCommand(repo, id));
+    var merge = await RunAnnounced(context, $"merge origin/main → {branch}", () => context.Vms.Exec(name, SandboxRepo.MergeMainCommand(repo), TransferTimeoutMs(context)));
+    if (merge.ExitCode == 0)
+    {
+      await events.Emit(events.Std("merged without conflicts."));
+    }
+    else
+    {
+      var conflicts = GitLines(RequireVmSuccess("conflicts", await VmQuery(context, name, SandboxRepo.ConflictsCommand(repo))).StdOut).ToArray();
+      if (conflicts.Length == 0)
+      {
+        throw new ProgramExecutionException(1, $"`git merge origin/main` in `{name}` failed: {FirstLine(merge.StdErr, merge.StdOut)}");
+      }
+
+      await events.Emit(events.Std($"conflicts in {conflicts.Length} file(s): {string.Join(", ", conflicts)}"));
+      await ResolveWithAgent(context, name, repo, id, agent, conflicts);
+    }
+
+    await RunVmStep(context, name, $"{branch} → {SandboxRepo.BareDir(repo)}", SandboxRepo.PushTaskCommand(repo, id));
+  }
+
+  /// <summary>Agent ohne Konsole lösen lassen; Erfolg nur mit „success“ in der Ergebnisdatei und sauberem, abgeschlossenem Merge.</summary>
+  private static async Task ResolveWithAgent(CommandContext context, string name, string repo, string id, string agent, IReadOnlyList<string> conflicts)
+  {
+    var events = context.Events;
+    var timeoutMs = (int)context.Config.Work.IntegrateTimeout.ReadTime().TotalMilliseconds;
+    var command = SandboxRepo.AgentIntegrateCommand(repo, agent, SandboxRepo.IntegrationPrompt(id, conflicts), id);
+    var run = await RunAnnounced(context, $"{agent} resolves the conflicts in `{name}`", () => context.Vms.Exec(name, command, timeoutMs));
+    foreach (var line in GitLines(run.StdOut).TakeLast(20))
+    {
+      await events.Emit(events.Std("  " + line));
+    }
+
+    var verdict = GitLines((await VmQuery(context, name, $"cat {Shell.Quote(SandboxRepo.IntegrationResultFile(id))}")).StdOut).ToArray();
+    var problem =
+        run.ExitCode != 0 ? $"{agent} ended with exit {run.ExitCode}: {FirstLine(run.StdErr, run.StdOut)}"
+        : verdict.Length == 0 ? $"{agent} left no result in {SandboxRepo.IntegrationResultFile(id)}"
+        : verdict[0].Trim() != "success" ? $"{agent} reports: {string.Join(" — ", verdict)}"
+        : (await VmQuery(context, name, SandboxRepo.MergeOpenCommand(repo))).ExitCode == 0 ? "the merge is still open"
+        : RequireVmSuccess("status of the workspace", await VmQuery(context, name, SandboxRepo.DirtyCommand(repo))).StdOut.Trim().Length > 0 ? "the workspace has uncommitted changes"
+        : (await VmQuery(context, name, SandboxRepo.ContainsMainCommand(repo))).ExitCode != 0 ? "the task branch doesn't contain main"
+        : (await VmQuery(context, name, SandboxRepo.ConflictMarkersCommand(repo, conflicts))).ExitCode == 0 ? "conflict markers are still committed"
+        : null;
+    if (problem is not null)
+    {
+      throw new ProgramExecutionException(
+          1,
+          $"Integration in `{name}` failed: {problem}. Nothing was pushed and nothing changed on the host; the VM is left as it is — "
+              + $"look with `cb vm-connect -n {name}` in {SandboxRepo.WorkDir(repo)} (`git merge --abort` discards the attempt).");
+    }
+
+    await events.Emit(events.Std($"{agent}: {string.Join(" — ", verdict.Skip(1).DefaultIfEmpty("success"))}"));
   }
 
   /// <summary>Bundle von <c>claude/&lt;id&gt;</c> in der VM packen, per transfer holen und nach <paramref name="tracking"/> einlesen; temporäre Dateien werden auf beiden Seiten entfernt.</summary>
@@ -307,6 +405,13 @@ public static partial class Program
   {
     var result = await RunReported(context, label, () => context.Vms.Exec(name, command, TransferTimeoutMs(context)));
     await context.Events.Emit(context.Events.Std($"{label}: OK ({result.DurationMs / 1000.0:F1} s)"));
+  }
+
+  /// <summary>Wie <see cref="RunReported"/>, aber ohne Ausgabe und ohne Fehler bei Exit ≠ 0 — der Aufrufer wertet aus.</summary>
+  private static async Task<MultipassRunResult> RunAnnounced(CommandContext context, string label, Func<MultipassRunResult> action)
+  {
+    await context.Events.Emit(context.Events.Std($"{label} ..."));
+    return await WithProgress(context, action);
   }
 
   /// <summary>Kurze Abfrage in der VM ohne Ausgabe; der Aufrufer wertet Exit-Code und stdout aus.</summary>

@@ -241,7 +241,7 @@ internal sealed class SimShell
             foreach (var redirect in command.Redirects.Where(r => r.Op == "<"))
             {
                 var path = string.Join(' ', Expand(redirect.Target));
-                var content = ReadFile(Resolve(path));
+                var content = path == "/dev/null" ? string.Empty : ReadFile(Resolve(path));
                 if (content is null)
                 {
                     _err.Append($"sh: 1: cannot open {path}: No such file\n");
@@ -477,7 +477,7 @@ internal sealed class SimShell
         if (program is "claude" or "opencode" && Agents.Contains(program) && ComponentInstalled(program)
             && !args.Any(a => a is "--version" or "-v"))
         {
-            return Agent(program);
+            return Agent(program, args);
         }
 
         if (Versions.TryGetValue(program, out var version))
@@ -575,6 +575,13 @@ internal sealed class SimShell
         start.Environment["HOME"] = home;
         start.Environment["GIT_CONFIG_NOSYSTEM"] = "1";
         start.Environment["GIT_TERMINAL_PROMPT"] = "0";
+        // Die Disks liegen tief im Store; unter Windows sprengen git-Objekte sonst MAX_PATH. Über
+        // die globale Config, weil git GIT_CONFIG_* für lokale Pushes (receive-pack) verwirft.
+        var gitConfig = Path.Combine(home, ".gitconfig");
+        if (!File.Exists(gitConfig))
+        {
+            File.WriteAllText(gitConfig, "[core]\n\tlongpaths = true\n");
+        }
         using var process = System.Diagnostics.Process.Start(start)
             ?? throw new InvalidOperationException("git ließ sich nicht starten (Simulator braucht git auf dem Host).");
         process.StandardInput.Write(stdin);
@@ -591,10 +598,18 @@ internal sealed class SimShell
     /// <summary>
     /// Stellvertreter für einen Agenten: meldet sich mit Arbeitsverzeichnis und legt — in
     /// einer git-Arbeitskopie — einen Commit an, so wie Claude seine Arbeit hinterlässt.
+    /// Steht ein Merge offen (Integration aus <c>repo-receive</c>), löst er stattdessen die
+    /// Konflikte (beide Seiten behalten), schließt den Merge ab und schreibt das Urteil in
+    /// die Ergebnisdatei, die der Auftrag nennt.
     /// </summary>
-    private (int, string, string) Agent(string program)
+    private (int, string, string) Agent(string program, List<string> args)
     {
         var output = new StringBuilder($"[simulation] {program} (Stellvertreter) in {_cwd}\n");
+        if (HostPath(_cwd) is { } open && File.Exists(Path.Combine(open, ".git", "MERGE_HEAD")))
+        {
+            return ResolveMerge(open, args, output);
+        }
+
         if (HostPath(_cwd) is { } work && Directory.Exists(Path.Combine(work, ".git")))
         {
             File.AppendAllText(Path.Combine(work, "corebridge-agent.txt"), $"{program}: Arbeit vom {DateTime.UtcNow:O}\n");
@@ -610,6 +625,27 @@ internal sealed class SimShell
         }
 
         return (0, output.ToString(), string.Empty);
+    }
+
+    private (int, string, string) ResolveMerge(string work, List<string> args, StringBuilder output)
+    {
+        var (_, unmerged, _) = Git(["diff", "--name-only", "--diff-filter=U"], string.Empty);
+        foreach (var file in unmerged.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            var path = Path.Combine(work, file);
+            var kept = File.ReadAllLines(path).Where(line => !Regex.IsMatch(line, "^(<<<<<<<|=======|>>>>>>>)( |$)"));
+            File.WriteAllText(path, string.Join('\n', kept) + "\n");
+            Git(["add", file], string.Empty);
+            output.Append($"[simulation] Konflikt gelöst: {file}\n");
+        }
+
+        var (code, _, err) = Git(["commit", "-q", "--no-edit"], string.Empty);
+        if (Regex.Match(string.Join(' ', args), @"/home/ubuntu/\.corebridge/integrate-[A-Za-z0-9._-]+\.result") is { Success: true } result)
+        {
+            WriteFile(result.Value, code == 0 ? "success\nbeide Seiten behalten\n" : "failure\ncommit fehlgeschlagen\n", append: false);
+        }
+
+        return (code, output.ToString(), err);
     }
 
     /// <summary><c>sudo</c>/<c>env</c> lassen Zuweisungen vor dem Befehl zu (<c>sudo DEBIAN_FRONTEND=… apt-get</c>).</summary>

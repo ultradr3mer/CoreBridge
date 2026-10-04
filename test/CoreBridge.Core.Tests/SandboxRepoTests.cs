@@ -57,6 +57,24 @@ public class SandboxRepoTests
     }
 
     [Fact]
+    public void IntegrationsKommandos()
+    {
+        Assert.Equal(
+            "git -C /home/ubuntu/work/CoreBridge fetch -q origin && git -C /home/ubuntu/work/CoreBridge checkout -q claude/t1 && git -C /home/ubuntu/work/CoreBridge merge -q --ff-only origin/claude/t1",
+            SandboxRepo.CheckoutTaskCommand("CoreBridge", "t1"));
+        Assert.Equal("/home/ubuntu/.claude/projects/-home-ubuntu-work-Core-Bridge", SandboxRepo.ClaudeProjectDir("Core.Bridge"));
+
+        var prompt = SandboxRepo.IntegrationPrompt("t1", ["a.txt", "b.cs"]);
+        Assert.Contains("conflicts in: a.txt, b.cs", prompt);
+        Assert.Contains("/home/ubuntu/.corebridge/integrate-t1.result", prompt);
+
+        var claude = SandboxRepo.AgentIntegrateCommand("CoreBridge", "claude", "it's", "t1");
+        Assert.StartsWith("mkdir -p /home/ubuntu/.corebridge && rm -f /home/ubuntu/.corebridge/integrate-t1.result && cd /home/ubuntu/work/CoreBridge && ", claude);
+        Assert.Contains("then claude --dangerously-skip-permissions --continue -p 'it'\\''s' < /dev/null; else claude --dangerously-skip-permissions -p 'it'\\''s' < /dev/null; fi", claude);
+        Assert.EndsWith("opencode run --continue x < /dev/null", SandboxRepo.AgentIntegrateCommand("CoreBridge", "opencode", "x", "t1"));
+    }
+
+    [Fact]
     public void RefsWerdenGeparst()
     {
         var refs = SandboxRepo.ParseRefs("aaa refs/heads/main\r\nbbb refs/heads/claude/t1\n\n");

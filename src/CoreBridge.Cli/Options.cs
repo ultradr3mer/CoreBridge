@@ -407,4 +407,6 @@ public sealed class RepoReceiveOptions : MultipassOptions
     [Option('y', "yes", HelpText = "Ohne Rückfrage vorspulen (ausdrückliche Zustimmung).")]
     public bool Yes { get; set; }
 
+    [Option("integrate", HelpText = "Hat main neue Commits, ohne Rückfrage in der VM integrieren: main schicken, dort mergen, Konflikte löst der Agent, dann holen.")]
+    public bool Integrate { get; set; }
 }

@@ -107,6 +107,29 @@ What happens:
 
 When there's no interactive console, the answer is *no*, so a script must pass `--yes` to merge.
 
+### When `main` has moved on: integration in the VM
+
+If your host `main` got commits after the task started, a fast-forward isn't possible. `repo-receive` then asks:
+
+```
+Integrate main into claude/my-task in `claude-vm1` (send main, merge there, claude resolves conflicts, receive again)?
+```
+
+On *yes* (or with `--integrate`) it runs the whole round trip with no further input from you:
+
+1. It sends the current `main` to the VM, as `repo-send` does.
+2. In `~/work/<repo>` it checks out `claude/my-task` and runs `git merge origin/main`. The workspace must be clean.
+3. **No conflicts:** the merge commit is made right away and no agent is started.
+4. **Conflicts:** the agent runs in the VM without a console (`claude -p`, with `--continue` when the task's Claude session is there, so it knows the task). It resolves the conflicts, builds and tests if the repository says how, finishes the merge and writes its verdict to `~/.corebridge/integrate-my-task.result` (first line `success` or `failure`, then the reason). It may run for up to `Work:IntegrateTimeout` (default `60m`).
+5. CoreBridge checks the result itself: the verdict is `success`, the merge is closed, the workspace is clean, the branch contains `main`, and no conflict markers are left. Only then does it push the branch to the bare repo.
+6. It fetches the branch again and continues as usual: log, diffstat, then the question before `main` is fast-forwarded.
+
+If any step fails, nothing is pushed and nothing changes on the host. The VM is left as it is for you to look at (`cb vm-connect -n claude-vm1`; `git merge --abort` in `~/work/<repo>` discards the attempt).
+
+On *no*, or without a console, nothing changes and it exits with code 1.
+
+The integration merges rather than rebases, like GitHub's "Update branch": the task's commits keep their ids and no force-push is needed. The agent runs with `--dangerously-skip-permissions`; that is acceptable only because it runs inside the VM.
+
 ## When `repo-receive` refuses
 
 | Message | What to do |
@@ -115,7 +138,9 @@ When there's no interactive console, the answer is *no*, so a script must pass `
 | `… has uncommitted changes` | Commit or stash them first. |
 | `VM … has no repository … yet` | Run `cb repo-send -n <vm>` first. |
 | `VM … has no branch claude/<id>` | The branch wasn't pushed to `origin` in the VM, or the id is wrong. List the ids with `cb repo-receive -n <vm>`. |
-| `main has commits that claude/<id> doesn't have` | Nothing was changed. Either merge by hand (`git merge <vm>/claude/<id>`), or send `main` again (`cb repo-send`) and rebase the task in the VM (`git fetch origin && git rebase origin/main`), push it with `git push --force-with-lease origin claude/<id>`, and receive again. |
+| `Nothing was changed. Integrate in the VM with … --integrate` | You declined the integration, or there was no console. Run it again with `--integrate`, or merge by hand (`git merge <vm>/claude/<id>`). |
+| `Integration in … failed: …` | The reason follows in the message. Nothing was pushed or changed on the host; look in the VM and fix or abort the merge there. |
+| `The workspace … has uncommitted changes` | The VM's working copy must be clean before the integration. Commit or discard the changes there. |
 | `Nothing new — … is already contained in main` | The branch was already received. |
 
 ## Example

@@ -119,6 +119,8 @@ public sealed class InventoryCliTests : IDisposable
     internal static void Git(string directory, params string[] args)
     {
         var start = new ProcessStartInfo("git") { WorkingDirectory = directory, RedirectStandardError = true, RedirectStandardOutput = true };
+        start.ArgumentList.Add("-c");
+        start.ArgumentList.Add("core.longpaths=true");
         foreach (var arg in args)
         {
             start.ArgumentList.Add(arg);

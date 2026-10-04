@@ -129,6 +129,76 @@ public static partial class SandboxRepo
     public static string PushTaskCommand(string repo, string id) =>
         $"git -C {Shell.Quote(WorkDir(repo))} push -q origin {TaskBranch(id)}:{TaskRef(id)}";
 
+    /// <summary>
+    /// Vor der Integration: <c>claude/&lt;id&gt;</c> in der Arbeitskopie auschecken (ohne lokalen
+    /// Branch aus <c>origin</c> angelegt) und auf den Stand des Bare-Repos bringen.
+    /// </summary>
+    public static string CheckoutTaskCommand(string repo, string id)
+    {
+        var work = Shell.Quote(WorkDir(repo));
+        return $"git -C {work} fetch -q origin && git -C {work} checkout -q {TaskBranch(id)} && git -C {work} merge -q --ff-only origin/{TaskBranch(id)}";
+    }
+
+    /// <summary>Holt das frische <c>main</c> in den Task-Branch; Exit ≠ 0 bei Konflikten (der Merge bleibt dann offen).</summary>
+    public static string MergeMainCommand(string repo) =>
+        $"git -C {Shell.Quote(WorkDir(repo))} merge -q --no-edit origin/main";
+
+    /// <summary>Dateien mit offenen Konflikten, eine je Zeile.</summary>
+    public static string ConflictsCommand(string repo) =>
+        $"git -C {Shell.Quote(WorkDir(repo))} diff --name-only --diff-filter=U";
+
+    /// <summary>Exit 0, solange ein Merge offen ist.</summary>
+    public static string MergeOpenCommand(string repo) =>
+        $"git -C {Shell.Quote(WorkDir(repo))} rev-parse -q --verify MERGE_HEAD";
+
+    /// <summary>Exit 0, wenn <c>origin/main</c> im ausgecheckten Task-Branch enthalten ist.</summary>
+    public static string ContainsMainCommand(string repo) =>
+        $"git -C {Shell.Quote(WorkDir(repo))} merge-base --is-ancestor origin/main HEAD";
+
+    /// <summary>Exit 0, wenn in <paramref name="files"/> noch Konfliktmarker stehen.</summary>
+    public static string ConflictMarkersCommand(string repo, IEnumerable<string> files) =>
+        $"git -C {Shell.Quote(WorkDir(repo))} grep -q -E '^(<<<<<<<|>>>>>>>)( |$)' HEAD -- "
+        + string.Join(' ', files.Select(Shell.Quote));
+
+    /// <summary>Urteil des Agenten nach der Integration: erste Zeile <c>success</c> oder <c>failure</c>, danach der Grund.</summary>
+    public static string IntegrationResultFile(string id) => $"/home/{User}/.corebridge/integrate-{id}.result";
+
+    /// <summary>Auftrag an den Agenten, einen offenen Merge von <c>origin/main</c> aufzulösen.</summary>
+    public static string IntegrationPrompt(string id, IReadOnlyList<string> conflicts)
+    {
+        return $"CoreBridge forward integration of task branch {TaskBranch(id)}. "
+            + $"`git merge origin/main` stopped with conflicts in: {string.Join(", ", conflicts)}. "
+            + "Resolve them so that both the task's changes and the changes from main are kept. "
+            + "If the repository describes how to build and run its fast tests (e.g. CLAUDE.md), do that and fix what the merge broke. "
+            + "Do not commit environment workarounds (SDK version pins, NuGet sources, local paths). "
+            + "Finish the merge with `git commit --no-edit`. Do not push and do not change main. "
+            + $"Finally write the result to {IntegrationResultFile(id)}: first line `success` or `failure`, second line the reason.";
+    }
+
+    /// <summary>
+    /// Startet den Agenten ohne Konsole in der Arbeitskopie. Gibt es dort schon eine
+    /// Claude-Sitzung (die des Tasks), wird sie fortgesetzt — sie kennt die Arbeit am besten.
+    /// </summary>
+    public static string AgentIntegrateCommand(string repo, string agent, string prompt, string id)
+    {
+        var result = Shell.Quote(IntegrationResultFile(id));
+        var prepare = $"mkdir -p /home/{User}/.corebridge && rm -f {result} && cd {Shell.Quote(WorkDir(repo))} && ";
+        var quoted = Shell.Quote(prompt);
+        if (agent == "opencode")
+        {
+            return prepare + $"opencode run --continue {quoted} < /dev/null";
+        }
+
+        var sessions = Shell.Quote(ClaudeProjectDir(repo));
+        const string Run = "claude --dangerously-skip-permissions";
+        return prepare
+            + $"if [ -n \"$(ls {sessions} 2>/dev/null)\" ]; then {Run} --continue -p {quoted} < /dev/null; else {Run} -p {quoted} < /dev/null; fi";
+    }
+
+    /// <summary>Wo Claude Code die Sitzungen der Arbeitskopie ablegt (Pfad mit <c>-</c> statt Sonderzeichen).</summary>
+    public static string ClaudeProjectDir(string repo) =>
+        $"/home/{User}/.claude/projects/{Regex.Replace(WorkDir(repo), "[^A-Za-z0-9]", "-")}";
+
     /// <summary>Datei, die der <c>.bashrc</c>-Haken beim nächsten <c>multipass shell</c> einmal ausführt.</summary>
     public const string AutostartFile = $"/home/{User}/.corebridge/autostart";
 
