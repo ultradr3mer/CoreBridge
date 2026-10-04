@@ -171,6 +171,13 @@ public sealed class SettingsVerifyOptions : IOptions
     public IEnumerable<string> Files { get; set; } = [];
 }
 
+[Verb("sign", HelpText = "Signiert Dateien mit dem eigenen Schlüssel (Signing:KeyFile oder Signing:GpgKey) als <datei>.clearsigned.asc — etwa eine eigene cloud-init für vm-create --cloud-init oder ein Profil von vorher.")]
+public sealed class SignOptions : IOptions
+{
+    [Option('f', "file", Required = true, Separator = ',', HelpText = "Zu signierende Dateien (kommagetrennt).")]
+    public IEnumerable<string> Files { get; set; } = [];
+}
+
 [Verb("component-bundle", HelpText = "Schreibt eine Komponente als Bundle: eine JSON-Datei mit Definition und Skript inline, bereit zum Signieren (CoreBridge.Signer --clearsign) und für component-add --bundle.")]
 public sealed class ComponentBundleOptions : IOptions
 {
@@ -336,7 +343,7 @@ public sealed class VmInventoryOptions : MultipassOptions
     [Option('n', "name", HelpText = "Nur diese VM.")]
     public string? Name { get; set; }
 
-    [Option("refresh", HelpText = "Abgleichen: Ressourcen per multipass get, Komponenten laufender VMs aus ihren Markern, Snapshots aus ihren Kommentaren.")]
+    [Option("refresh", HelpText = "Abgleichen: Ressourcen per multipass get, Komponenten laufender VMs aus ihren Markern (reine Snap-Komponenten per snap list), Snapshots aus ihren Kommentaren.")]
     public bool Refresh { get; set; }
 }
 

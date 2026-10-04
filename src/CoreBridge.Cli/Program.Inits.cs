@@ -37,6 +37,22 @@ public static partial class Program
     await events.Emit(events.Std(result.CloudInitPath is null
         ? "  cloud-init: nicht nötig (keine Gast-Provisionierung)."
         : $"  cloud-init: {result.CloudInitPath}"));
+
+    // Die Profilsignatur bürgt für die eingebetteten Skripte — nur, wenn jede Komponente selbst vertraut ist.
+    var untrusted = components
+        .Select(name => name.Trim())
+        .Where(name => context.Catalog.OriginOf(name) is not { } origin || !IsTrusted(origin.Signature))
+        .ToList();
+    if (untrusted.Count > 0)
+    {
+      await events.Emit(events.Err(
+          $"Profil-Signatur: unsigniert — nicht vertrauenswürdig signiert: {string.Join(", ", untrusted)}. Erst die Komponenten signieren, dann init-configure -f."));
+    }
+    else
+    {
+      await SignWithUserKey(context, "Profil-Signatur", ProfileFiles(result.Name));
+    }
+
     await events.Emit(events.Std(string.Empty));
     await events.Emit(events.Std($"VM anlegen: cb vm-create -n <vm> --profile {result.Name}"));
   }
@@ -128,7 +144,7 @@ public static partial class Program
     Directory.CreateDirectory(Path.GetDirectoryName(output)!);
     await File.WriteAllTextAsync(output, InitComponentStore.Bundle(entry.Name, entry.Component), context.CancellationToken);
     await context.Events.Emit(context.Events.Std($"Bundle geschrieben: {output}"));
-    await context.Events.Emit(context.Events.Std($"Signieren: CoreBridge.Signer --key <secret.asc> --clearsign {output}"));
+    await context.Events.Emit(context.Events.Std($"Signieren: cb component-add --bundle {output} signiert mit dem eigenen Schlüssel (oder cb sign -f {output})."));
     await context.Events.Emit(context.Events.Std($"Übernehmen: cb component-add --bundle {output}"));
   }
 
@@ -153,16 +169,9 @@ public static partial class Program
       _ => throw new ProgramExecutionException(1, "Genau eine Definition angeben: --json, --yaml (Dateipfad oder Text) oder --bundle.")
     };
 
-    if (context.Catalog.OriginOf(options.Name) is { } existing
-        && !string.Equals(Path.GetFullPath(existing.File), Path.GetFullPath(InitStore.UserSettingsFile), StringComparison.OrdinalIgnoreCase))
-    {
-      throw new ProgramExecutionException(1, $"Komponente '{options.Name}' gibt es schon ({existing.File}) — anderen Namen wählen.");
-    }
-
     var component = InitComponentStore.ParseArgument(value, format);
-    var userFile = InitStore.UserSettingsFile;
     var replace = options.Force;
-    if (!replace && InitComponentStore.ReadUser(userFile).ContainsKey(options.Name))
+    if (!replace && context.Catalog.OriginOf(options.Name) is { Source: ComponentSource.User })
     {
       if (!await context.ConfirmAsync($"Komponente '{options.Name}' existiert bereits — ersetzen?"))
       {
@@ -172,9 +181,10 @@ public static partial class Program
       replace = true;
     }
 
-    var saved = InitComponentStore.Add(context.Config.Inits, userFile, options.Name, component, replace);
-    await events.Emit(events.Std($"Komponente '{options.Name}' gespeichert: {userFile}"));
+    var (saved, file) = InitComponentStore.AddAsBundle(context.Catalog, InitStore.Root, InitStore.UserSettingsFile, options.Name, component, replace);
+    await events.Emit(events.Std($"Komponente '{options.Name}' gespeichert: {file} (Skript inline)"));
     await events.Emit(events.Std(InitComponentStore.ToJson(saved)));
+    await SignWithUserKey(context, "Signatur", [file]);
     await events.Emit(events.Std(string.Empty));
     await events.Emit(events.Std($"Verwenden: cb init-configure -n <profil> -c {options.Name} oder cb vm-install -n <vm> -c {options.Name}"));
     if (replace)
@@ -208,7 +218,15 @@ public static partial class Program
     var (added, _, file) = InitComponentStore.AddBundle(context.Catalog, InitStore.Root, bundle, replace);
     var signature = ComponentSignature.From(SettingsSignatures.VerifyFile(file, ComponentTrustBundle(), DateTime.UtcNow));
     await events.Emit(events.Std($"Komponente '{added}' übernommen: {file}"));
-    await events.Emit(events.Std($"  Signatur: {signature.Describe()}"));
+    if (signature.Trust == ComponentTrust.Unsigned && FileSigning.Create(context.Config.Signing) is not null)
+    {
+      // Wer ein unsigniertes Bundle aufnimmt, bürgt dafür; eine fremde Signatur bleibt, wie sie ist.
+      signature = await SignWithUserKey(context, "  Signatur", [file]) ?? signature;
+    }
+    else
+    {
+      await events.Emit(events.Std($"  Signatur: {signature.Describe()}"));
+    }
     if (signature.Trust == ComponentTrust.Invalid)
     {
       InitComponentStore.RemoveBundle(file);

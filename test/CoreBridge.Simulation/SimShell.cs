@@ -33,6 +33,9 @@ internal sealed class SimShell
 
     private const string MarkerDirectory = "/var/lib/corebridge";
 
+    /// <summary>Installierte Snaps, einer je Zeile — reist als Datei mit Klonen und Snapshots.</summary>
+    internal const string SnapsFile = "/var/lib/snapd/corebridge-sim-snaps";
+
     /// <summary>Erstes Wort eines geparsten <c>if</c>: danach Bedingung, then- und else-Teil als Skripte.</summary>
     private const string IfMarker = "\u0001if";
 
@@ -532,7 +535,9 @@ internal sealed class SimShell
                 return Copy(program, args);
             case "cloud-init" when args.FirstOrDefault() == "status":
                 return (0, "status: done\n", string.Empty);
-            case "sleep" or "apt-get" or "apt" or "snap" or "systemctl":
+            case "snap":
+                return Snap(args);
+            case "sleep" or "apt-get" or "apt" or "systemctl":
                 return (0, string.Empty, string.Empty);
         }
 
@@ -625,6 +630,29 @@ internal sealed class SimShell
         }
 
         return (0, output.ToString(), string.Empty);
+    }
+
+    /// <summary><c>snap install</c> merkt sich die Namen, <c>snap list [name]</c> zeigt sie wie snapd; alles andere gelingt still.</summary>
+    private (int, string, string) Snap(List<string> args)
+    {
+        var installed = (ReadFile(SnapsFile) ?? string.Empty).Split('\n', StringSplitOptions.RemoveEmptyEntries).ToList();
+        var names = args.Skip(1).Where(a => !a.StartsWith('-')).ToList();
+        switch (args.FirstOrDefault())
+        {
+            case "install":
+                WriteFile(SnapsFile, string.Concat(installed.Union(names).Select(name => name + "\n")), append: false);
+                return (0, string.Concat(names.Select(name => $"{name} 1.0 from Simulation installed\n")), string.Empty);
+            case "list":
+                var shown = names.Count == 0 ? installed : installed.Intersect(names).ToList();
+                if (shown.Count == 0)
+                {
+                    return (1, string.Empty, names.Count == 0 ? "No snaps are installed yet.\n" : "error: no matching snaps installed\n");
+                }
+
+                return (0, "Name  Version  Rev  Tracking       Publisher   Notes\n" + string.Concat(shown.Select(name => $"{name}  1.0  1  latest/stable  simulation  -\n")), string.Empty);
+            default:
+                return (0, string.Empty, string.Empty);
+        }
     }
 
     private (int, string, string) ResolveMerge(string work, List<string> args, StringBuilder output)

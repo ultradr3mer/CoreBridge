@@ -440,6 +440,7 @@ public sealed class SimulatedMultipassCli : IMultipassCli, IMultipassDouble
         }
 
         var components = new List<string>();
+        var snaps = new List<string>();
         var cloudInit = Value(args, "--cloud-init");
         if (cloudInit is not null)
         {
@@ -449,6 +450,9 @@ public sealed class SimulatedMultipassCli : IMultipassCli, IMultipassDouble
             }
 
             components.AddRange(Regex.Matches(File.ReadAllText(cloudInit), @"corebridge-install-([A-Za-z0-9_-]+)")
+                .Select(m => m.Groups[1].Value)
+                .Distinct(StringComparer.Ordinal));
+            snaps.AddRange(Regex.Matches(File.ReadAllText(cloudInit), @"\[snap, install, ""?([A-Za-z0-9._-]+)""?")
                 .Select(m => m.Groups[1].Value)
                 .Distinct(StringComparer.Ordinal));
         }
@@ -463,7 +467,10 @@ public sealed class SimulatedMultipassCli : IMultipassCli, IMultipassDouble
             Cpus = Value(args, "--cpus", "-c") is { } cpus && int.TryParse(cpus, out var cpuCount) ? cpuCount : 1,
             Memory = Value(args, "--memory", "-m") is { } memory && MultipassSize.TryParse(memory, out var memoryBytes) ? FormatSize(memoryBytes) : DefaultMemory,
             Components = components,
-            Markers = components.ToList()
+            Markers = components.ToList(),
+            Files = snaps.Count == 0
+                ? new(StringComparer.Ordinal)
+                : new(StringComparer.Ordinal) { [SimShell.SnapsFile] = string.Concat(snaps.Select(snap => snap + "\n")) }
         });
         return Ok($"Launched: {name}\n");
     }

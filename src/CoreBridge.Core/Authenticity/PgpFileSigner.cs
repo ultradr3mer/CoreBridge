@@ -1,7 +1,7 @@
 using Org.BouncyCastle.Bcpg;
 using Org.BouncyCastle.Bcpg.OpenPgp;
 
-namespace CoreBridge.Signer;
+namespace CoreBridge.Core.Authenticity;
 
 /// <summary>Entsperrter Signierschlüssel samt öffentlichem Teil (für den Issuer-Fingerprint).</summary>
 public sealed record SigningKey(PgpPrivateKey PrivateKey, PgpPublicKey PublicKey)

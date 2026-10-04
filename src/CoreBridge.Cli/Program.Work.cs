@@ -26,7 +26,9 @@ public static partial class Program
     UpdateInventory(inventory => inventory.Repos[root] = vm);
 
     await EnsureRunning(context, vm, ask: false);
-    await EnsureComponents(context, vm, ["git", agent]);
+    // Auch die gemerkte VM: das Repo kann seit dem letzten Mal mehr brauchen.
+    var required = RepoRequirements.Detect(root, context.Config.Inits).Select(r => r.Component);
+    await EnsureComponents(context, vm, ["git", agent, .. required]);
 
     await Dispatch(context, new RepoSendOptions { Name = vm, Repo = root, FromWork = true });
 
@@ -124,21 +126,16 @@ public static partial class Program
     return plan.Vm;
   }
 
-  /// <summary>Installiert, was der VM für <c>work</c> fehlt (git, Agent) — laut Marker im Gast.</summary>
+  /// <summary>Installiert, was der VM für <c>work</c> fehlt (git, Agent, was das Repo braucht) — laut Marker und Snaps im Gast.</summary>
   private static async Task EnsureComponents(CommandContext context, string vm, IReadOnlyList<string> components)
   {
-    var missing = new List<string>();
-    foreach (var component in components.Distinct(StringComparer.OrdinalIgnoreCase))
-    {
-      var probe = await Task.Run(
-          () => context.Vms.Exec(vm, Core.Inits.InitInstall.MarkerProbe(Core.Inits.InitInstall.MarkerPath(component)), context.DefaultTimeoutMs),
-          context.CancellationToken);
-      var hasScript = context.Config.Inits.Components.GetValueOrDefault(component)?.HasScript ?? false;
-      if (probe.ExitCode != 0 && hasScript)
-      {
-        missing.Add(component);
-      }
-    }
+    var installed = (await InstalledComponents(context, vm) ?? []).ToHashSet(StringComparer.OrdinalIgnoreCase);
+    var missing = components
+        .Distinct(StringComparer.OrdinalIgnoreCase)
+        .Where(component => context.Config.Inits.Components.GetValueOrDefault(component) is { } config
+            && (config.HasScript || !string.IsNullOrWhiteSpace(config.Snap))
+            && !installed.Contains(component))
+        .ToList();
 
     if (missing.Count > 0)
     {

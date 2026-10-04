@@ -10,18 +10,48 @@ public static partial class Program
   /// Zeigt bei jeder Verwendung, wer die Komponenten signiert hat. Ungültig (Inhalt nach dem
   /// Signieren geändert, Signatur kaputt) bricht mit Exit 3 ab; unsigniert oder unbekannter
   /// Schlüssel lädt, aber mit einem gerahmten Warnblock auf stderr (an der Konsole rot).
+  /// <paramref name="fromProfile"/>: Komponenten eines bestehenden Profils, die der Katalog nicht
+  /// mehr kennt, brechen mit Exit 1 ab (sonst lehnt der Aufrufer unbekannte Namen ohnehin ab) —
+  /// außer das Profil ist vertrauenswürdig signiert (<paramref name="profileSigned"/>): dann bürgt
+  /// die Profilsignatur für die gerenderte cloud-init, und der heutige Stand der Komponenten ist
+  /// nur noch Auskunft.
   /// </summary>
-  private static async Task ReportComponentTrust(CommandContext context, IEnumerable<string> components)
+  private static async Task ReportComponentTrust(CommandContext context, IEnumerable<string> components, bool fromProfile = false, bool profileSigned = false)
   {
     var events = context.Events;
-    var origins = components
+    var all = components
         .Select(name => name.Trim())
         .Where(name => name.Length > 0)
         .Distinct(StringComparer.OrdinalIgnoreCase)
         .Select(name => (Name: name, Origin: context.Catalog.OriginOf(name)))
+        .ToList();
+    var origins = all
         .Where(entry => entry.Origin is not null)
         .Select(entry => (entry.Name, Origin: entry.Origin!))
         .ToList();
+
+    // Ein Profil behält seine gerenderte cloud-init, auch wenn die Komponente inzwischen aus
+    // dem Katalog verschwunden ist — ihr eingebettetes Skript liefe ohne prüfbare Herkunft.
+    var orphaned = all.Where(entry => entry.Origin is null).Select(entry => entry.Name).ToList();
+    if (fromProfile && profileSigned)
+    {
+      foreach (var (name, origin) in all)
+      {
+        await events.Emit(events.Std($"  Komponente {name}: {origin?.Signature.Describe() ?? "nicht mehr im Katalog"} (gedeckt durch die Profilsignatur)"));
+      }
+
+      return;
+    }
+
+    if (fromProfile && orphaned.Count > 0)
+    {
+      throw new ProgramExecutionException(
+          1,
+          $"Das Profil enthält Komponenten, die es nicht mehr gibt: {string.Join(", ", orphaned)} — und es ist nicht vertrauenswürdig signiert, "
+              + "ihr Skript steckt aber noch in seiner cloud-init. Nichts wurde angelegt. "
+              + "Profil neu erzeugen (cb init-configure -n <profil> -c … -f, mit eigenem Schlüssel) oder die Komponente wieder hinzufügen.");
+    }
+
     foreach (var (name, origin) in origins)
     {
       await events.Emit(events.Std($"  Komponente {name}: {origin.Signature.Describe()}"));
@@ -60,7 +90,7 @@ public static partial class Program
     }
 
     yield return "║ Prüfen: cb component-list / cb settings-verify. Vertrauen: cb key-trust -f <öffentlicher Schlüssel>.";
-    yield return "║ Signieren: CoreBridge.Signer --key <secret.asc> --clearsign <datei> (Bundles: cb component-bundle).";
+    yield return "║ Signieren: cb sign -f <datei> mit eigenem Schlüssel (Signing:KeyFile oder Signing:GpgKey; Bundles: cb component-bundle).";
     yield return "╚" + Rule;
   }
 

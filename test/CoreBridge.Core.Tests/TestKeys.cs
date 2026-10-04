@@ -1,6 +1,5 @@
 using System.Text;
 using CoreBridge.Core.Authenticity;
-using CoreBridge.Signer;
 using Org.BouncyCastle.Bcpg;
 using Org.BouncyCastle.Bcpg.OpenPgp;
 using Org.BouncyCastle.Crypto.Generators;

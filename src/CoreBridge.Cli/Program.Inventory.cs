@@ -15,6 +15,31 @@ public static partial class Program
 
   private static void UpdateInventory(Action<VmInventory> change) => VmInventory.Update(InventoryPath, change);
 
+  /// <summary>
+  /// Was im laufenden Gast installiert ist: Komponenten mit Skript laut ihrem <c>.ready</c>-Marker,
+  /// reine Snap-Komponenten (ohne Skript, also ohne Marker) laut <c>snap list</c>. <c>null</c>,
+  /// wenn die Marker nicht lesbar waren.
+  /// </summary>
+  private static async Task<IReadOnlyList<string>?> InstalledComponents(CommandContext context, string vm)
+  {
+    var markers = await Task.Run(() => context.Vms.Exec(vm, $"ls {InitInstall.MarkerDirectory} 2>/dev/null || true", context.DefaultTimeoutMs), context.CancellationToken);
+    if (markers.ExitCode != 0)
+    {
+      return null;
+    }
+
+    var found = Regex.Matches(markers.StdOut, @"^([A-Za-z0-9_-]+)\.ready\s*$", RegexOptions.Multiline).Select(m => m.Groups[1].Value).ToList();
+    var snapOnly = context.Config.Inits.Components.Where(pair => !pair.Value.HasScript && !string.IsNullOrWhiteSpace(pair.Value.Snap)).ToList();
+    if (snapOnly.Count > 0)
+    {
+      var list = await Task.Run(() => context.Vms.Exec(vm, "snap list 2>/dev/null || true", context.DefaultTimeoutMs), context.CancellationToken);
+      var snaps = Lines(list.StdOut).Skip(1).Select(line => line.Split(' ', 2)[0]).ToHashSet(StringComparer.Ordinal);
+      found.AddRange(snapOnly.Where(pair => snaps.Contains(pair.Value.Snap!)).Select(pair => pair.Key));
+    }
+
+    return found;
+  }
+
   /// <summary>Komponenten der VM laut Inventar (leer, wenn unbekannt).</summary>
   private static IReadOnlyList<string> InventoryComponents(string vm) =>
       LoadInventory().Vms.GetValueOrDefault(vm)?.Components ?? [];
@@ -45,7 +70,7 @@ public static partial class Program
   /// <summary>
   /// Zeigt VMs, Snapshots, Komponenten und Ressourcen. Mit <c>--refresh</c> gleicht es mit
   /// Multipass ab: Ressourcen per <c>get</c>, Komponenten laufender VMs aus ihren
-  /// <c>.ready</c>-Markern (die Wahrheit), Snapshots aus <c>list --snapshots</c> samt Kommentar;
+  /// <c>.ready</c>-Markern (die Wahrheit; reine Snap-Komponenten ohne Marker per <c>snap list</c>), Snapshots aus <c>list --snapshots</c> samt Kommentar;
   /// VMs, die es nicht mehr gibt, fallen heraus.
   /// </summary>
   private static async Task RunVmInventory(CommandContext context, VmInventoryOptions options)
@@ -81,10 +106,9 @@ public static partial class Program
 
         if (vm.IsRunning)
         {
-          var markers = await Task.Run(() => context.Vms.Exec(vm.Name, $"ls {InitInstall.MarkerDirectory} 2>/dev/null || true", context.DefaultTimeoutMs), context.CancellationToken);
-          if (markers.ExitCode == 0)
+          if (await InstalledComponents(context, vm.Name) is { } installed)
           {
-            entry.Components = VmInventory.Merge([], Regex.Matches(markers.StdOut, @"^([A-Za-z0-9_-]+)\.ready\s*$", RegexOptions.Multiline).Select(m => m.Groups[1].Value));
+            entry.Components = VmInventory.Merge([], installed);
             entry.Known = true;
             entry.Verified = DateTime.UtcNow;
           }
