@@ -16,56 +16,12 @@ namespace CoreBridge.Core.Tests;
 /// </summary>
 public class PgpFileVerifierTests
 {
-    private const string Passphrase = "test-passphrase";
     private const string Json = "{\r\n  \"Images\": {\r\n    \"StoreRoot\": \"artifacts\"\r\n  }\r\n}\r\n";
 
-    private sealed record TestKey(byte[] ArmoredSecret, PgpPublicKeyRingBundle Public);
+    private static TestKey CreateKey(DateTime? created = null, long expiresAfterSeconds = 0) =>
+        TestKey.Create(created: created, expiresAfterSeconds: expiresAfterSeconds);
 
-    private static TestKey CreateKey(DateTime? created = null, long expiresAfterSeconds = 0)
-    {
-        var random = new SecureRandom();
-        var generator = new Ed25519KeyPairGenerator();
-        generator.Init(new Ed25519KeyGenerationParameters(random));
-        var pair = new PgpKeyPair(PublicKeyAlgorithmTag.EdDsa_Legacy, generator.GenerateKeyPair(), created ?? DateTime.UtcNow.AddMinutes(-1));
-
-        var hashed = new PgpSignatureSubpacketGenerator();
-        hashed.SetKeyFlags(false, PgpKeyFlags.CanSign | PgpKeyFlags.CanCertify);
-        if (expiresAfterSeconds > 0)
-        {
-            hashed.SetKeyExpirationTime(false, expiresAfterSeconds);
-        }
-
-        var ring = new PgpKeyRingGenerator(
-            PgpSignature.PositiveCertification,
-            pair,
-            "Test <test@corebridge.invalid>",
-            SymmetricKeyAlgorithmTag.Aes256,
-            HashAlgorithmTag.Sha256,
-            Passphrase.ToCharArray(),
-            false,
-            hashed.Generate(),
-            null,
-            random);
-
-        using var secret = new MemoryStream();
-        using (var armored = new ArmoredOutputStream(secret))
-        {
-            ring.GenerateSecretKeyRing().Encode(armored);
-        }
-
-        using var pub = new MemoryStream();
-        ring.GeneratePublicKeyRing().Encode(pub);
-        pub.Position = 0;
-        return new TestKey(secret.ToArray(), TrustedKeys.Read(pub));
-    }
-
-    private static byte[] Sign(TestKey key, string content)
-    {
-        var signingKey = PgpFileSigner.ReadSigningKey(new MemoryStream(key.ArmoredSecret), Passphrase.ToCharArray());
-        using var output = new MemoryStream();
-        PgpFileSigner.Sign(new MemoryStream(Encoding.UTF8.GetBytes(content)), output, signingKey);
-        return output.ToArray();
-    }
+    private static byte[] Sign(TestKey key, string content) => key.Sign(content);
 
     private static SignatureCheck Verify(string content, byte[] signature, PgpPublicKeyRingBundle trusted, DateTime? now = null)
     {

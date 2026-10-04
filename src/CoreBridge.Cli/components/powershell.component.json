@@ -1,0 +1,17 @@
+{
+  "Inits": {
+    "Components": {
+      "powershell": {
+        "Snap": "powershell",
+        "Classic": true,
+        "ScriptContent": "#!/bin/bash\nset -Eeuo pipefail\n\n# PowerShell kommt als Snap (classic); hier nur die Postcondition und der Marker.\n\ninstall_user=\"${1:-ubuntu}\"\nif ! getent passwd \"$install_user\" >/dev/null; then\n    echo \"Benutzer '$install_user' fehlt.\" >&2\n    exit 1\nfi\n\nln -sfn /snap/bin/pwsh /usr/local/bin/pwsh\nsudo -u \"$install_user\" -H bash -c \"pwsh -NoProfile -NonInteractive -Command '\\$PSVersionTable.PSVersion.ToString()'\"\n\ninstall -d /var/lib/corebridge\ntouch /var/lib/corebridge/powershell.ready\n",
+        "InstallPath": "/usr/local/sbin/corebridge-install-powershell",
+        "InstallUser": "ubuntu",
+        "Detect": [
+          "*.ps1",
+          "*.psm1"
+        ]
+      }
+    }
+  }
+}

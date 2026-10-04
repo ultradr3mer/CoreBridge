@@ -48,6 +48,11 @@ public static partial class Program
     await RunVmStep(context, name, $"workspace {SandboxRepo.WorkDir(repo)}", SandboxRepo.WorkspaceCommand(name, repo));
     var work = SandboxRepo.WorkDir(repo);
     await events.Emit(events.Std($"main of `{repo}` is in `{name}`: {work}."));
+    if (options.FromWork)
+    {
+      return;
+    }
+
     await events.Emit(events.Std(
         $"Work there on a branch claude/<id> and push it to origin; bring it back with `cb repo-receive -n {name} -i <id>` (from a checkout with main checked out)."));
   }

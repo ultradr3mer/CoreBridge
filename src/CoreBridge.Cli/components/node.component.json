@@ -1,0 +1,21 @@
+{
+  "Inits": {
+    "Components": {
+      "node": {
+        "ScriptContent": "#!/bin/bash\nset -Eeuo pipefail\n\n# Installiert Node.js (aktuelles LTS von NodeSource) samt npm. Ein schon\n# vorhandenes Node ab Version 20 bleibt, wie es ist.\n\nmin_node_major=20\ninstall_user=\"${1:-ubuntu}\"\nif ! getent passwd \"$install_user\" >/dev/null; then\n    echo \"Benutzer '$install_user' fehlt.\" >&2\n    exit 1\nfi\n\nnode_major() {\n    command -v node >/dev/null 2>&1 || { echo 0; return; }\n    node --version | sed -E 's/^v([0-9]+).*/\\1/'\n}\n\nexport DEBIAN_FRONTEND=noninteractive\nif (( $(node_major) < min_node_major )); then\n    curl -fsSL https://deb.nodesource.com/setup_lts.x | bash -\n    apt-get -o DPkg::Lock::Timeout=300 install -y nodejs\nfi\n\n# Postcondition als Installationsbenutzer, auch ohne Login-Shell (multipass exec).\nsudo -u \"$install_user\" -H bash -c 'node --version && npm --version'\n\ninstall -d /var/lib/corebridge\ntouch /var/lib/corebridge/node.ready\n",
+        "InstallPath": "/usr/local/sbin/corebridge-install-node",
+        "Packages": [
+          "bash",
+          "ca-certificates",
+          "curl",
+          "sudo"
+        ],
+        "PackageUpdate": true,
+        "InstallUser": "ubuntu",
+        "Detect": [
+          "package.json"
+        ]
+      }
+    }
+  }
+}

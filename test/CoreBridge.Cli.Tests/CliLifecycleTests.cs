@@ -159,7 +159,7 @@ public abstract class CliLifecycleStages
         var result = await fixture.RunAsync(new VmCreateOptions
         {
             Name = fixture.VmName,
-            Image = fixture.InitName,
+            Profile = fixture.InitName,
             Snapshot = ConfiguredSnapshot
         }, output.WriteLine);
 

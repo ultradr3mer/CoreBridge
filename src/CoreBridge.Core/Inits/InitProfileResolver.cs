@@ -8,11 +8,13 @@ namespace CoreBridge.Core.Inits;
 /// Aufgelöstes Launch-Profil für einen von <c>init-configure</c> erzeugten Namen.
 /// </summary>
 /// <param name="Components">Die Komponenten, für die <c>init-configure</c> die cloud-init gerendert hat.</param>
+/// <param name="Resources">CPU/Memory/Disk-Vorgaben des Profils; Angaben an <c>vm-create</c> schlagen sie.</param>
 public sealed record InitProfile(
     string Name,
     string RuntimeImage,
     string? CloudInitPath,
-    IReadOnlyList<string> Components);
+    IReadOnlyList<string> Components,
+    VmResources? Resources = null);
 
 /// <summary>
 /// Trennt normale Multipass-Katalognamen von CoreBridge-Profilen.
@@ -21,6 +23,43 @@ public sealed record InitProfile(
 /// </summary>
 public static class InitProfileResolver
 {
+    /// <summary>
+    /// Löst <paramref name="name"/> ausdrücklich als Profil auf (<c>vm-create --profile</c>):
+    /// fehlt es, gibt es eine Meldung mit den vorhandenen Profilen statt eines
+    /// Katalog-Lookups durch Multipass.
+    /// </summary>
+    public static InitProfile ResolveRequired(InitsConfig config, string name, string? explicitCloudInit = null)
+    {
+        var profile = IsProfileCandidate(name) ? Resolve(config, name, explicitCloudInit) : null;
+        if (profile is not null)
+        {
+            return profile;
+        }
+
+        var existing = ExistingProfiles();
+        throw new MultipassException(
+            $"Profil '{name}' existiert nicht. "
+            + (existing.Count == 0
+                ? "Es gibt noch keine Profile — anlegen mit `cb init-configure -n <profil> -c claude,dotnet`."
+                : $"Vorhandene Profile: {string.Join(", ", existing)}."));
+    }
+
+    /// <summary>Namen aller Profile im <see cref="InitStore"/>, alphabetisch.</summary>
+    public static IReadOnlyList<string> ExistingProfiles()
+    {
+        if (!Directory.Exists(InitStore.ProfilesRoot))
+        {
+            return [];
+        }
+
+        return Directory.EnumerateDirectories(InitStore.ProfilesRoot)
+            .Select(Path.GetFileName)
+            .OfType<string>()
+            .Where(name => File.Exists(InitStore.ConfigFile(name)))
+            .Order(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+    }
+
     public static InitProfile? Resolve(
         InitsConfig config,
         string requestedImage,
@@ -70,7 +109,8 @@ public static class InitProfileResolver
             requestedImage,
             runtimeImage,
             cloudInitPath,
-            profileConfig.Components);
+            profileConfig.Components,
+            new VmResources(profileConfig.Cpus, profileConfig.Memory, profileConfig.Disk));
     }
 
     private static string? ResolveCloudInit(

@@ -9,12 +9,14 @@ public sealed record InitConfigureResult(
     string ConfigPath,
     string? CloudInitPath,
     string[] Snaps,
-    string RuntimeImage);
+    string RuntimeImage,
+    VmResources? Resources = null);
 
 public sealed record InitListEntry(
     string Name,
     string[] Components,
-    string[] Snaps);
+    string[] Snaps,
+    VmResources? Resources = null);
 
 public sealed record InitDeleteResult(string Name, string? ProfileDir);
 
@@ -38,7 +40,8 @@ public sealed class InitService
         string name,
         string[] components,
         bool force = false,
-        string? runtimeImage = null)
+        string? runtimeImage = null,
+        VmResources? resources = null)
     {
         if (string.IsNullOrWhiteSpace(name))
         {
@@ -91,7 +94,10 @@ public sealed class InitService
             trimmed,
             snaps,
             resolvedRuntimeImage,
-            cloudInitFile);
+            cloudInitFile,
+            Cpus: resources?.Cpus,
+            Memory: resources?.Memory,
+            Disk: resources?.Disk);
         File.WriteAllText(InitStore.ConfigFile(name), profileConfig.ToJson());
 
         return new InitConfigureResult(
@@ -99,7 +105,8 @@ public sealed class InitService
             InitStore.ConfigFile(name),
             cloudInitPath,
             snaps,
-            resolvedRuntimeImage);
+            resolvedRuntimeImage,
+            resources);
     }
 
     public IReadOnlyList<InitListEntry> List()
@@ -132,7 +139,8 @@ public sealed class InitService
             entries.Add(new InitListEntry(
                 name,
                 profileConfig.Components,
-                profileConfig.Snaps));
+                profileConfig.Snaps,
+                new VmResources(profileConfig.Cpus, profileConfig.Memory, profileConfig.Disk)));
         }
 
         return entries;

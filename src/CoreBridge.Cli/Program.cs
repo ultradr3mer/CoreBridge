@@ -39,6 +39,9 @@ public static partial class Program
         typeof(VmRestoreOptions),
         typeof(VmInstallOptions),
         typeof(VmResizeOptions),
+        typeof(VmInventoryOptions),
+        typeof(RepoMatchOptions),
+        typeof(WorkOptions),
         typeof(RepoSendOptions),
         typeof(RepoReceiveOptions),
         typeof(InitConfigureOptions),
@@ -47,6 +50,10 @@ public static partial class Program
         typeof(ComponentListOptions),
         typeof(ComponentAddOptions),
         typeof(ComponentRemoveOptions),
+        typeof(ComponentBundleOptions),
+        typeof(KeyTrustOptions),
+        typeof(KeyListOptions),
+        typeof(KeyUntrustOptions),
         typeof(SettingsVerifyOptions)
   ];
 
@@ -87,19 +94,12 @@ public static partial class Program
       ?? throw new InvalidOperationException("Konfiguration konnte nicht gebunden werden (appsettings.json).");
   }
 
-  public static AppConfig LoadUserConfig()
-  { 
-    var localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
-    var userProfile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-
-    var configuration = new ConfigurationBuilder()
-        .SetFileProvider(new SignedFileProvider(localAppData, _ => SignaturePolicy.Optional))
-        .AddJsonFile($"appsettings.{userProfile}.json", optional: true)
-        .Build();
-
-    return configuration.Get<AppConfig>()
-        ?? throw new InvalidOperationException("Konfiguration konnte nicht gebunden werden (appsettings.json).");
-  }
+  /// <summary>
+  /// Schlüssel für Komponenten und Bundles: der eingebettete CoreBridge-Schlüssel plus
+  /// der Vertrauensordner des Benutzers — nie für die mitgelieferten appsettings.
+  /// </summary>
+  private static Org.BouncyCastle.Bcpg.OpenPgp.PgpPublicKeyRingBundle ComponentTrustBundle() =>
+      new TrustedKeyStore(InitStore.TrustedKeysFolder).Combined(TrustedKeys.CoreBridge);
 
   /// <summary>
   /// Parst nur die CLI und führt danach genau einen Dispatcher aus. Meldungen
@@ -109,6 +109,12 @@ public static partial class Program
   /// </summary>
   public static async Task<int> Main(string[] args)
   {
+    // `cb` ohne Argumente in einem Repository: arbeiten wie mit einem lokalen Agenten.
+    if (args.Length == 0 && InsideGitRepository(Environment.CurrentDirectory))
+    {
+      args = ["work"];
+    }
+
     if (!TryParseOptions(args, out var options, out var helpRequested))
     {
       return helpRequested ? 0 : 1;
@@ -168,6 +174,20 @@ public static partial class Program
     {
       log.Write("ende", $"Exit {exitCode}");
       ElevatedRelaunch.PauseIfRequested(options is IPauseOnExit { PauseOnExit: true });
+    }
+  }
+
+  /// <summary>Liegt <paramref name="directory"/> in einer git-Arbeitskopie? Ohne git: nein.</summary>
+  private static bool InsideGitRepository(string directory)
+  {
+    try
+    {
+      var result = new GitCli().Run(["rev-parse", "--is-inside-work-tree"], directory, 10_000);
+      return result.ExitCode == 0 && result.StdOut.Trim() == "true";
+    }
+    catch (GitException)
+    {
+      return false;
     }
   }
 
@@ -275,7 +295,8 @@ public static partial class Program
         ? config with
         {
           DefaultTimeoutVmCreation = ovr.OverrideTimeout ?? config.DefaultTimeoutVmCreation,
-          DefaultTimeout = ovr.OverrideTimeout ?? config.DefaultTimeout
+          DefaultTimeout = ovr.OverrideTimeout ?? config.DefaultTimeout,
+          DefaultTimeoutVmStart = ovr.OverrideTimeout ?? config.DefaultTimeoutVmStart
         }
         : config;
   }
@@ -308,6 +329,7 @@ public static partial class Program
       GitException => new(1, exception.Message, exception),
       System.Text.Json.JsonException => new(1, $"Unerwartete Multipass-Antwort (kein JSON): {exception.Message}", exception),
       FormatException => new(1, $"Configuration error: {exception.Message}", exception),
+      InvalidDataException => new(1, exception.Message, exception),
       IOException or UnauthorizedAccessException => new(1, $"CLI-I/O-Fehler: {exception.Message}", exception),
       TaskCanceledException { InnerException: TimeoutException } => new(
           1,
@@ -339,7 +361,9 @@ public static partial class Program
       CancellationToken cancellationToken)
   {
     InitStore.Initialize(config.Inits.StoreRoot);
-    config = InitComponentStore.Merge(config, InitStore.UserSettingsFile);
+    var sources = new ComponentSources(AppContext.BaseDirectory, CurrentEnvironment, InitStore.Root);
+    var catalog = ComponentCatalog.Load(config, sources, ComponentTrustBundle(), DateTime.UtcNow);
+    config = config with { Inits = catalog.Inits };
     using var services = CoreBridgeContainer.Create(config);
     var cli = MultipassCliFactory.Create(services);
     await EmitSetup(factory, config, cli);
@@ -349,11 +373,13 @@ public static partial class Program
         new VmService(new TracingMultipassCli(cli, factory)),
         factory,
         cancellationToken,
-        new GitCli(factory));
-    if (cli is IMultipassDouble && options is RepoSendOptions or RepoReceiveOptions)
+        new GitCli(factory),
+        catalog,
+        sources);
+    if (cli is ReplayMultipassCli && options is RepoSendOptions or RepoReceiveOptions or WorkOptions)
     {
-      // git auf dem Host erreicht keine simulierte VM.
-      throw new ProgramExecutionException(1, "repo-send/repo-receive are not supported in simulation — git has to run inside a real VM.");
+      // Eine Aufnahme spielt keine git-Daten nach; der Simulator dagegen hat echtes git auf seiner Disk.
+      throw new ProgramExecutionException(1, "repo-send/repo-receive/work are not supported when replaying a recording — git has to run inside a VM (real or simulated).");
     }
 
     if (cli is IMultipassDouble && options is MultipassStoreOptions)
@@ -362,7 +388,7 @@ public static partial class Program
       throw new ProgramExecutionException(1, "multipass-store ändert den echten Multipass-Dienst und läuft deshalb nicht in der Simulation (cb-sim).");
     }
 
-    if (cli is IMultipassDouble multipassDouble && options is not (InitConfigureOptions or InitListOptions or InitDeleteOptions or ComponentListOptions or ComponentAddOptions or ComponentRemoveOptions or SettingsVerifyOptions or MultipassRestartOptions))
+    if (cli is IMultipassDouble multipassDouble && options is not (InitConfigureOptions or InitListOptions or InitDeleteOptions or ComponentListOptions or ComponentAddOptions or ComponentRemoveOptions or ComponentBundleOptions or KeyTrustOptions or KeyListOptions or KeyUntrustOptions or SettingsVerifyOptions or MultipassRestartOptions))
     {
       // Unübersehbar, damit niemand Ergebnisse einer Attrappe für echte VMs hält.
       await factory.Emit(factory.Err($"[{multipassDouble.BinaryLabel}] kein echtes Multipass ({cli.GetType().Name})."));
@@ -393,6 +419,9 @@ public static partial class Program
       VmRestoreOptions o => RunVmRestore(context, o),
       VmInstallOptions o => RunVmInstall(context, o),
       VmResizeOptions o => RunVmResize(context, o),
+      VmInventoryOptions o => RunVmInventory(context, o),
+      RepoMatchOptions o => RunRepoMatch(context, o),
+      WorkOptions o => RunWork(context, o),
       RepoSendOptions o => RunRepoSend(context, o),
       RepoReceiveOptions o => RunRepoReceive(context, o),
       InitConfigureOptions o => RunInitConfigure(context, o),
@@ -401,6 +430,10 @@ public static partial class Program
       ComponentListOptions o => RunComponentList(context, o),
       ComponentAddOptions o => RunComponentAdd(context, o),
       ComponentRemoveOptions o => RunComponentRemove(context, o),
+      ComponentBundleOptions o => RunComponentBundle(context, o),
+      KeyTrustOptions o => RunKeyTrust(context, o),
+      KeyListOptions => RunKeyList(context),
+      KeyUntrustOptions o => RunKeyUntrust(context, o),
       SettingsVerifyOptions o => RunSettingsVerify(context, o),
       _ => throw new MultipassException($"Unbekannter CLI-Options-Typ: {options.GetType().Name}")
     };
@@ -408,8 +441,9 @@ public static partial class Program
 
   /// <summary>
   /// Meldet je Datei OK, UNSIGNIERT (Warnung) oder den Grund der Ablehnung;
-  /// ohne <c>-f</c> die mitgelieferten appsettings neben der CLI. Exit 3, wenn
-  /// eine Signatur ungültig ist.
+  /// ohne <c>-f</c> die mitgelieferten appsettings neben der CLI und alle
+  /// Komponenten-Dateien (Bundles, Benutzerordner, Skripte). Exit 3, wenn eine
+  /// Signatur ungültig ist.
   /// </summary>
   private static async Task RunSettingsVerify(CommandContext context, SettingsVerifyOptions options)
   {
@@ -417,7 +451,13 @@ public static partial class Program
     var now = DateTime.UtcNow;
     var files = options.Files.ToList();
     var checks = files.Count > 0
-        ? files.Select(file => SettingsSignatures.VerifyFile(Path.GetFullPath(file), TrustedKeys.CoreBridge, now)).ToList()
+        // appsettings*.json prüft nur der CoreBridge-Schlüssel, alles andere (Bundles, Skripte) auch der Vertrauensordner.
+        ? files.Select(file => SettingsSignatures.VerifyFile(
+            Path.GetFullPath(file),
+            Path.GetFileName(file).StartsWith("appsettings", StringComparison.OrdinalIgnoreCase) && !file.EndsWith(ComponentCatalog.BundleExtension, StringComparison.OrdinalIgnoreCase)
+                ? TrustedKeys.CoreBridge
+                : ComponentTrustBundle(),
+            now)).ToList()
         : SettingsSignatures.Check(AppContext.BaseDirectory, CurrentEnvironment, TrustedKeys.CoreBridge, now);
 
     foreach (var check in checks)
@@ -430,6 +470,27 @@ public static partial class Program
       });
     }
 
-    SettingsSignatures.RequireValid(checks);
+    // Ohne -f auch die Komponenten: Bundles, Benutzerdateien und Skripte, gegen CoreBridge
+    // plus Vertrauensordner. Unbekannter Schlüssel ist dort eine Warnung wie unsigniert.
+    var invalidComponents = new List<SignatureCheck>();
+    if (files.Count == 0)
+    {
+      foreach (var (check, signature) in ComponentChecks(context))
+      {
+        await events.Emit(signature.Trust switch
+        {
+          ComponentTrust.CoreBridge or ComponentTrust.UserTrusted => events.Std($"OK         {check.File} — {signature.Describe()}"),
+          ComponentTrust.Unsigned => events.Err($"UNSIGNIERT {check.File} — {check.Reason}"),
+          ComponentTrust.UnknownKey => events.Err($"UNBEKANNT  {check.File} — {check.Reason}"),
+          _ => events.Err($"UNGÜLTIG   {check.File} — {check.Reason}")
+        });
+        if (signature.Trust == ComponentTrust.Invalid)
+        {
+          invalidComponents.Add(check);
+        }
+      }
+    }
+
+    SettingsSignatures.RequireValid([.. checks, .. invalidComponents]);
   }
 }

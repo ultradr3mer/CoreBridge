@@ -25,6 +25,37 @@ public static partial class Program
     }
   }
 
+  /// <summary>CPU/Memory/Disk laut <c>multipass get</c>; was nicht lesbar ist, bleibt <c>null</c>.</summary>
+  private static VmResources ReadResources(CommandContext context, string name)
+  {
+    string? Get(string key)
+    {
+      try
+      {
+        return context.Vms.GetSetting(name, key, context.DefaultTimeoutMs) is { Length: > 0 } value ? value : null;
+      }
+      catch (MultipassException)
+      {
+        return null;
+      }
+    }
+
+    return new VmResources(int.TryParse(Get("cpus"), out var cpus) ? cpus : null, Get("memory"), Get("disk"));
+  }
+
+  /// <summary>CPU/Memory/Disk-Angaben prüfen, bevor etwas an einer VM passiert.</summary>
+  private static VmResources ParseResources(int? cpus, string? memory, string? disk)
+  {
+    try
+    {
+      return VmResources.Parse(cpus, memory, disk);
+    }
+    catch (MultipassException exception)
+    {
+      throw new ProgramExecutionException(1, exception.Message);
+    }
+  }
+
   /// <summary>Multipass-Namensregel: Buchstaben, Ziffern, Bindestriche; Beginn mit Buchstabe, Ende ohne Bindestrich.</summary>
   private static readonly System.Text.RegularExpressions.Regex VmNamePattern =
       new("^[A-Za-z](?:[A-Za-z0-9-]*[A-Za-z0-9])?$", System.Text.RegularExpressions.RegexOptions.CultureInvariant);
@@ -41,12 +72,34 @@ public static partial class Program
     var events = context.Events;
     var (config, vms, cancellationToken) = (context.Config, context.Vms, context.CancellationToken);
     var waitSlice = config.DefaultTimeoutVmCreation.ReadTime();
-    var requestedImage = string.IsNullOrWhiteSpace(options.Image)
-        ? config.Inits.DefaultRuntimeImage
-        : options.Image.Trim();
-    var profile = InitProfileResolver.Resolve(config.Inits, requestedImage, options.CloudInit);
-    var launchImage = profile?.RuntimeImage ?? requestedImage;
+    var image = string.IsNullOrWhiteSpace(options.Image) ? null : options.Image.Trim();
+    var profileName = string.IsNullOrWhiteSpace(options.Profile) ? null : options.Profile.Trim();
+    InitProfile? profile;
+    if (profileName is not null)
+    {
+      if (image is not null)
+      {
+        throw new ProgramExecutionException(
+            1,
+            $"Use either --profile or --image — profile `{profileName}` brings its own image (change it with `cb init-configure -n {profileName} --runtime-image <image> -f`).");
+      }
+
+      profile = InitProfileResolver.ResolveRequired(config.Inits, profileName, options.CloudInit);
+    }
+    else
+    {
+      // Früher war --image auch der Profilname; das geht weiter, mit Hinweis.
+      profile = image is null ? null : InitProfileResolver.Resolve(config.Inits, image, options.CloudInit);
+      if (profile is not null)
+      {
+        await events.Emit(events.Err($"Hinweis: `{image}` ist ein Profil — künftig `--profile {image}` statt `--image` verwenden."));
+      }
+    }
+
+    var launchImage = profile?.RuntimeImage ?? image ?? config.Inits.DefaultRuntimeImage;
     var cloudInit = options.CloudInit ?? profile?.CloudInitPath;
+    // Angaben an vm-create schlagen die Vorgaben des Profils.
+    var resources = ParseResources(options.Cpus, options.Memory, options.Disk).Over(profile?.Resources ?? VmResources.None);
     if (!VmNamePattern.IsMatch(options.Name))
     {
       throw new ProgramExecutionException(
@@ -59,11 +112,17 @@ public static partial class Program
       throw new ProgramExecutionException(1, $"cloud-init file not found: {cloudInit}");
     }
 
+    if (profile is not null)
+    {
+      // Die cloud-init ist beim init-configure gerendert; gezeigt wird, wie es heute um die Komponenten steht.
+      await ReportComponentTrust(context, profile.Components);
+    }
+
     await ReplaceExistingVm(context, options.Name);
 
-    await events.Emit(events.Std($"Lege VM `{options.Name}` an (Image: {requestedImage}"
-        + (profile is null ? string.Empty : $" → Runtime: {launchImage}")
-        + $"{(options.Disk is null ? string.Empty : $", Disk: {options.Disk}")}"
+    await events.Emit(events.Std($"Lege VM `{options.Name}` an ("
+        + (profile is null ? $"Image: {launchImage}" : $"Profil: {profile.Name} → Image: {launchImage}")
+        + (resources.IsEmpty ? string.Empty : $", {resources}")
         + $"{(cloudInit is null ? string.Empty : ", cloud-init")}) ..."));
 
     var stopwatch = System.Diagnostics.Stopwatch.StartNew();
@@ -75,11 +134,13 @@ public static partial class Program
           () => vms.Create(
               options.Name,
               launchImage,
-              options.Disk,
+              resources.Disk,
               cloudInit,
               waitSlice,
               () => context.Events.Ask(context.Events.Choice<YesNoOptions>(
-                  $"VM `{options.Name}` is not ready after {stopwatch.Elapsed.TotalSeconds:F0} s — keep waiting?")) == YesNoOptions.Yes));
+                  $"VM `{options.Name}` is not ready after {stopwatch.Elapsed.TotalSeconds:F0} s — keep waiting?")) == YesNoOptions.Yes,
+              resources.Cpus,
+              resources.Memory));
     }
     catch (MultipassTimeoutException)
     {
@@ -117,11 +178,21 @@ public static partial class Program
 
     if (profile is not null)
     {
-      await events.Emit(events.Std($"Profil: {profile.Name} (Runtime: {profile.RuntimeImage})"));
+      await events.Emit(events.Std($"Profil: {profile.Name} → Image: {profile.RuntimeImage}"));
       await events.Emit(events.Std("Gast-Provisionierung: cloud-init"));
     }
 
     await events.Emit(events.Std(await Completed(vms, options.Name, $"create {options.Name}", result, cancellationToken)));
+    // Ressourcen so, wie Multipass sie meldet (5.0GiB statt 5G), auch die Standardwerte.
+    var actual = await Task.Run(() => ReadResources(context, options.Name), cancellationToken);
+    UpdateInventory(inventory => inventory.Vms[options.Name] = new InventoryVm
+    {
+      Profile = profile?.Name,
+      Cpus = actual.Cpus ?? resources.Cpus,
+      Memory = actual.Memory ?? resources.Memory,
+      Disk = actual.Disk ?? resources.Disk,
+      Created = DateTime.UtcNow
+    });
 
     if (cloudInit is not null)
     {
@@ -129,6 +200,11 @@ public static partial class Program
       // Snapshot — sonst hielte er eine halbe Installation fest, und weil
       // runcmd nur einmal je Instanz läuft, holt kein späterer Start sie nach.
       await VerifyProvisioning(context, options.Name, profile);
+      if (profile is not null)
+      {
+        UpdateInventory(inventory => inventory.Vm(options.Name).Components = VmInventory.Merge([], profile.Components));
+      }
+
       await OfferSnapshotAfterConfiguration(context, options.Name, profile?.Name ?? "provisioned", options.Snapshot);
     }
   }
@@ -237,11 +313,7 @@ public static partial class Program
       return;
     }
 
-    await RunVmStateCommand(
-        context,
-        name,
-        $"start {name}",
-        () => context.Vms.Start(name, context.DefaultTimeoutMs, KeepWaiting(context, $"start {name}")));
+    await StartVm(context, name);
   }
 
   private static async Task RunVmStop(CommandContext context, VmStopOptions options)
@@ -266,6 +338,19 @@ public static partial class Program
     }
 
     await StopVm(context, vm);
+  }
+
+  /// <summary>
+  /// Startet die VM und wartet in Abschnitten von <c>DefaultTimeoutVmStart</c> — ein Start
+  /// dauert unter Hyper-V oft länger als <c>DefaultTimeout</c> (Issue #5).
+  /// </summary>
+  private static Task StartVm(CommandContext context, string name)
+  {
+    return RunVmStateCommand(
+        context,
+        name,
+        $"start {name}",
+        () => context.Vms.Start(name, context.VmStartTimeoutMs, KeepWaiting(context, $"start {name}")));
   }
 
   /// <summary>
@@ -317,6 +402,10 @@ public static partial class Program
         name,
         label,
         () => context.Vms.Delete(name, options.Purge, context.DefaultTimeoutMs, KeepWaiting(context, label)));
+    if (options.Purge)
+    {
+      UpdateInventory(inventory => inventory.Vms.Remove(name));
+    }
   }
 
   /// <summary>
@@ -351,6 +440,7 @@ public static partial class Program
         name,
         $"delete {name} --purge",
         () => context.Vms.Delete(name, purge: true, context.DefaultTimeoutMs, KeepWaiting(context, $"delete {name}")));
+    UpdateInventory(inventory => inventory.Vms.Remove(name));
   }
 
   /// <summary>
@@ -386,11 +476,7 @@ public static partial class Program
       throw new ProgramExecutionException(1, $"Cancelled — VM `{name}` is {vm.State}; start it with `cb vm-start -n {name}`.");
     }
 
-    await RunVmStateCommand(
-        context,
-        name,
-        $"start {name}",
-        () => context.Vms.Start(name, context.DefaultTimeoutMs, KeepWaiting(context, $"start {name}")));
+    await StartVm(context, name);
   }
 
   /// <summary>VM laut vm-list; fehlt sie, gibt es eine fertige Meldung mit den vorhandenen Namen.</summary>

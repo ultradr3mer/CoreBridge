@@ -1,0 +1,28 @@
+{
+  "Inits": {
+    "Components": {
+      "java": {
+        "ScriptContent": "#!/bin/bash\nset -Eeuo pipefail\n\n# OpenJDK 21 und Maven kommen als Pakete; Gradle in der aktuellen Version von\n# services.gradle.org nach /opt/gradle (das Archiv-Gradle ist zu alt).\n\ninstall_user=\"${1:-ubuntu}\"\nif ! getent passwd \"$install_user\" >/dev/null; then\n    echo \"Benutzer '$install_user' fehlt.\" >&2\n    exit 1\nfi\n\ncurrent=\"$(curl -fsSL https://services.gradle.org/versions/current)\"\nversion=\"$(printf '%s' \"$current\" | sed -nE 's/.*\"version\"[[:space:]]*:[[:space:]]*\"([^\"]+)\".*/\\1/p' | head -n 1)\"\nurl=\"$(printf '%s' \"$current\" | sed -nE 's/.*\"downloadUrl\"[[:space:]]*:[[:space:]]*\"([^\"]+)\".*/\\1/p' | head -n 1)\"\nif [[ -z \"$version\" || -z \"$url\" ]]; then\n    echo \"Gradle-Version nicht ermittelbar (services.gradle.org).\" >&2\n    exit 1\nfi\n\nif [[ ! -x \"/opt/gradle/gradle-$version/bin/gradle\" ]]; then\n    archive=\"$(mktemp)\"\n    curl -fsSL \"$url\" -o \"$archive\"\n    install -d /opt/gradle\n    unzip -q -o \"$archive\" -d /opt/gradle\n    rm -f \"$archive\"\nfi\n\nln -sfn \"/opt/gradle/gradle-$version/bin/gradle\" /usr/local/bin/gradle\n\nsudo -u \"$install_user\" -H bash -c 'java -version && mvn -v && gradle --version'\n\ninstall -d /var/lib/corebridge\ntouch /var/lib/corebridge/java.ready\n",
+        "InstallPath": "/usr/local/sbin/corebridge-install-java",
+        "Packages": [
+          "bash",
+          "ca-certificates",
+          "curl",
+          "sudo",
+          "openjdk-21-jdk-headless",
+          "maven",
+          "unzip"
+        ],
+        "PackageUpdate": true,
+        "InstallUser": "ubuntu",
+        "Detect": [
+          "pom.xml",
+          "build.gradle",
+          "build.gradle.kts",
+          "settings.gradle",
+          "settings.gradle.kts"
+        ]
+      }
+    }
+  }
+}

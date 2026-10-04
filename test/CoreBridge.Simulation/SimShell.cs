@@ -15,8 +15,13 @@ namespace CoreBridge.Simulation;
 /// </summary>
 /// <remarks>
 /// Das Dateisystem ist virtuell: per <c>transfer</c> oder Umleitung geschriebene
-/// Dateien, die <c>.ready</c>-Marker und die installierten Komponenten der VM.
-/// Ablaufsteuerung (<c>if</c>, <c>for</c>, Funktionen) gibt es nicht. Ein
+/// Dateien, die <c>.ready</c>-Marker und die installierten Komponenten der VM. Dazu
+/// kommt eine echte „Disk“ der VM auf dem Host (<c>&lt;Simulator&gt;/disks/&lt;vm&gt;</c>):
+/// dort landen übertragene Binärdateien (git bundles), und <c>git</c> läuft als echtes
+/// git darauf — Gastpfade werden auf die Disk abgebildet. So tragen repo-send,
+/// repo-receive und <c>cb work</c> samt Stellvertreter-Agent (<c>claude</c>,
+/// <c>opencode</c>: Banner, Commit, Ende) im Simulator. Ablaufsteuerung: nur
+/// <c>if … then … [else …] fi</c>; <c>for</c> und Funktionen gibt es nicht. Ein
 /// unbekannter Befehl ohne Pfad gilt — wie bisher — als erfolgreich ohne Ausgabe,
 /// damit freies Durchspielen nicht an <c>apt-get</c> &amp; Co. scheitert.
 /// </remarks>
@@ -27,6 +32,12 @@ internal sealed class SimShell
     private const int NotFound = 127;
 
     private const string MarkerDirectory = "/var/lib/corebridge";
+
+    /// <summary>Erstes Wort eines geparsten <c>if</c>: danach Bedingung, then- und else-Teil als Skripte.</summary>
+    private const string IfMarker = "\u0001if";
+
+    /// <summary>Agenten, deren Stellvertreter der Simulator spielt (<c>cb work</c>).</summary>
+    private static readonly HashSet<string> Agents = new(StringComparer.Ordinal) { "claude", "opencode" };
 
     /// <summary>Was <c>&lt;programm&gt; --version</c> in einem provisionierten Gast meldet.</summary>
     private static readonly Dictionary<string, string> Versions = new(StringComparer.Ordinal)
@@ -59,6 +70,7 @@ internal sealed class SimShell
     ];
 
     private readonly SimulatedMultipassCli.SimVm _vm;
+    private readonly string? _disk;
     private readonly Dictionary<string, string> _vars;
     private readonly IReadOnlyList<string> _args;
     private readonly StringBuilder _out = new();
@@ -69,9 +81,11 @@ internal sealed class SimShell
     private int _substitutions;
     private bool _exited;
 
-    public SimShell(SimulatedMultipassCli.SimVm vm)
+    /// <param name="disk">Host-Ordner, der die Disk der VM spielt (<c>null</c>: nur virtuell).</param>
+    public SimShell(SimulatedMultipassCli.SimVm vm, string? disk = null)
         : this(
             vm,
+            disk,
             new Dictionary<string, string>(StringComparer.Ordinal)
             {
                 ["HOME"] = Home,
@@ -86,9 +100,10 @@ internal sealed class SimShell
     {
     }
 
-    private SimShell(SimulatedMultipassCli.SimVm vm, Dictionary<string, string> vars, string cwd, string user, IReadOnlyList<string> args)
+    private SimShell(SimulatedMultipassCli.SimVm vm, string? disk, Dictionary<string, string> vars, string cwd, string user, IReadOnlyList<string> args)
     {
         _vm = vm;
+        _disk = disk;
         _vars = vars;
         _cwd = cwd;
         _user = user;
@@ -114,7 +129,7 @@ internal sealed class SimShell
 
     /// <summary>Unterschale (<c>$(…)</c>, <c>sh -c</c>): eigene Variablen- und Verzeichniskopie.</summary>
     private SimShell Subshell(IReadOnlyList<string>? args = null) =>
-        new(_vm, new Dictionary<string, string>(_vars, StringComparer.Ordinal), _cwd, _user, args ?? _args);
+        new(_vm, _disk, new Dictionary<string, string>(_vars, StringComparer.Ordinal), _cwd, _user, args ?? _args);
 
     // ---------------------------------------------------------------- Ablauf
 
@@ -158,6 +173,31 @@ internal sealed class SimShell
     /// <summary>Ein einfacher Befehl samt Zuweisungen und Umleitungen; liefert sein stdout.</summary>
     private string RunSimple(SimpleCommand command, string stdin)
     {
+        if (command.Words is [IfMarker, var condition, var then, var otherwise])
+        {
+            // if … then … [else …] fi: die Ausgabe der Zweige geht direkt in die Schale.
+            RunScript(condition, stdin);
+            if (_exited)
+            {
+                return string.Empty;
+            }
+
+            if (_status == 0)
+            {
+                RunScript(then, stdin);
+            }
+            else if (otherwise.Length > 0)
+            {
+                RunScript(otherwise, stdin);
+            }
+            else
+            {
+                _status = 0;
+            }
+
+            return Route(string.Empty, string.Empty, command.Redirects);
+        }
+
         var substitutions = _substitutions;
         var assignments = new List<(string Name, string Value)>();
         var index = 0;
@@ -429,6 +469,17 @@ internal sealed class SimShell
             return (0, $"[simulation] {component} installiert\n", string.Empty);
         }
 
+        if (program == "git" && _disk is not null)
+        {
+            return Git(args, stdin);
+        }
+
+        if (program is "claude" or "opencode" && Agents.Contains(program) && ComponentInstalled(program)
+            && !args.Any(a => a is "--version" or "-v"))
+        {
+            return Agent(program);
+        }
+
         if (Versions.TryGetValue(program, out var version))
         {
             // Mit Pfad zählt nur, wohin die echten Skripte linken (/snap/bin/dotnet gibt es nicht).
@@ -496,6 +547,69 @@ internal sealed class SimShell
 
         // Unbekanntes Programm: erfolgreich ohne Ausgabe (siehe Klassenkommentar).
         return (0, string.Empty, string.Empty);
+    }
+
+    /// <summary>
+    /// Echtes git auf der Host-Disk der VM: Arbeitsverzeichnis und absolute Gastpfade in den
+    /// Argumenten werden auf die Disk abgebildet, in der Ausgabe wieder zurück.
+    /// </summary>
+    private (int, string, string) Git(List<string> args, string stdin)
+    {
+        var cwd = HostPath(_cwd)!;
+        Directory.CreateDirectory(cwd);
+        var home = HostPath(Home)!;
+        Directory.CreateDirectory(home);
+        var start = new System.Diagnostics.ProcessStartInfo("git")
+        {
+            WorkingDirectory = cwd,
+            RedirectStandardInput = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false
+        };
+        foreach (var arg in args)
+        {
+            start.ArgumentList.Add(arg.StartsWith('/') ? HostPath(Normalize(arg))! : arg);
+        }
+
+        start.Environment["HOME"] = home;
+        start.Environment["GIT_CONFIG_NOSYSTEM"] = "1";
+        start.Environment["GIT_TERMINAL_PROMPT"] = "0";
+        using var process = System.Diagnostics.Process.Start(start)
+            ?? throw new InvalidOperationException("git ließ sich nicht starten (Simulator braucht git auf dem Host).");
+        process.StandardInput.Write(stdin);
+        process.StandardInput.Close();
+        var stdOut = process.StandardOutput.ReadToEndAsync();
+        var stdErr = process.StandardError.ReadToEndAsync();
+        process.WaitForExit();
+        return (process.ExitCode, ToGuest(stdOut.Result), ToGuest(stdErr.Result));
+    }
+
+    private string ToGuest(string text) =>
+        _disk is null ? text : text.Replace(_disk.TrimEnd(Path.DirectorySeparatorChar), string.Empty, StringComparison.Ordinal).Replace('\\', '/');
+
+    /// <summary>
+    /// Stellvertreter für einen Agenten: meldet sich mit Arbeitsverzeichnis und legt — in
+    /// einer git-Arbeitskopie — einen Commit an, so wie Claude seine Arbeit hinterlässt.
+    /// </summary>
+    private (int, string, string) Agent(string program)
+    {
+        var output = new StringBuilder($"[simulation] {program} (Stellvertreter) in {_cwd}\n");
+        if (HostPath(_cwd) is { } work && Directory.Exists(Path.Combine(work, ".git")))
+        {
+            File.AppendAllText(Path.Combine(work, "corebridge-agent.txt"), $"{program}: Arbeit vom {DateTime.UtcNow:O}\n");
+            var (addCode, _, addErr) = Git(["add", "corebridge-agent.txt"], string.Empty);
+            var (commitCode, commitOut, commitErr) = Git(["commit", "-q", "-m", $"{program}: Arbeit des Stellvertreters"], string.Empty);
+            if (addCode != 0 || commitCode != 0)
+            {
+                return (1, output.ToString(), addErr + commitErr);
+            }
+
+            var (_, head, _) = Git(["log", "-1", "--format=%h %s"], string.Empty);
+            output.Append($"[simulation] Commit {head.Trim()}\n").Append(commitOut);
+        }
+
+        return (0, output.ToString(), string.Empty);
     }
 
     /// <summary><c>sudo</c>/<c>env</c> lassen Zuweisungen vor dem Befehl zu (<c>sudo DEBIAN_FRONTEND=… apt-get</c>).</summary>
@@ -945,6 +1059,10 @@ internal sealed class SimShell
                 }
 
                 _vm.Directories.RemoveAll(d => d == path || d.StartsWith(path + "/", StringComparison.Ordinal));
+                if (HostPath(path) is { } host && Directory.Exists(host))
+                {
+                    Directory.Delete(host, recursive: true);
+                }
             }
             else if (!force)
             {
@@ -1068,7 +1186,9 @@ internal sealed class SimShell
     }
 
     private string? ReadFile(string path) =>
-        _vm.Files.TryGetValue(path, out var content) ? content : VirtualFile(path);
+        _vm.Files.TryGetValue(path, out var content)
+            ? content
+            : VirtualFile(path) ?? (HostPath(path) is { } host && File.Exists(host) ? File.ReadAllText(host) : null);
 
     private bool FileExists(string path) => ReadFile(path) is not null;
 
@@ -1095,6 +1215,10 @@ internal sealed class SimShell
         }
 
         _vm.Files.Remove(path);
+        if (HostPath(path) is { } host && File.Exists(host))
+        {
+            File.Delete(host);
+        }
     }
 
     private void AddDirectory(string path)
@@ -1111,7 +1235,12 @@ internal sealed class SimShell
     private bool DirectoryExists(string path) =>
         BaseDirectories.Contains(path)
         || _vm.Directories.Contains(path)
-        || _vm.Files.Keys.Any(f => f.StartsWith(path.TrimEnd('/') + "/", StringComparison.Ordinal));
+        || _vm.Files.Keys.Any(f => f.StartsWith(path.TrimEnd('/') + "/", StringComparison.Ordinal))
+        || (HostPath(path) is { } host && Directory.Exists(host));
+
+    /// <summary>Der Ort eines Gastpfads auf der Host-Disk der VM; <c>null</c> ohne Disk.</summary>
+    private string? HostPath(string guestPath) =>
+        _disk is null ? null : Path.Combine(_disk, guestPath.TrimStart('/').Replace('/', Path.DirectorySeparatorChar));
 
     private IEnumerable<string> Children(string directory)
     {
@@ -1122,7 +1251,10 @@ internal sealed class SimShell
             .Concat(_vm.Markers.Select(m => $"{MarkerDirectory}/{m}.ready"))
             .Concat(_vm.Components.Select(c => $"/usr/local/sbin/corebridge-install-{c}"))
             .Concat(Versions.Keys.Where(ComponentInstalled).Select(v => $"/usr/local/bin/{v}"))
-            .Concat(["/etc/os-release", "/etc/hostname"]);
+            .Concat(["/etc/os-release", "/etc/hostname"])
+            .Concat(HostPath(directory) is { } host && Directory.Exists(host)
+                ? Directory.EnumerateFileSystemEntries(host).Select(entry => prefix + Path.GetFileName(entry))
+                : []);
         return paths
             .Where(p => p.StartsWith(prefix, StringComparison.Ordinal) && p.Length > prefix.Length)
             .Select(p => p[prefix.Length..].Split('/')[0])
@@ -1633,6 +1765,12 @@ internal sealed class SimShell
             for (var i = 0; i < tokens.Count; i++)
             {
                 var token = tokens[i];
+                if (token.Kind == TokenKind.Word && token.Text == "if" && words.Count == 0)
+                {
+                    words.AddRange(ParseIf(tokens, ref i));
+                    continue;
+                }
+
                 if (token.Kind == TokenKind.Word)
                 {
                     if (token.Text == "!" && words.Count == 0 && commands.Count == 0)
@@ -1669,6 +1807,51 @@ internal sealed class SimShell
 
             EndList();
             return lists;
+        }
+
+        /// <summary>
+        /// <c>if A; then B; [else C;] fi</c> ab <paramref name="i"/> (dem <c>if</c>): liefert
+        /// <see cref="IfMarker"/> und die drei Teile als Skripttext; <paramref name="i"/> steht
+        /// danach auf dem <c>fi</c>. Verschachtelte <c>if</c> zählen mit, <c>elif</c> nicht.
+        /// </summary>
+        private static string[] ParseIf(List<Token> tokens, ref int i)
+        {
+            var parts = new List<List<Token>> { new() };
+            var depth = 0;
+            var commandStart = true;
+            for (i++; i < tokens.Count; i++)
+            {
+                var token = tokens[i];
+                var keyword = token.Kind == TokenKind.Word && commandStart ? token.Text : null;
+                if (keyword == "if")
+                {
+                    depth++;
+                }
+                else if (keyword == "fi" && depth-- == 0)
+                {
+                    break;
+                }
+                else if (depth == 0 && keyword is "then" or "else")
+                {
+                    parts.Add([]);
+                    continue;
+                }
+                else if (depth == 0 && keyword == "elif")
+                {
+                    throw new FormatException("elif is not supported (simulation)");
+                }
+
+                parts[^1].Add(token);
+                commandStart = token.Kind == TokenKind.Operator && token.Text is ";" or "&&" or "||" or "|";
+            }
+
+            if (i >= tokens.Count || parts.Count < 2)
+            {
+                throw new FormatException("Syntax error: if without then/fi");
+            }
+
+            static string Text(List<Token> part) => string.Join(' ', part.Select(t => t.Text));
+            return [IfMarker, Text(parts[0]), Text(parts[1]), parts.Count > 2 ? Text(parts[2]) : string.Empty];
         }
     }
 

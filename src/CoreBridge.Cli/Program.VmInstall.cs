@@ -2,6 +2,7 @@ using CoreBridge.Interaction;
 using CoreBridge.Core.Common;
 using CoreBridge.Core.Inits;
 using CoreBridge.Core.Multipass;
+using CoreBridge.Core.Vm;
 
 namespace CoreBridge.Cli;
 
@@ -28,6 +29,7 @@ public static partial class Program
       RequireValidName(options.Snapshot);
     }
 
+    await ReportComponentTrust(context, components);
     var steps = InitInstall.Plan(context.Config.Inits, components);
     await EnsureRunning(context, name, ask: false);
 
@@ -46,7 +48,7 @@ public static partial class Program
         if (step.IsUpload)
         {
           upload = Path.Combine(Path.GetTempPath(), $"corebridge-{Guid.NewGuid():N}.sh");
-          await File.WriteAllTextAsync(upload, InitInstall.ReadScript(step.ScriptSource!), context.CancellationToken);
+          await File.WriteAllTextAsync(upload, step.ScriptContent!, context.CancellationToken);
           result = await RunStep(context, label, () => context.Vms.Put(upload, name, step.RemotePath, waitMs));
         }
         else
@@ -80,6 +82,11 @@ public static partial class Program
     }
 
     await events.Emit(events.Std($"install {string.Join(", ", components)} → {name}: OK ({stopwatch.Elapsed.TotalSeconds:F1} s)"));
+    UpdateInventory(inventory =>
+    {
+      var entry = inventory.Vm(name);
+      entry.Components = VmInventory.Merge(entry.Components, components);
+    });
     await OfferSnapshotAfterConfiguration(context, name, string.Join("-", components), options.Snapshot);
   }
 
@@ -147,7 +154,8 @@ public static partial class Program
     var result = await RunReported(
         context,
         label,
-        () => context.Vms.Snapshot(name, snapshot, $"after configuration ({suggestedName})", context.DefaultTimeoutMs, KeepWaiting(context, label)));
+        () => context.Vms.Snapshot(name, snapshot, SnapshotCommentFor(name, $"after configuration ({suggestedName})"), context.DefaultTimeoutMs, KeepWaiting(context, label)));
+    RecordSnapshot(name, snapshot, result);
     await events.Emit(events.Std(await Completed(context.Vms, name, label, result, context.CancellationToken)));
     await events.Emit(events.Std($"VM `{name}` stays stopped — start it with `cb vm-start -n {name}`."));
   }

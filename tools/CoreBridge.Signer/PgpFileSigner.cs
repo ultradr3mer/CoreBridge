@@ -48,14 +48,7 @@ public static class PgpFileSigner
     /// <summary>Signiert die Bytes aus <paramref name="data"/> und schreibt die armored Signatur nach <paramref name="output"/>.</summary>
     public static void Sign(Stream data, Stream output, SigningKey key)
     {
-        var generator = new PgpSignatureGenerator(key.PublicKey.Algorithm, HashAlgorithmTag.Sha256);
-        generator.InitSign(PgpSignature.CanonicalTextDocument, key.PrivateKey);
-
-        // Erstellzeit und Issuer-Key-ID ergänzt der Generator selbst.
-        var hashed = new PgpSignatureSubpacketGenerator();
-        hashed.SetIssuerFingerprint(false, key.PublicKey);
-        generator.SetHashedSubpackets(hashed.Generate());
-
+        var generator = Generator(key);
         var buffer = new byte[8192];
         int read;
         while ((read = data.Read(buffer, 0, buffer.Length)) > 0)
@@ -65,5 +58,51 @@ public static class PgpFileSigner
 
         using var armored = new ArmoredOutputStream(output);
         generator.Generate().Encode(armored);
+    }
+
+    /// <summary>
+    /// Klartextsignatur wie <c>gpg --clearsign</c>: Kopf, <c>Hash: SHA256</c>, der Text
+    /// (Zeilen mit <c>-</c> am Anfang dash-escaped, LF), dann der Signaturblock. Signiert
+    /// wird der kanonische Text (<c>ClearsignedMessage.Canonicalize</c>: Leerraum am
+    /// Zeilenende weg, CRLF dazwischen, ohne letztes Zeilenende) — so prüft CoreBridge die
+    /// Datei daneben (<c>&lt;datei&gt;.clearsigned.asc</c>) wie die Clearsign-Datei selbst.
+    /// </summary>
+    public static void ClearSign(byte[] data, Stream output, SigningKey key)
+    {
+        var text = new System.Text.UTF8Encoding(false).GetString(data).TrimStart('\uFEFF');
+        var lines = text.Replace("\r\n", "\n").Split('\n').ToList();
+        if (lines.Count > 0 && lines[^1].Length == 0)
+        {
+            lines.RemoveAt(lines.Count - 1);
+        }
+
+        var canonical = System.Text.Encoding.UTF8.GetBytes(string.Join("\r\n", lines.Select(line => line.TrimEnd(' ', '\t'))));
+        var generator = Generator(key);
+        generator.Update(canonical, 0, canonical.Length);
+        var signature = generator.Generate();
+
+        var body = new System.Text.StringBuilder()
+            .Append("-----BEGIN PGP SIGNED MESSAGE-----\nHash: SHA256\n\n");
+        foreach (var line in lines)
+        {
+            body.Append(line.StartsWith('-') ? "- " + line : line).Append('\n');
+        }
+
+        var bytes = System.Text.Encoding.UTF8.GetBytes(body.ToString());
+        output.Write(bytes, 0, bytes.Length);
+        using var armored = new ArmoredOutputStream(output);
+        signature.Encode(armored);
+    }
+
+    private static PgpSignatureGenerator Generator(SigningKey key)
+    {
+        var generator = new PgpSignatureGenerator(key.PublicKey.Algorithm, HashAlgorithmTag.Sha256);
+        generator.InitSign(PgpSignature.CanonicalTextDocument, key.PrivateKey);
+
+        // Erstellzeit und Issuer-Key-ID ergänzt der Generator selbst.
+        var hashed = new PgpSignatureSubpacketGenerator();
+        hashed.SetIssuerFingerprint(false, key.PublicKey);
+        generator.SetHashedSubpackets(hashed.Generate());
+        return generator;
     }
 }

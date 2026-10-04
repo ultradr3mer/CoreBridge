@@ -469,6 +469,49 @@ public class SimulatedMultipassCliTests
         return ResultLine.Matches(stdOut).Select(m => m.Value);
     }
 
+    [Fact]
+    public void IfThenElseFiVerzweigt()
+    {
+        using var temp = new TempDirectory();
+        var service = new VmService(Simulator(temp));
+        service.Create("sim-a", "daily:26.10");
+
+        var result = service.Exec("sim-a", "if [ -d /nope ]; then echo ja; else echo nein; fi && echo danach; if true; then if false; then echo x; fi; echo innen; fi");
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("nein\ndanach\ninnen\n", result.StdOut);
+    }
+
+    /// <summary>Binäre Dateien und git laufen auf der Host-Disk der VM; Klon und Snapshot nehmen sie mit.</summary>
+    [Fact]
+    public void GitLaeuftAufDerDiskDerVm()
+    {
+        using var temp = new TempDirectory();
+        var service = new VmService(Simulator(temp));
+        service.Create("sim-a", "daily:26.10");
+
+        Assert.Equal(0, service.Exec("sim-a", "git init --bare -q --initial-branch=main /home/ubuntu/repos/x.git").ExitCode);
+        Assert.Equal(0, service.Exec("sim-a", "test -d /home/ubuntu/repos/x.git").ExitCode);
+        var binary = Path.Combine(temp.Path, "b.bin");
+        File.WriteAllBytes(binary, [0, 1, 2, 0]);
+        service.Put(binary, "sim-a", "/tmp/b.bin");
+        var back = Path.Combine(temp.Path, "back.bin");
+        service.Get("sim-a", "/tmp/b.bin", back);
+        Assert.Equal(new byte[] { 0, 1, 2, 0 }, File.ReadAllBytes(back));
+
+        service.Stop("sim-a");
+        service.Snapshot("sim-a", "s");
+        service.Clone("sim-a", "sim-b");
+        service.Start("sim-b");
+        Assert.Equal(0, service.Exec("sim-b", "test -d /home/ubuntu/repos/x.git").ExitCode);
+        service.Start("sim-a");
+        service.Exec("sim-a", "rm -rf /home/ubuntu/repos");
+        service.Stop("sim-a");
+        service.Restore("sim-a", "s");
+        service.Start("sim-a");
+        Assert.Equal(0, service.Exec("sim-a", "test -d /home/ubuntu/repos/x.git").ExitCode);
+    }
+
     private static SimulatedMultipassCli Simulator(TempDirectory temp, TimeSpan? delay = null)
     {
         return SimulatedMultipassCli.At(Path.Combine(temp.Path, "sim", "state.json"), delay ?? TimeSpan.Zero);

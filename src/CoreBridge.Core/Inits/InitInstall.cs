@@ -10,17 +10,19 @@ namespace CoreBridge.Core.Inits;
 /// </summary>
 /// <param name="Title">Kurzbeschreibung für Ausgabe und Fehlermeldung.</param>
 /// <param name="Command">Shell-Zeile für <c>multipass exec … /bin/sh -c</c>; <c>null</c> bei einem Upload.</param>
-/// <param name="ScriptSource">Lokales Skript (LF-normalisiert hochzuladen); nur bei einem Upload.</param>
+/// <param name="ScriptSource">Lokales Skript, falls die Komponente einen Pfad hat; nur bei einem Upload.</param>
 /// <param name="RemotePath">Ziel des Uploads im Gast.</param>
 /// <param name="Marker">Bei einer Prüfung: der <c>.ready</c>-Marker, dessen Fehlen ein Fehler ist.</param>
+/// <param name="ScriptContent">Hochzuladender Skriptinhalt, LF-normalisiert (aus dem Bundle oder der Datei).</param>
 public sealed record InstallStep(
     string Title,
     string? Command,
     string? ScriptSource = null,
     string? RemotePath = null,
-    string? Marker = null)
+    string? Marker = null,
+    string? ScriptContent = null)
 {
-    public bool IsUpload => ScriptSource is not null;
+    public bool IsUpload => ScriptContent is not null;
 }
 
 /// <summary>
@@ -58,7 +60,7 @@ public static class InitInstall
         var resolved = InitComponents.Resolve(config, names);
         return names
             .Zip(resolved)
-            .Where(pair => !string.IsNullOrWhiteSpace(pair.Second.Script))
+            .Where(pair => pair.Second.HasScript)
             .Select(pair => (pair.First, MarkerPath(pair.First)))
             .ToList();
     }
@@ -97,16 +99,13 @@ public static class InitInstall
         for (var i = 0; i < names.Length; i++)
         {
             var (name, component) = (names[i], resolved[i]);
-            if (string.IsNullOrWhiteSpace(component.Script))
+            if (!component.HasScript)
             {
                 continue;
             }
 
-            var source = InitStore.ResolvePath(component.Script);
-            if (!File.Exists(source))
-            {
-                throw new MultipassException($"Komponenten-Skript fehlt: {source}");
-            }
+            var source = string.IsNullOrWhiteSpace(component.ScriptContent) ? InitStore.ResolvePath(component.Script!) : null;
+            var content = ScriptText(component);
 
             if (string.IsNullOrWhiteSpace(component.InstallPath))
             {
@@ -115,7 +114,7 @@ public static class InitInstall
 
             var upload = $"/tmp/corebridge-install-{name}.sh";
             var user = component.InstallUser;
-            steps.Add(new($"{name}: Skript hochladen", null, source, upload));
+            steps.Add(new($"{name}: Skript hochladen", null, source, upload, ScriptContent: content));
             steps.Add(new(
                 $"{name}: Skript nach {component.InstallPath} installieren",
                 $"sudo install -m 0755 -o root -g root {Quote(upload)} {Quote(component.InstallPath)}"));
@@ -128,9 +127,32 @@ public static class InitInstall
     }
 
     /// <summary>Skriptinhalt mit LF-Zeilenenden — wie cloud-init ihn einbettet; CRLF bräche die Shebang-Zeile.</summary>
-    public static string ReadScript(string path)
+    public static string ReadScript(string path) => Normalize(File.ReadAllText(path));
+
+    /// <summary>
+    /// Das Skript einer Komponente, LF-normalisiert: <see cref="ComponentConfig.ScriptContent"/>
+    /// vor <see cref="ComponentConfig.Script"/> (Pfad, relativ zur Repo-Wurzel).
+    /// </summary>
+    public static string ScriptText(ComponentConfig component)
     {
-        var content = File.ReadAllText(path).Replace("\r\n", "\n");
+        if (!string.IsNullOrWhiteSpace(component.ScriptContent))
+        {
+            return Normalize(component.ScriptContent);
+        }
+
+        InitCloudInit.ValidateScriptPath(component.Script!);
+        var source = InitStore.ResolvePath(component.Script!);
+        if (!File.Exists(source))
+        {
+            throw new MultipassException($"Komponenten-Skript fehlt: {source}");
+        }
+
+        return ReadScript(source);
+    }
+
+    private static string Normalize(string content)
+    {
+        content = content.Replace("\r\n", "\n");
         return content.EndsWith('\n') ? content : content + '\n';
     }
 

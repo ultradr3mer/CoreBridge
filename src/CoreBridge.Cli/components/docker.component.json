@@ -1,0 +1,22 @@
+{
+  "Inits": {
+    "Components": {
+      "docker": {
+        "ScriptContent": "#!/bin/bash\nset -Eeuo pipefail\n\n# Installiert Docker aus dem Ubuntu-Archiv (docker.io) und nimmt den\n# Installationsbenutzer in die Gruppe docker auf — wirksam ab der nächsten\n# Anmeldung bzw. dem nächsten multipass exec.\n\ninstall_user=\"${1:-ubuntu}\"\nif ! getent passwd \"$install_user\" >/dev/null; then\n    echo \"Benutzer '$install_user' fehlt.\" >&2\n    exit 1\nfi\n\nsystemctl enable --now docker\nusermod -aG docker \"$install_user\"\n\ndocker --version\nsystemctl is-active --quiet docker\nid -nG \"$install_user\" | tr ' ' '\\n' | grep -qx docker\n# Der Daemon antwortet (als root; die Gruppe gilt erst in einer neuen Sitzung).\ndocker info >/dev/null\n\ninstall -d /var/lib/corebridge\ntouch /var/lib/corebridge/docker.ready\n",
+        "InstallPath": "/usr/local/sbin/corebridge-install-docker",
+        "Packages": [
+          "docker.io"
+        ],
+        "PackageUpdate": true,
+        "InstallUser": "ubuntu",
+        "Detect": [
+          "Dockerfile",
+          "docker-compose.yml",
+          "docker-compose.yaml",
+          "compose.yml",
+          "compose.yaml"
+        ]
+      }
+    }
+  }
+}

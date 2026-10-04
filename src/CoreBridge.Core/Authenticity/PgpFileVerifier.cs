@@ -11,7 +11,10 @@ namespace CoreBridge.Core.Authenticity;
 /// Schlüssel bekannt ist. <see cref="ContentMismatch"/> ist nur gesetzt, wenn
 /// Schlüssel und Signatur in Ordnung sind, der Inhalt aber nicht passt.
 /// <see cref="Unsigned"/>: die Datei hat gar keine Signatur — was das bedeutet,
-/// entscheidet die <see cref="SignaturePolicy"/> des Aufrufers.
+/// entscheidet die <see cref="SignaturePolicy"/> des Aufrufers. <see cref="UnknownKey"/>:
+/// signiert, aber mit einem Schlüssel außerhalb des vertrauten Bundles;
+/// <see cref="Fingerprint"/> nennt dann den Aussteller laut Signatur (Fingerprint
+/// oder, ohne dieses Unterpaket, die Key-ID).
 /// </summary>
 public sealed record SignatureCheck(
     string File,
@@ -21,7 +24,8 @@ public sealed record SignatureCheck(
     DateTime? SignedAt = null,
     string? SignerUserId = null,
     bool ContentMismatch = false,
-    bool Unsigned = false);
+    bool Unsigned = false,
+    bool UnknownKey = false);
 
 /// <summary>
 /// Prüft abgetrennte OpenPGP-Signaturen (<c>&lt;datei&gt;.asc</c>, armored oder
@@ -177,7 +181,11 @@ public static class PgpFileVerifier
         var key = trusted.GetPublicKey(signature.KeyId);
         if (key is null)
         {
-            return new SignatureCheck(file, false, $"Signiert mit unbekanntem Schlüssel {signature.KeyId:X16}.");
+            var issuer = signature.GetHashedSubPackets()?.GetIssuerFingerprint() is { } packet
+                ? Convert.ToHexString(packet.GetFingerprint())
+                : signature.KeyId.ToString("X16");
+            return new SignatureCheck(
+                file, false, $"Signiert mit unbekanntem Schlüssel {issuer}.", issuer, signature.CreationTime, UnknownKey: true);
         }
 
         var fingerprint = Convert.ToHexString(key.GetFingerprint());

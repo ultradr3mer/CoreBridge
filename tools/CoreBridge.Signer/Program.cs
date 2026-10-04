@@ -1,11 +1,14 @@
 using CoreBridge.Signer;
 
-// Aufruf: CoreBridge.Signer --key <secret.asc> [--key-id <fingerprint>] <datei>…
-// Schreibt je Datei <datei>.asc. Die Passphrase kommt aus CORE_BRIDGE_SIGNING_PASSWORD
-// oder wird verdeckt abgefragt. Für CI ohne gpg-agent; lokal genügt scripts/sign-settings.ps1.
+// Aufruf: CoreBridge.Signer --key <secret.asc> [--key-id <fingerprint>] [--clearsign] <datei>…
+// Schreibt je Datei <datei>.asc (abgetrennt) bzw. mit --clearsign <datei>.clearsigned.asc
+// (Klartextsignatur; so signieren sich Bundles und Komponenten-Skripte). Die Passphrase
+// kommt aus CORE_BRIDGE_SIGNING_PASSWORD, ein ungeschützter Schlüssel braucht keine, sonst
+// wird sie verdeckt abgefragt. Für CI ohne gpg-agent; lokal genügt scripts/sign-settings.ps1.
 
 string? keyFile = null;
 string? keyId = null;
+var clearSign = false;
 var files = new List<string>();
 for (var i = 0; i < args.Length; i++)
 {
@@ -16,6 +19,9 @@ for (var i = 0; i < args.Length; i++)
             break;
         case "--key-id" when i + 1 < args.Length:
             keyId = args[++i];
+            break;
+        case "--clearsign":
+            clearSign = true;
             break;
         case "-h" or "--help":
             PrintUsage();
@@ -32,22 +38,35 @@ if (keyFile is null || files.Count == 0)
     return 1;
 }
 
-var passphrase = (Environment.GetEnvironmentVariable("CORE_BRIDGE_SIGNING_PASSWORD") ?? ReadHidden("Passphrase: ")).ToCharArray();
+var passphrase = (Environment.GetEnvironmentVariable("CORE_BRIDGE_SIGNING_PASSWORD") ?? string.Empty).ToCharArray();
 try
 {
     SigningKey key;
-    using (var keyStream = File.OpenRead(keyFile))
+    try
     {
-        key = PgpFileSigner.ReadSigningKey(keyStream, passphrase, keyId);
+        key = ReadKey(passphrase);
+    }
+    catch (Org.BouncyCastle.Bcpg.OpenPgp.PgpException) when (passphrase.Length == 0)
+    {
+        // Geschützter Schlüssel ohne Variable: jetzt erst fragen.
+        passphrase = ReadHidden("Passphrase: ").ToCharArray();
+        key = ReadKey(passphrase);
     }
 
     foreach (var file in files)
     {
-        var signaturePath = file + ".asc";
-        using (var data = File.OpenRead(file))
+        var signaturePath = file + (clearSign ? ".clearsigned.asc" : ".asc");
         using (var output = File.Create(signaturePath))
         {
-            PgpFileSigner.Sign(data, output, key);
+            if (clearSign)
+            {
+                PgpFileSigner.ClearSign(File.ReadAllBytes(file), output, key);
+            }
+            else
+            {
+                using var data = File.OpenRead(file);
+                PgpFileSigner.Sign(data, output, key);
+            }
         }
 
         Console.WriteLine($"signiert: {signaturePath} ({key.Fingerprint})");
@@ -65,9 +84,15 @@ finally
     Array.Clear(passphrase);
 }
 
+SigningKey ReadKey(char[] secret)
+{
+    using var keyStream = File.OpenRead(keyFile!);
+    return PgpFileSigner.ReadSigningKey(keyStream, secret, keyId);
+}
+
 static void PrintUsage()
 {
-    Console.Error.WriteLine("Aufruf: CoreBridge.Signer --key <secret.asc> [--key-id <fingerprint>] <datei>…");
+    Console.Error.WriteLine("Aufruf: CoreBridge.Signer --key <secret.asc> [--key-id <fingerprint>] [--clearsign] <datei>…");
 }
 
 static string ReadHidden(string prompt)

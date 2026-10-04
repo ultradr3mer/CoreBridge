@@ -1,0 +1,22 @@
+{
+  "Inits": {
+    "Components": {
+      "rust": {
+        "ScriptContent": "#!/bin/bash\nset -Eeuo pipefail\n\n# Installiert Rust per rustup (stabile Toolchain, Profil minimal) für den\n# Installationsbenutzer und verlinkt cargo/rustc/rustup nach /usr/local/bin,\n# damit sie auch ohne Login-Shell (multipass exec) im PATH sind.\n\ninstall_user=\"${1:-ubuntu}\"\nuser_home=\"$(getent passwd \"$install_user\" | cut -d: -f6)\"\nif [[ -z \"$user_home\" ]]; then\n    echo \"Benutzer '$install_user' hat kein Home-Verzeichnis.\" >&2\n    exit 1\nfi\n\nif [[ ! -x \"$user_home/.cargo/bin/rustup\" ]]; then\n    sudo -u \"$install_user\" -H bash -c \\\n        'curl --proto \"=https\" --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain stable'\nfi\n\nfor tool in cargo rustc rustup; do\n    ln -sfn \"$user_home/.cargo/bin/$tool\" \"/usr/local/bin/$tool\"\ndone\n\nsudo -u \"$install_user\" -H bash -c 'cargo --version && rustc --version'\n\ninstall -d /var/lib/corebridge\ntouch /var/lib/corebridge/rust.ready\n",
+        "InstallPath": "/usr/local/sbin/corebridge-install-rust",
+        "Packages": [
+          "bash",
+          "ca-certificates",
+          "curl",
+          "sudo",
+          "build-essential"
+        ],
+        "PackageUpdate": true,
+        "InstallUser": "ubuntu",
+        "Detect": [
+          "Cargo.toml"
+        ]
+      }
+    }
+  }
+}

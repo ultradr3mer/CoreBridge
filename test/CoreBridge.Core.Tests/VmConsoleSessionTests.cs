@@ -26,7 +26,7 @@ public class VmConsoleSessionTests
         }, log);
     }
 
-    [Fact]
+    [WindowsFact]
     public void Log_Callback_SchreibtChunksLive()
     {
         var logged = new System.Text.StringBuilder();
@@ -35,7 +35,7 @@ public class VmConsoleSessionTests
         Assert.Contains("log-ok", logged.ToString());
     }
 
-    [Fact]
+    [WindowsFact]
     public void SendLine_WirftEchoInDieAusgabe()
     {
         using var session = StartPwsh();
@@ -43,7 +43,7 @@ public class VmConsoleSessionTests
         Assert.Contains("session-ok", output);
     }
 
-    [Fact]
+    [WindowsFact]
     public void WaitFor_FindeNichts_WirftTimeoutMitBisherigerAusgabe()
     {
         using var session = StartPwsh();
@@ -53,7 +53,7 @@ public class VmConsoleSessionTests
         Assert.Contains("sichtbar", exception.StdOut);
     }
 
-    [Fact]
+    [WindowsFact]
     public void SendCommand_Sequential_BefehleUndAusgabenKommenInReihenfolge()
     {
         using var session = StartPwsh();
@@ -66,7 +66,7 @@ public class VmConsoleSessionTests
         Assert.True(indexFirst < indexSecond);
     }
 
-    [Fact]
+    [WindowsFact]
     public void Exit_BeendetDenProzessSauber()
     {
         using var session = StartPwsh();

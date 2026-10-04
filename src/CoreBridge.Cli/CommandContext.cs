@@ -2,6 +2,7 @@ using CoreBridge.Interaction;
 using CoreBridge.Core.Common;
 using CoreBridge.Core.Config;
 using CoreBridge.Core.Git;
+using CoreBridge.Core.Inits;
 using CoreBridge.Core.Vm;
 
 namespace CoreBridge.Cli;
@@ -19,15 +20,22 @@ namespace CoreBridge.Cli;
 /// </param>
 /// <param name="CancellationToken">Abbruch per Strg+C.</param>
 /// <param name="Git">git auf dem Host (repo-send/-receive).</param>
+/// <param name="Catalog">Alle Komponenten samt Herkunft und Signatur.</param>
+/// <param name="Sources">Wo die Komponenten liegen (für settings-verify und component-add).</param>
 public sealed record CommandContext(
     AppConfig Config,
     VmService Vms,
     EventFactory Events,
     CancellationToken CancellationToken,
-    GitCli Git)
+    GitCli Git,
+    ComponentCatalog Catalog,
+    ComponentSources Sources)
 {
     /// <summary><c>DefaultTimeout</c> (ggf. per <c>--timeout</c> ersetzt) in Millisekunden.</summary>
     public int DefaultTimeoutMs => (int)Config.DefaultTimeout.ReadTime().TotalMilliseconds;
+
+    /// <summary><c>DefaultTimeoutVmStart</c> (ggf. per <c>--timeout</c> ersetzt) in Millisekunden.</summary>
+    public int VmStartTimeoutMs => (int)Config.DefaultTimeoutVmStart.ReadTime().TotalMilliseconds;
 
     /// <summary>
     /// Ja/Nein-Rückfrage, die <c>await</c>en kann — für Kommandos, die nicht

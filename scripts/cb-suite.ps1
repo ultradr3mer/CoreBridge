@@ -122,7 +122,7 @@ $edgeSteps = [ordered]@{
         run vm-restore -n $edgeSlow -s gibtsnicht } }
     'bad-input'      = @{ Text = 'Ungültige Eingaben: Name, vertipptes Profil, fehlende Datei, Zeitangabe, fehlende Quelle/Ziel, Disk-Größe (ungültig/verkleinern)'; Do = {
         run vm-create -n 1-falsch
-        run vm-create -n cbx-edge-tippfehler -i dve
+        run vm-create -n cbx-edge-tippfehler --profile dve
         run vm-create -n cbx-edge-x -c nicht-da.yaml
         run vm-list -t 5x
         run vm-snapshot -n $edgeA -s 'mit leer'
@@ -148,7 +148,7 @@ $steps = [ordered]@{
     'profile'  = @{ Text = 'Profil mit claude und dotnet anlegen'; Do = {
         run init-configure -n $profileName -c claude,dotnet -f
         run init-list } }
-    'create'   = @{ Text = 'Basis-VM aus dem Profil anlegen (cloud-init)'; Do = { run vm-create -n $base -i $profileName } }
+    'create'   = @{ Text = 'Basis-VM aus dem Profil anlegen (cloud-init)'; Do = { run vm-create -n $base --profile $profileName } }
     'check'    = @{ Text = 'Provisionierung prüfen'; Do = {
         run vm-exec -n $base -c 'hostname; claude --version; dotnet --version' @t
         run vm-exec -n $base -c 'ls /var/lib/corebridge/' @t } }

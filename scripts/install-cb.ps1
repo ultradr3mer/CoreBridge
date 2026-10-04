@@ -1,6 +1,8 @@
 $ErrorActionPreference = 'Stop'
 
-$functionSource = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'cb.ps1') -Raw
+# Der Checkout, der installiert, wird Rückfallebene für cb außerhalb eines Checkouts (cb work).
+$checkout = Split-Path -Parent $PSScriptRoot
+$functionSource = (Get-Content -LiteralPath (Join-Path $PSScriptRoot 'cb.ps1') -Raw).Replace('__COREBRIDGE_ROOT__', $checkout.Replace("'", "''"))
 $beginMarker = '# >>> CoreBridge cb >>>'
 $endMarker = '# <<< CoreBridge cb <<<'
 $block = $beginMarker + [Environment]::NewLine + $functionSource.TrimEnd() + [Environment]::NewLine + $endMarker

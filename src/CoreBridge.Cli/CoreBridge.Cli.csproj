@@ -22,6 +22,8 @@
     <None Include="appsettings*.json.asc" CopyToOutputDirectory="PreserveNewest" />
     <None Include="appsettings*.json.clearsigned.asc" CopyToOutputDirectory="PreserveNewest" />
     <None Include="appsettings.local.json" CopyToOutputDirectory="PreserveNewest" Condition="Exists('appsettings.local.json')" />
+    <!-- Mitgelieferte Komponenten-Bundles samt Signaturen (.clearsigned.asc/.asc). -->
+    <None Include="components\*.component.json*" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
   <PropertyGroup>

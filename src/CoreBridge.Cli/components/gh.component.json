@@ -1,0 +1,19 @@
+{
+  "Inits": {
+    "Components": {
+      "gh": {
+        "ScriptContent": "#!/bin/bash\nset -Eeuo pipefail\n\n# Installiert die GitHub-CLI aus der offiziellen Paketquelle (cli.github.com).\n# Anmelden muss sich der Benutzer selbst (gh auth login) — CoreBridge\n# verteilt keine Tokens.\n\ninstall_user=\"${1:-ubuntu}\"\nif ! getent passwd \"$install_user\" >/dev/null; then\n    echo \"Benutzer '$install_user' fehlt.\" >&2\n    exit 1\nfi\n\nexport DEBIAN_FRONTEND=noninteractive\nkeyring=/etc/apt/keyrings/githubcli-archive-keyring.gpg\nif ! command -v gh >/dev/null 2>&1; then\n    install -d -m 0755 /etc/apt/keyrings\n    curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg -o \"$keyring\"\n    chmod go+r \"$keyring\"\n    echo \"deb [arch=$(dpkg --print-architecture) signed-by=$keyring] https://cli.github.com/packages stable main\" \\\n        > /etc/apt/sources.list.d/github-cli.list\n    apt-get -o DPkg::Lock::Timeout=300 update\n    apt-get -o DPkg::Lock::Timeout=300 install -y gh\nfi\n\nsudo -u \"$install_user\" -H bash -c 'gh --version'\n\ninstall -d /var/lib/corebridge\ntouch /var/lib/corebridge/gh.ready\n",
+        "InstallPath": "/usr/local/sbin/corebridge-install-gh",
+        "Packages": [
+          "bash",
+          "ca-certificates",
+          "curl",
+          "sudo",
+          "gnupg"
+        ],
+        "PackageUpdate": true,
+        "InstallUser": "ubuntu"
+      }
+    }
+  }
+}

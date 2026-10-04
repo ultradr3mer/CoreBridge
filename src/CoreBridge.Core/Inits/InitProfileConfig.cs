@@ -9,15 +9,25 @@ namespace CoreBridge.Core.Inits;
 /// gestartet und welche generierte cloud-init dabei übergeben wird — ein
 /// Profil lädt und verwaltet kein Image.
 /// </summary>
+/// <param name="Cpus">Optionale Vorgabe für <c>vm-create</c> (<c>--cpus</c> schlägt sie).</param>
+/// <param name="Memory">Optionale Vorgabe, z. B. <c>4G</c>.</param>
+/// <param name="Disk">Optionale Vorgabe, z. B. <c>20G</c>.</param>
 public sealed record InitProfileConfig(
     string Name,
     string[] Components,
     string[] Snaps,
     string RuntimeImage = "daily:26.10",
     string? CloudInitFile = null,
-    int SchemaVersion = 4)
+    int SchemaVersion = 4,
+    int? Cpus = null,
+    string? Memory = null,
+    string? Disk = null)
 {
-    private static readonly JsonSerializerOptions Options = new() { WriteIndented = true };
+    private static readonly JsonSerializerOptions Options = new()
+    {
+        WriteIndented = true,
+        DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull
+    };
 
     public string ToJson()
     {

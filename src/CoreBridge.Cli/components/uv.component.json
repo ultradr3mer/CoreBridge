@@ -1,0 +1,21 @@
+{
+  "Inits": {
+    "Components": {
+      "uv": {
+        "ScriptContent": "#!/bin/bash\nset -Eeuo pipefail\n\n# Installiert uv (Python-Paket- und Projektverwaltung von Astral) systemweit\n# nach /usr/local/bin, damit es auch ohne Login-Shell im PATH ist.\n\ninstall_user=\"${1:-ubuntu}\"\nif ! getent passwd \"$install_user\" >/dev/null; then\n    echo \"Benutzer '$install_user' fehlt.\" >&2\n    exit 1\nfi\n\nif ! command -v uv >/dev/null 2>&1; then\n    curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR=/usr/local/bin UV_NO_MODIFY_PATH=1 sh\nfi\n\nsudo -u \"$install_user\" -H bash -c 'uv --version'\n\ninstall -d /var/lib/corebridge\ntouch /var/lib/corebridge/uv.ready\n",
+        "InstallPath": "/usr/local/sbin/corebridge-install-uv",
+        "Packages": [
+          "bash",
+          "ca-certificates",
+          "curl",
+          "sudo"
+        ],
+        "PackageUpdate": true,
+        "InstallUser": "ubuntu",
+        "Detect": [
+          "uv.lock"
+        ]
+      }
+    }
+  }
+}
