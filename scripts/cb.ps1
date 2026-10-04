@@ -1,6 +1,5 @@
 function cb {
-    # No param(): Common Parameters would capture short flags such as -i, -n, or -c.
-    # Arrays (-c claude,dotnet) may arrive as separate arguments, so join them with commas.
+    # No param(): preserves short flags such as -i, -n and -c.
     $cliArgs = @(
         foreach ($arg in $args) {
             if ($arg -is [array]) { $arg -join ',' }
@@ -8,25 +7,36 @@ function cb {
         }
     )
 
-    # Checkout: search upward for CoreBridge.slnx; otherwise use the installed checkout.
+    # Find a CoreBridge checkout by searching upward.
     $root = (Get-Location).ProviderPath
     while ($root -and -not (Test-Path -LiteralPath (Join-Path $root 'CoreBridge.slnx'))) {
-        $root = Split-Path -Parent $root
+        $parent = Split-Path -Parent $root
+
+        # Stop at filesystem root.
+        if ($parent -eq $root) {
+            $root = $null
+            break
+        }
+
+        $root = $parent
     }
 
-    $installedRoot = '__COREBRIDGE_ROOT__'
-    if (-not $root -and (Test-Path -LiteralPath (Join-Path $installedRoot 'CoreBridge.slnx'))) {
-        $root = $installedRoot
-    }
+    $installedExe = Join-Path $env:LOCALAPPDATA 'ClaraTools\CoreBridge\CoreBridge.exe'
 
+    # Outside a CoreBridge checkout: run the installed application.
     if (-not $root) {
-        Write-Error "No CoreBridge checkout found. Run cb in the repository or a worktree."
+        if (-not (Test-Path -LiteralPath $installedExe)) {
+            Write-Error "CoreBridge is not installed: $installedExe"
+            return
+        }
+
+        & $installedExe @cliArgs
         return
     }
 
+    # Inside a CoreBridge checkout/worktree: run the development projects.
     if ($args.Count -eq 0) {
-        # Without arguments: run cb work inside a git repository, otherwise start the TUI.
-        $inRepo = (git rev-parse --is-inside-work-tree 2>$null) -eq 'true'
+        $inRepo = (git -C $root rev-parse --is-inside-work-tree 2>$null) -eq 'true'
 
         if ($inRepo) {
             dotnet run --project (Join-Path $root 'src\CoreBridge.Cli') -- work
@@ -36,19 +46,7 @@ function cb {
         }
     }
     else {
+        # Development version, with all supplied arguments.
         dotnet run --project (Join-Path $root 'src\CoreBridge.Cli') -- @cliArgs
-    }
-}
-
-function cb-sim {
-    # Run cb with the simulator. State is stored in artifacts\multipass-sim.
-    $previous = $env:DOTNET_ENVIRONMENT
-    $env:DOTNET_ENVIRONMENT = 'Simulation'
-
-    try {
-        cb @args
-    }
-    finally {
-        $env:DOTNET_ENVIRONMENT = $previous
     }
 }
