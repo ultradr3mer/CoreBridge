@@ -54,7 +54,8 @@ public static partial class Program
         typeof(KeyTrustOptions),
         typeof(KeyListOptions),
         typeof(KeyUntrustOptions),
-        typeof(SettingsVerifyOptions)
+        typeof(SettingsVerifyOptions),
+        typeof(SignOptions)
   ];
 
   /// <summary>Wert von DOTNET_ENVIRONMENT, Default Development.</summary>
@@ -327,6 +328,7 @@ public static partial class Program
           exception),
       MultipassException => new(1, exception.Message, exception),
       GitException => new(1, exception.Message, exception),
+      SigningException => new(1, exception.Message, exception),
       System.Text.Json.JsonException => new(1, $"Unerwartete Multipass-Antwort (kein JSON): {exception.Message}", exception),
       FormatException => new(1, $"Configuration error: {exception.Message}", exception),
       InvalidDataException => new(1, exception.Message, exception),
@@ -388,7 +390,7 @@ public static partial class Program
       throw new ProgramExecutionException(1, "multipass-store ändert den echten Multipass-Dienst und läuft deshalb nicht in der Simulation (cb-sim).");
     }
 
-    if (cli is IMultipassDouble multipassDouble && options is not (InitConfigureOptions or InitListOptions or InitDeleteOptions or ComponentListOptions or ComponentAddOptions or ComponentRemoveOptions or ComponentBundleOptions or KeyTrustOptions or KeyListOptions or KeyUntrustOptions or SettingsVerifyOptions or MultipassRestartOptions))
+    if (cli is IMultipassDouble multipassDouble && options is not (InitConfigureOptions or InitListOptions or InitDeleteOptions or ComponentListOptions or ComponentAddOptions or ComponentRemoveOptions or ComponentBundleOptions or KeyTrustOptions or KeyListOptions or KeyUntrustOptions or SettingsVerifyOptions or SignOptions or MultipassRestartOptions))
     {
       // Unübersehbar, damit niemand Ergebnisse einer Attrappe für echte VMs hält.
       await factory.Emit(factory.Err($"[{multipassDouble.BinaryLabel}] kein echtes Multipass ({cli.GetType().Name})."));
@@ -435,6 +437,7 @@ public static partial class Program
       KeyListOptions => RunKeyList(context),
       KeyUntrustOptions o => RunKeyUntrust(context, o),
       SettingsVerifyOptions o => RunSettingsVerify(context, o),
+      SignOptions o => RunSign(context, o),
       _ => throw new MultipassException($"Unbekannter CLI-Options-Typ: {options.GetType().Name}")
     };
   }

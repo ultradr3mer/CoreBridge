@@ -114,8 +114,18 @@ public static partial class Program
 
     if (profile is not null)
     {
+      // Profil-JSON und cloud-init (die des Profils oder die ausdrücklich angegebene) zusammen.
+      IReadOnlyList<string> files = options.CloudInit is null
+          ? ProfileFiles(profile.Name)
+          : [InitStore.ConfigFile(profile.Name), options.CloudInit];
+      var signature = await CheckLaunchInput(context, $"Profil {profile.Name}", files);
+
       // Die cloud-init ist beim init-configure gerendert; gezeigt wird, wie es heute um die Komponenten steht.
-      await ReportComponentTrust(context, profile.Components);
+      await ReportComponentTrust(context, profile.Components, fromProfile: true, profileSigned: IsTrusted(signature));
+    }
+    else if (cloudInit is not null)
+    {
+      await CheckLaunchInput(context, $"cloud-init {cloudInit}", [cloudInit]);
     }
 
     await ReplaceExistingVm(context, options.Name);
@@ -250,7 +260,16 @@ public static partial class Program
       return;
     }
 
-    var markers = InitInstall.Markers(context.Config.Inits, profile.Components);
+    // Bekannte Komponenten laut Katalog; eine verschwundene (signiertes Profil) hat einen Marker,
+    // wenn die cloud-init des Profils ihr Installationsskript enthält.
+    var known = profile.Components.Where(context.Config.Inits.Components.ContainsKey).ToList();
+    var renderedCloudInit = profile.CloudInitPath is { } path && File.Exists(path) ? await File.ReadAllTextAsync(path, context.CancellationToken) : string.Empty;
+    var markers = InitInstall.Markers(context.Config.Inits, known)
+        .Concat(profile.Components
+            .Except(known, StringComparer.OrdinalIgnoreCase)
+            .Where(component => renderedCloudInit.Contains($"corebridge-install-{component}", StringComparison.Ordinal))
+            .Select(component => (Component: component, Marker: InitInstall.MarkerPath(component))))
+        .ToList();
     var missing = new List<(string Component, string Marker)>();
     foreach (var (component, marker) in markers)
     {

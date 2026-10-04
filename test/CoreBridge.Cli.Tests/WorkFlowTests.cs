@@ -68,6 +68,15 @@ public sealed class WorkFlowTests : IDisposable
         Assert.DoesNotContain(second.Lines, line => line.Contains("Migration") || line.Contains("Nichts Brauchbares"));
         Assert.DoesNotContain(second.Lines, line => line.Contains("?"));
         Assert.Contains(second.Lines, line => line.StartsWith("main fast-forwarded to"));
+
+        // Das Repo braucht inzwischen mehr: auch die gemerkte VM bekommt es nachinstalliert.
+        File.WriteAllText(Path.Combine(_repo.Path, "go.mod"), "module x\n");
+        InventoryCliTests.Git(_repo.Path, "add", ".");
+        InventoryCliTests.Git(_repo.Path, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "go");
+        var third = await CliHarness.RunAsync(_config, new WorkOptions { Repo = _repo.Path, Yes = true });
+        Assert.True(third.ExitCode == 0, third.All);
+        Assert.Contains(third.Lines, line => line.Contains("(gemerkt für dieses Repository)"));
+        Assert.Contains(third.Lines, line => line.Contains("fehlt: go"));
     }
 
     [Fact]

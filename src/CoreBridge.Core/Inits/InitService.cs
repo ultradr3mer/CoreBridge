@@ -74,6 +74,10 @@ public sealed class InitService
 
         Directory.CreateDirectory(InitStore.ProfileDir(name));
 
+        // Neuer Inhalt: alte Signaturen gehören nicht dazu (signiert wird danach neu).
+        Authenticity.FileSigning.RemoveSignatures(InitStore.ConfigFile(name));
+        Authenticity.FileSigning.RemoveSignatures(InitStore.CloudInitFile(name));
+
         string? cloudInitPath = null;
         var generatedCloudInitPath = InitStore.CloudInitFile(name);
         if (InitCloudInit.NeedsCloudInit(_config, trimmed))

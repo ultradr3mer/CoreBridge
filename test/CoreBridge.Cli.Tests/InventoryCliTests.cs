@@ -96,6 +96,38 @@ public sealed class InventoryCliTests : IDisposable
     }
 
     [Fact]
+    public async Task RefreshBehaeltReineSnapKomponenten()
+    {
+        // Ohne Skript kein Marker: eine reine Snap-Komponente zählt laut `snap list`.
+        _config.Inits.Components["snaptool"] = new() { Snap = "snaptool" };
+        var sim = SimulatedMultipassCli.At(Path.Combine(_store.Path, SimulatedMultipassCli.FolderName, SimulatedMultipassCli.StateFileName), TimeSpan.Zero);
+        var vms = new VmService(sim);
+        vms.Create("fremd", "daily:26.10");
+        vms.Exec("fremd", "sudo touch /var/lib/corebridge/git.ready && sudo snap install snaptool --classic");
+
+        var refreshed = await Run(new VmInventoryOptions { Refresh = true });
+
+        Assert.True(refreshed.ExitCode == 0, refreshed.All);
+        Assert.Equal(["git", "snaptool"], Inventory.Vms["fremd"].Components);
+    }
+
+    [Fact]
+    public async Task ProfilMitVerschwundenerKomponenteWirdAbgelehnt()
+    {
+        // Die Komponente verschwindet nach init-configure; das Profil behält seine cloud-init.
+        _config.Inits.Components["snaptool"] = new() { Snap = "snaptool" };
+        Assert.Equal(0, (await Run(new InitConfigureOptions { Name = "orphan", Components = "git,snaptool" })).ExitCode);
+        _config.Inits.Components.Remove("snaptool");
+
+        var created = await Run(new VmCreateOptions { Name = "orph", Profile = "orphan" });
+
+        Assert.Equal(1, created.ExitCode);
+        Assert.Contains("die es nicht mehr gibt: snaptool", created.Error);
+        Assert.DoesNotContain(created.Lines, line => line.StartsWith("Lege VM"));
+        Assert.False(Inventory.Vms.ContainsKey("orph"));
+    }
+
+    [Fact]
     public async Task RepoMatchFindetVmOderMigration()
     {
         using var repo = new TempDirectory();

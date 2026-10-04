@@ -186,6 +186,55 @@ public static class InitComponentStore
         return normalized;
     }
 
+    /// <summary>
+    /// <c>component-add --json|--yaml</c>: schreibt die Komponente als Bundle
+    /// <c>&lt;name&gt;.component.json</c> in den Benutzerordner, das Skript inline — eine Datei, die
+    /// sich samt Skript signieren lässt, und eine spätere Änderung am Original schlüpft nicht
+    /// unbemerkt durch. Ein gleichnamiger Eintrag aus <c>appsettings.user.json</c> (früherer Weg)
+    /// wird dabei entfernt; eine alte Signatur des Bundles auch.
+    /// </summary>
+    /// <returns>Die Definition, wie sie im Bundle steht, und die Bundle-Datei.</returns>
+    public static (ComponentConfig Component, string File) AddAsBundle(
+        ComponentCatalog catalog, string userFolder, string userFile, string name, ComponentConfig component, bool replace)
+    {
+        RequireValidName(name);
+        var target = Path.Combine(userFolder, name + ComponentCatalog.BundleExtension);
+        if (catalog.OriginOf(name) is { } existing)
+        {
+            if (existing.Source == ComponentSource.BuiltIn)
+            {
+                throw new MultipassException($"Komponente '{name}' ist mitgeliefert ({existing.File}) und lässt sich nicht ändern — anderen Namen wählen.");
+            }
+
+            var replaceable = SamePath(existing.File, target) || SamePath(existing.File, userFile);
+            if (!replaceable)
+            {
+                throw new MultipassException($"Komponente '{name}' gibt es schon ({existing.File}) — dort entfernen oder anderen Namen wählen.");
+            }
+
+            if (!replace)
+            {
+                throw new MultipassException($"Komponente '{name}' existiert bereits ({existing.File}) — --force zum Ersetzen.");
+            }
+        }
+
+        var normalized = Normalize(component);
+        Validate(name, normalized);
+        var json = Bundle(name, normalized);
+        if (ReadUser(userFile).ContainsKey(name))
+        {
+            Remove(catalog.Inits, userFile, name);
+        }
+
+        Directory.CreateDirectory(userFolder);
+        Authenticity.FileSigning.RemoveSignatures(target);
+        File.WriteAllText(target, json);
+        return (ComponentCatalog.ParseComponents(System.Text.Encoding.UTF8.GetBytes(json), target).Single().Value, target);
+
+        static bool SamePath(string a, string b) =>
+            string.Equals(Path.GetFullPath(a), Path.GetFullPath(b), StringComparison.OrdinalIgnoreCase);
+    }
+
     /// <summary>Entfernt eine Benutzerkomponente; mitgelieferte sind nicht entfernbar.</summary>
     public static void Remove(InitsConfig inits, string userFile, string name)
     {

@@ -1,4 +1,4 @@
-using CoreBridge.Signer;
+using CoreBridge.Core.Authenticity;
 
 // Aufruf: CoreBridge.Signer --key <secret.asc> [--key-id <fingerprint>] [--clearsign] <datei>…
 // Schreibt je Datei <datei>.asc (abgetrennt) bzw. mit --clearsign <datei>.clearsigned.asc

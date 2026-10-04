@@ -52,6 +52,9 @@ public sealed record AppConfig
     /// <summary><c>cb work</c>: Agent und wie er in der VM gestartet wird.</summary>
     public WorkConfig Work { get; init; } = new();
 
+    /// <summary>Der eigene Schlüssel, mit dem CoreBridge Profile, Komponenten und cloud-init-Dateien signiert.</summary>
+    public SigningConfig Signing { get; init; } = new();
+
     /// <summary>
     /// Dauer, die der Multipass-Simulator (<c>CoreBridge.Simulation</c>, nur Debug/Tests) lang laufende Verben
     /// (launch, start, stop, restart, clone) vorgibt, z. B. <c>4s</c> oder <c>0ms</c>.
@@ -163,6 +166,30 @@ public sealed record CloudInitUserConfig
     public string[] Groups { get; init; } = [];
 
     public bool LockPassword { get; init; } = true;
+}
+
+/// <summary>
+/// Der Signierschlüssel des Benutzers (Abschnitt <c>Signing</c>, gehört in
+/// <c>appsettings.local.json</c>). CoreBridge erzeugt keinen Schlüssel. Ohne Angabe bleibt alles
+/// unsigniert (mit Warnung). Der öffentliche Teil muss per <c>cb key-trust</c> vertraut sein.
+/// </summary>
+public sealed record SigningConfig
+{
+    /// <summary>
+    /// Exportierter geheimer Schlüssel (<c>gpg --export-secret-keys --armor</c>); signiert wird mit
+    /// BouncyCastle, ohne gpg. Passphrase aus <c>CORE_BRIDGE_SIGNING_PASSWORD</c>, ein ungeschützter
+    /// Schlüssel braucht keine. Gewinnt vor <see cref="GpgKey"/>.
+    /// </summary>
+    public string? KeyFile { get; init; }
+
+    /// <summary>Welcher Schlüssel aus <see cref="KeyFile"/> (Fingerprint oder Key-ID); ohne Angabe der erste signierfähige.</summary>
+    public string? KeyId { get; init; }
+
+    /// <summary>
+    /// Wahlweise: Schlüssel im gpg-Schlüsselbund (Fingerprint oder E-Mail). CoreBridge ruft
+    /// <c>gpg --clearsign</c>; Passphrase und Schlüssel bleiben bei gpg-agent.
+    /// </summary>
+    public string? GpgKey { get; init; }
 }
 
 /// <summary>Einstellungen von <c>cb work</c> (Abschnitt <c>Work</c>).</summary>
