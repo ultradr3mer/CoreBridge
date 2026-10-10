@@ -433,3 +433,4 @@ FodyWeavers.xsd
 
 # Lokale Config-Overrides (keine Secrets, aber maschinenspezifisch)
 appsettings.local.json
+\n# Claude Code worktrees (local only)\n.claude/\n
